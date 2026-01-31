@@ -1,0 +1,115 @@
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+template: |
+  ## v$RESOLVED_VERSION
+
+  ## What's New
+
+  $CHANGES
+
+  **Full Changelog:** https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+categories:
+  - title: 'Features'
+    labels:
+      - 'feature'
+      - 'enhancement'
+    collapse-after: 10
+  - title: 'Bug Fixes'
+    labels:
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+    collapse-after: 10
+  - title: 'Performance'
+    labels:
+      - 'performance'
+      - 'perf'
+    collapse-after: 5
+  - title: 'Refactoring'
+    labels:
+      - 'refactor'
+      - 'refactoring'
+    collapse-after: 5
+  - title: 'Documentation'
+    labels:
+      - 'documentation'
+      - 'docs'
+    collapse-after: 5
+  - title: 'CI/CD'
+    labels:
+      - 'ci'
+      - 'ci/cd'
+    collapse-after: 5
+  - title: 'Dependencies'
+    labels:
+      - 'dependencies'
+      - 'deps'
+    collapse-after: 5
+  - title: 'Chores'
+    labels:
+      - 'chore'
+      - 'maintenance'
+    collapse-after: 5
+
+# Auto-label PRs based on title patterns (conventional commits)
+autolabeler:
+  - label: 'feature'
+    title:
+      - '/^feat(\(.+\))?:/i'
+      - '/^feat\//i'
+  - label: 'fix'
+    title:
+      - '/^fix(\(.+\))?:/i'
+      - '/^fix\//i'
+  - label: 'docs'
+    title:
+      - '/^docs(\(.+\))?:/i'
+      - '/^docs\//i'
+  - label: 'refactor'
+    title:
+      - '/^refactor(\(.+\))?:/i'
+      - '/^refactor\//i'
+  - label: 'perf'
+    title:
+      - '/^perf(\(.+\))?:/i'
+      - '/^perf\//i'
+  - label: 'ci'
+    title:
+      - '/^ci(\(.+\))?:/i'
+      - '/^ci\//i'
+  - label: 'chore'
+    title:
+      - '/^chore(\(.+\))?:/i'
+      - '/^chore\//i'
+  - label: 'dependencies'
+    files:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+    title:
+      - '/^build\(deps\):/i'
+
+# Version resolver based on labels
+version-resolver:
+  major:
+    labels:
+      - 'major'
+      - 'breaking'
+  minor:
+    labels:
+      - 'feature'
+      - 'enhancement'
+  patch:
+    labels:
+      - 'fix'
+      - 'bugfix'
+      - 'docs'
+      - 'chore'
+      - 'refactor'
+      - 'ci'
+      - 'perf'
+      - 'dependencies'
+  default: patch
+
+exclude-labels:
+  - 'skip-changelog'
