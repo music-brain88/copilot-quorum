@@ -3,12 +3,12 @@
 //! This is the main binary that wires together all layers using
 //! dependency injection.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use quorum_application::{RunQuorumInput, RunQuorumUseCase};
 use quorum_domain::Model;
 use quorum_infrastructure::CopilotLlmGateway;
-use quorum_presentation::{Cli, ConsoleFormatter, OutputFormat, ProgressReporter};
+use quorum_presentation::{ChatRepl, Cli, ConsoleFormatter, OutputFormat, ProgressReporter};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -39,8 +39,28 @@ async fn main() -> Result<()> {
         cli.model.iter().map(|s| s.parse().unwrap()).collect()
     };
 
+    // === Dependency Injection ===
+    // Create infrastructure adapter (Copilot Gateway)
+    let gateway = Arc::new(CopilotLlmGateway::new().await?);
+
+    // Chat mode
+    if cli.chat {
+        let repl = ChatRepl::new(gateway, models)
+            .with_progress(!cli.quiet)
+            .with_skip_review(cli.no_review);
+
+        repl.run().await?;
+        return Ok(());
+    }
+
+    // Single question mode - question is required
+    let question = match cli.question {
+        Some(q) => q,
+        None => bail!("Question is required. Use --chat for interactive mode."),
+    };
+
     // Build input
-    let mut input = RunQuorumInput::new(cli.question.clone(), models.clone());
+    let mut input = RunQuorumInput::new(question.clone(), models.clone());
 
     if let Some(mod_str) = &cli.moderator {
         input = input.with_moderator(mod_str.parse().unwrap());
@@ -57,7 +77,7 @@ async fn main() -> Result<()> {
         println!("|           Copilot Quorum - LLM Council                     |");
         println!("+============================================================+");
         println!();
-        println!("Question: {}", cli.question);
+        println!("Question: {}", question);
         println!(
             "Models: {}",
             models
@@ -69,12 +89,8 @@ async fn main() -> Result<()> {
         println!();
     }
 
-    // === Dependency Injection ===
-    // Create infrastructure adapter (Copilot Gateway)
-    let gateway = CopilotLlmGateway::new().await?;
-
     // Create use case with injected gateway
-    let use_case = RunQuorumUseCase::new(Arc::new(gateway));
+    let use_case = RunQuorumUseCase::new(gateway);
 
     // Execute with or without progress reporting
     let result = if cli.quiet {
