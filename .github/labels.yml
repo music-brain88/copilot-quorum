@@ -1,0 +1,139 @@
+# Issue/PR Types
+- name: feature
+  color: "a2eeef"
+  description: "New feature or request"
+
+- name: enhancement
+  color: "84b6eb"
+  description: "Enhancement to existing functionality"
+
+- name: bug
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: fix
+  color: "d73a4a"
+  description: "Bug fix"
+
+- name: bugfix
+  color: "d73a4a"
+  description: "Bug fix"
+
+# Code Quality
+- name: refactor
+  color: "fbca04"
+  description: "Code refactoring"
+
+- name: refactoring
+  color: "fbca04"
+  description: "Code refactoring"
+
+- name: performance
+  color: "f9d0c4"
+  description: "Performance improvement"
+
+- name: perf
+  color: "f9d0c4"
+  description: "Performance improvement"
+
+# Documentation
+- name: documentation
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: docs
+  color: "0075ca"
+  description: "Documentation changes"
+
+# CI/CD & Maintenance
+- name: ci
+  color: "bfdadc"
+  description: "CI/CD changes"
+
+- name: ci/cd
+  color: "bfdadc"
+  description: "CI/CD changes"
+
+- name: chore
+  color: "fef2c0"
+  description: "Maintenance tasks"
+
+- name: maintenance
+  color: "fef2c0"
+  description: "Maintenance tasks"
+
+# Dependencies
+- name: dependencies
+  color: "0366d6"
+  description: "Dependency updates"
+
+- name: deps
+  color: "0366d6"
+  description: "Dependency updates"
+
+# Version Control
+- name: major
+  color: "b60205"
+  description: "Major version bump (breaking changes)"
+
+- name: breaking
+  color: "b60205"
+  description: "Breaking changes"
+
+- name: minor
+  color: "ff9f1c"
+  description: "Minor version bump"
+
+- name: patch
+  color: "0e8a16"
+  description: "Patch version bump"
+
+# Workflow
+- name: skip-changelog
+  color: "ededed"
+  description: "Skip this PR in changelog"
+
+- name: wip
+  color: "ffffff"
+  description: "Work in progress"
+
+- name: help wanted
+  color: "008672"
+  description: "Extra attention is needed"
+
+- name: good first issue
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: question
+  color: "d876e3"
+  description: "Further information is requested"
+
+- name: duplicate
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: invalid
+  color: "e4e669"
+  description: "This doesn't seem right"
+
+- name: wontfix
+  color: "ffffff"
+  description: "This will not be worked on"
+
+# Domain-specific (for this Rust project)
+- name: domain
+  color: "c5def5"
+  description: "Changes to domain layer"
+
+- name: application
+  color: "bfe5bf"
+  description: "Changes to application layer"
+
+- name: infrastructure
+  color: "d4c5f9"
+  description: "Changes to infrastructure layer"
+
+- name: presentation
+  color: "ffc8c8"
+  description: "Changes to presentation layer"
