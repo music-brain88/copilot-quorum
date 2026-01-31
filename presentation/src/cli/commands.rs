@@ -28,10 +28,15 @@ The process has three phases:
 Example:
   copilot-quorum "What's the best way to handle errors in Rust?"
   copilot-quorum -m gpt-5.2-codex -m claude-sonnet-4.5 "Compare async/await patterns"
+  copilot-quorum --chat -m claude-haiku-4.5
 "#)]
 pub struct Cli {
-    /// The question to ask the council
-    pub question: String,
+    /// The question to ask the council (not required in chat mode)
+    pub question: Option<String>,
+
+    /// Start interactive chat mode
+    #[arg(short, long)]
+    pub chat: bool,
 
     /// Models to include in the council (can be specified multiple times)
     #[arg(short, long, value_name = "MODEL")]
