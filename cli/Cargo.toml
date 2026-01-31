@@ -1,0 +1,32 @@
+[package]
+name = "copilot-quorum"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LLM Council - Multiple LLMs discuss and reach consensus"
+
+[[bin]]
+name = "copilot-quorum"
+path = "src/main.rs"
+
+[dependencies]
+# All layers
+quorum-domain = { workspace = true }
+quorum-application = { workspace = true }
+quorum-infrastructure = { workspace = true }
+quorum-presentation = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

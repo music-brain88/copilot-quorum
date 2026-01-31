@@ -1,0 +1,24 @@
+[package]
+name = "quorum-presentation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Presentation layer for copilot-quorum - CLI and output formatting"
+
+[dependencies]
+# Domain and application layers
+quorum-domain = { workspace = true }
+quorum-application = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Terminal UI
+indicatif = { workspace = true }
+colored = { workspace = true }
+
+# CLI
+clap = { workspace = true }

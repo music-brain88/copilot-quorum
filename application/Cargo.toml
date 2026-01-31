@@ -1,0 +1,24 @@
+[package]
+name = "quorum-application"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Application layer for copilot-quorum - Use cases and ports"
+
+[dependencies]
+# Domain layer
+quorum-domain = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
