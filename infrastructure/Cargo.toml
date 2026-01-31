@@ -1,0 +1,29 @@
+[package]
+name = "quorum-infrastructure"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Infrastructure layer for copilot-quorum - External adapters and implementations"
+
+[dependencies]
+# Domain and application layers
+quorum-domain = { workspace = true }
+quorum-application = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }

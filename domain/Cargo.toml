@@ -1,0 +1,18 @@
+[package]
+name = "quorum-domain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Domain layer for copilot-quorum - Core business logic and entities"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Async traits
+async-trait = "0.1"
