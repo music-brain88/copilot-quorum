@@ -1,0 +1,40 @@
+# Copilot Quorum Configuration Example
+# Copy this file to one of the following locations:
+#   - ./quorum.toml (project-level)
+#   - ~/.config/copilot-quorum/config.toml (global)
+#
+# CLI arguments always take precedence over config file values.
+
+# Council settings - which models participate in discussions
+[council]
+# Models to include in the council (default: gpt-5.2-codex, claude-sonnet-4.5, gemini-3-pro)
+models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro"]
+
+# Model to use as moderator for final synthesis (optional)
+# If not specified, the first model in the list is used
+moderator = "claude-sonnet-4.5"
+
+# Behavior settings - how the council operates
+[behavior]
+# Enable peer review phase where models critique each other (default: true)
+enable_review = true
+
+# Timeout in seconds for API calls (optional)
+# timeout_seconds = 120
+
+# Output settings - how results are displayed
+[output]
+# Default output format: "full", "synthesis", or "json" (default: synthesis)
+format = "synthesis"
+
+# Enable colored terminal output (default: true)
+color = true
+
+# REPL settings - interactive chat mode configuration
+[repl]
+# Show progress indicators during processing (default: true)
+show_progress = true
+
+# Path to history file for command history (optional)
+# Default: ~/.local/share/copilot-quorum/history.txt
+# history_file = "~/.local/share/copilot-quorum/history.txt"

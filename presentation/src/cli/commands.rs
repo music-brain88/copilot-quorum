@@ -1,6 +1,7 @@
 //! CLI command definitions
 
 use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
 
 /// Output format for Quorum results
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -24,6 +25,11 @@ The process has three phases:
 1. Initial Query: All models respond to your question in parallel
 2. Peer Review: Each model reviews the other responses
 3. Synthesis: A moderator model synthesizes everything into a final conclusion
+
+Configuration files are loaded from (in priority order):
+1. --config <path>     Explicit config file
+2. ./quorum.toml       Project-level config
+3. ~/.config/copilot-quorum/config.toml   Global config
 
 Example:
   copilot-quorum "What's the best way to handle errors in Rust?"
@@ -61,4 +67,16 @@ pub struct Cli {
     /// Suppress progress indicators
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Path to configuration file
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Disable loading of configuration files
+    #[arg(long)]
+    pub no_config: bool,
+
+    /// Show configuration file locations and exit
+    #[arg(long)]
+    pub show_config: bool,
 }
