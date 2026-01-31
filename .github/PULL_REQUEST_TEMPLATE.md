@@ -4,16 +4,24 @@
 
 ## Type of Change
 
-<!-- 該当するものにチェックを入れてください -->
+<!--
+PR タイトルを Conventional Commits 形式にすると自動でラベルが付きます。
+例: feat: 新機能追加, fix: バグ修正, docs: ドキュメント更新
 
-- [ ] feat: 新機能
-- [ ] fix: バグ修正
-- [ ] docs: ドキュメントのみの変更
-- [ ] refactor: リファクタリング（機能追加やバグ修正を含まない）
-- [ ] perf: パフォーマンス改善
-- [ ] test: テストの追加・修正
-- [ ] ci: CI/CD の変更
-- [ ] chore: その他の変更
+該当するものにチェックを入れてください（複数可）
+-->
+
+| Type | Label | Version | Description |
+|------|-------|---------|-------------|
+| - [ ] feat | `feature` | minor | 新機能 |
+| - [ ] fix | `fix` | patch | バグ修正 |
+| - [ ] docs | `docs` | patch | ドキュメントのみの変更 |
+| - [ ] refactor | `refactor` | patch | リファクタリング |
+| - [ ] perf | `perf` | patch | パフォーマンス改善 |
+| - [ ] ci | `ci` | patch | CI/CD の変更 |
+| - [ ] chore | `chore` | patch | その他の変更 |
+| - [ ] deps | `dependencies` | patch | 依存関係の更新 |
+| - [ ] breaking | `breaking` | **major** | 破壊的変更 |
 
 ## Related Issues
 
@@ -22,7 +30,6 @@
 
 ## Checklist
 
-- [ ] コードが自己文書化されている（必要に応じてコメントを追加）
 - [ ] `cargo build` が成功する
 - [ ] `cargo test --workspace` が成功する
 - [ ] `cargo clippy` で警告がない
