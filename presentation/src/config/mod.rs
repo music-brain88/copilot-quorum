@@ -1,15 +1,43 @@
-//! Configuration file support for copilot-quorum
+//! Presentation-level configuration
 //!
-//! Provides loading and merging of configuration from multiple sources
-//! with the following priority (highest to lowest):
-//!
-//! 1. CLI arguments
-//! 2. `--config <path>` specified file
-//! 3. Project root: `./quorum.toml` or `./.quorum.toml`
-//! 4. XDG config: `$XDG_CONFIG_HOME/copilot-quorum/config.toml`
-//! 5. Fallback: `~/.config/copilot-quorum/config.toml`
-//! 6. Default values
+//! Configuration for output formatting and REPL behavior.
 
-mod loader;
+use serde::{Deserialize, Serialize};
 
-pub use loader::{AppConfig, ConfigLoader};
+/// Output configuration for the presentation layer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutputConfig {
+    /// Output format: "full", "synthesis", or "json"
+    pub format: Option<String>,
+    /// Enable colored terminal output
+    pub color: bool,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            format: None,
+            color: true,
+        }
+    }
+}
+
+/// REPL configuration for the presentation layer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReplConfig {
+    /// Show progress indicators
+    pub show_progress: bool,
+    /// Path to history file
+    pub history_file: Option<String>,
+}
+
+impl Default for ReplConfig {
+    fn default() -> Self {
+        Self {
+            show_progress: true,
+            history_file: None,
+        }
+    }
+}

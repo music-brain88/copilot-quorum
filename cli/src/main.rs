@@ -7,10 +7,8 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use quorum_application::{RunQuorumInput, RunQuorumUseCase};
 use quorum_domain::Model;
-use quorum_infrastructure::CopilotLlmGateway;
-use quorum_presentation::{
-    AppConfig, ChatRepl, Cli, ConfigLoader, ConsoleFormatter, OutputFormat, ProgressReporter,
-};
+use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig};
+use quorum_presentation::{ChatRepl, Cli, ConsoleFormatter, OutputFormat, ProgressReporter};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -26,7 +24,7 @@ async fn main() -> Result<()> {
     }
 
     // Load configuration (respecting --no-config flag)
-    let config: AppConfig = if cli.no_config {
+    let config: FileConfig = if cli.no_config {
         ConfigLoader::load_defaults()
     } else {
         ConfigLoader::load(cli.config.as_ref()).unwrap_or_else(|e| {
