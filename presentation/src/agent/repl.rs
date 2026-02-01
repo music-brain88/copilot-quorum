@@ -447,11 +447,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
                         if task.status == quorum_domain::TaskStatus::Failed {
                             if let Some(result) = &task.result {
                                 if let Some(error) = &result.error {
-                                    println!(
-                                        "     {} {}",
-                                        "└─".dimmed(),
-                                        error.red()
-                                    );
+                                    println!("     {} {}", "└─".dimmed(), error.red());
                                 }
                             }
                         }
