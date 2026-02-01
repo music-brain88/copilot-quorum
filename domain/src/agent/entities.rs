@@ -276,6 +276,8 @@ pub struct AgentConfig {
     pub max_iterations: usize,
     /// Working directory for tool execution
     pub working_dir: Option<String>,
+    /// Maximum number of retries for tool validation errors
+    pub max_tool_retries: usize,
 }
 
 impl Default for AgentConfig {
@@ -287,6 +289,7 @@ impl Default for AgentConfig {
             require_final_review: false,
             max_iterations: 50,
             working_dir: None,
+            max_tool_retries: 2,
         }
     }
 }
@@ -322,6 +325,12 @@ impl AgentConfig {
     /// Skip plan review (for CI/scripting use cases)
     pub fn with_skip_plan_review(mut self) -> Self {
         self.require_plan_review = false;
+        self
+    }
+
+    /// Set maximum tool retries for validation errors
+    pub fn with_max_tool_retries(mut self, max: usize) -> Self {
+        self.max_tool_retries = max;
         self
     }
 }

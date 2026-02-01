@@ -339,6 +339,52 @@ Provide your assessment with:
         )
     }
 
+    /// Prompt for retrying a failed tool call due to validation error
+    pub fn tool_retry(
+        tool_name: &str,
+        error_message: &str,
+        previous_args: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> String {
+        let args_json = serde_json::to_string_pretty(previous_args).unwrap_or_default();
+
+        format!(
+            r#"## Tool Execution Failed
+
+The tool call failed due to a validation error. Please fix the issue and provide a corrected tool call.
+
+**Tool**: `{tool_name}`
+
+**Error**: {error_message}
+
+**Previous Arguments**:
+```json
+{args_json}
+```
+
+## Instructions
+
+Analyze the error message and fix the arguments. Common issues include:
+- Missing required parameters
+- Invalid parameter values or types
+- Incorrect file paths
+
+Provide the corrected tool call:
+
+```tool
+{{
+  "tool": "{tool_name}",
+  "args": {{
+    // Fix the arguments based on the error
+  }},
+  "reasoning": "Explanation of what was fixed"
+}}
+```"#,
+            tool_name = tool_name,
+            error_message = error_message,
+            args_json = args_json
+        )
+    }
+
     /// Prompt for final review
     pub fn final_review(request: &str, plan: &Plan, results_summary: &str) -> String {
         let tasks_summary = plan
@@ -535,5 +581,20 @@ mod tests {
         assert!(prompt.contains("Original request"));
         assert!(prompt.contains("Do something"));
         assert!(prompt.contains("SUCCESS, PARTIAL, or FAILURE"));
+    }
+
+    #[test]
+    fn test_tool_retry_prompt() {
+        let mut args = std::collections::HashMap::new();
+        args.insert("path".to_string(), serde_json::json!("README.md"));
+
+        let prompt =
+            AgentPromptTemplate::tool_retry("read_file", "Missing required argument: encoding", &args);
+
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("Missing required argument: encoding"));
+        assert!(prompt.contains("README.md"));
+        assert!(prompt.contains("Tool Execution Failed"));
+        assert!(prompt.contains("validation error"));
     }
 }
