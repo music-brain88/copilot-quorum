@@ -415,8 +415,48 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
                     );
                 }
                 println!();
-                println!("{}", "Summary:".bold());
-                println!("{}", ConsoleFormatter::indent(&output.summary, "  "));
+
+                // Show task details with status
+                if let Some(plan) = &output.state.plan {
+                    let (completed, total) = plan.progress();
+                    println!(
+                        "{} Completed {}/{} tasks.",
+                        "Summary:".bold(),
+                        completed,
+                        total
+                    );
+                    println!();
+
+                    for (i, task) in plan.tasks.iter().enumerate() {
+                        let (icon, status_color): (&str, fn(&str) -> colored::ColoredString) =
+                            match task.status {
+                                quorum_domain::TaskStatus::Completed => ("✅", |s| s.green()),
+                                quorum_domain::TaskStatus::Failed => ("❌", |s| s.red()),
+                                quorum_domain::TaskStatus::Skipped => ("⏭️", |s| s.dimmed()),
+                                _ => ("⏳", |s| s.yellow()),
+                            };
+
+                        println!(
+                            "  {} Task {}: {}",
+                            icon,
+                            i + 1,
+                            status_color(&task.description)
+                        );
+
+                        // Show failure reason if task failed
+                        if task.status == quorum_domain::TaskStatus::Failed {
+                            if let Some(result) = &task.result {
+                                if let Some(error) = &result.error {
+                                    println!("     {} {}", "└─".dimmed(), error.red());
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback to old summary if no plan
+                    println!("{}", "Summary:".bold());
+                    println!("{}", ConsoleFormatter::indent(&output.summary, "  "));
+                }
 
                 // Show thought summary in verbose mode
                 if self.verbose && !output.state.thoughts.is_empty() {
