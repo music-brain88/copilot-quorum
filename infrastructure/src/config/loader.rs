@@ -19,7 +19,7 @@ impl ConfigLoader {
     /// 3. XDG config: `$XDG_CONFIG_HOME/copilot-quorum/config.toml`
     /// 4. Fallback: `~/.config/copilot-quorum/config.toml`
     /// 5. Default values
-    pub fn load(config_path: Option<&PathBuf>) -> Result<FileConfig, figment::Error> {
+    pub fn load(config_path: Option<&PathBuf>) -> Result<FileConfig, Box<figment::Error>> {
         let mut figment = Figment::new().merge(Serialized::defaults(FileConfig::default()));
 
         // Add global config (XDG or fallback)
@@ -43,7 +43,7 @@ impl ConfigLoader {
             figment = figment.merge(Toml::file(path).nested());
         }
 
-        figment.extract()
+        figment.extract().map_err(Box::new)
     }
 
     /// Load only default configuration (for --no-config)

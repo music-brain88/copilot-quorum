@@ -5,16 +5,10 @@
 use std::time::Duration;
 
 /// Application behavior configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BehaviorConfig {
     /// Timeout for API calls
     pub timeout: Option<Duration>,
-}
-
-impl Default for BehaviorConfig {
-    fn default() -> Self {
-        Self { timeout: None }
-    }
 }
 
 impl BehaviorConfig {

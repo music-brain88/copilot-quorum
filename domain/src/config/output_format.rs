@@ -5,21 +5,16 @@ use serde::{Deserialize, Serialize};
 /// Output format for Quorum results
 ///
 /// This is a domain concept representing how the output should be formatted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     /// Full formatted output with all phases
     Full,
     /// Only the final synthesis (default)
+    #[default]
     Synthesis,
     /// JSON output
     Json,
-}
-
-impl Default for OutputFormat {
-    fn default() -> Self {
-        Self::Synthesis
-    }
 }
 
 #[cfg(test)]
