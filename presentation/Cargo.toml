@@ -8,10 +8,9 @@ repository.workspace = true
 description = "Presentation layer for copilot-quorum - CLI and output formatting"
 
 [dependencies]
-# Domain, application, and infrastructure layers
+# Domain and application layers
 quorum-domain = { workspace = true }
 quorum-application = { workspace = true }
-quorum-infrastructure = { workspace = true }
 
 # Serialization
 serde = { workspace = true }

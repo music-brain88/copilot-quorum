@@ -1,17 +1,54 @@
 //! CLI entrypoint for Copilot Quorum
 //!
 //! This is the main binary that wires together all layers using
-//! dependency injection.
+//! dependency injection. Config conversion logic is centralized here.
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use quorum_application::{RunQuorumInput, RunQuorumUseCase};
+use quorum_application::{BehaviorConfig, RunQuorumInput, RunQuorumUseCase};
 use quorum_domain::Model;
-use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig};
-use quorum_presentation::{ChatRepl, Cli, ConsoleFormatter, OutputFormat, ProgressReporter};
+use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig, FileOutputFormat};
+use quorum_presentation::{
+    ChatRepl, Cli, ConsoleFormatter, OutputConfig, OutputFormat, ProgressReporter, ReplConfig,
+};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+/// Convert FileConfig + CLI args to layer-specific configs
+/// This is the single place where FileConfig is translated to application/presentation types
+fn build_configs(cli: &Cli, file: &FileConfig) -> (BehaviorConfig, OutputConfig, ReplConfig) {
+    // Application layer config
+    let behavior = BehaviorConfig::from_timeout_seconds(file.behavior.timeout_seconds);
+
+    // Presentation layer configs
+    let output_format = cli
+        .output
+        .unwrap_or_else(|| {
+            file.output
+                .format
+                .map(convert_output_format)
+                .unwrap_or(OutputFormat::Synthesis)
+        });
+
+    let output = OutputConfig::new(output_format, file.output.color);
+
+    let repl = ReplConfig::new(
+        !cli.quiet && file.repl.show_progress,
+        file.repl.history_file.clone(),
+    );
+
+    (behavior, output, repl)
+}
+
+/// Convert infrastructure OutputFormat to presentation OutputFormat
+fn convert_output_format(format: FileOutputFormat) -> OutputFormat {
+    match format {
+        FileOutputFormat::Full => OutputFormat::Full,
+        FileOutputFormat::Synthesis => OutputFormat::Synthesis,
+        FileOutputFormat::Json => OutputFormat::Json,
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,12 +90,13 @@ async fn main() -> Result<()> {
 
     info!("Starting Copilot Quorum");
 
+    // Build layer-specific configs from FileConfig + CLI
+    let (_behavior, output_config, repl_config) = build_configs(&cli, &config);
+
     // Parse models: CLI > config file > default
     let models: Vec<Model> = if !cli.model.is_empty() {
-        // CLI takes precedence
         cli.model.iter().map(|s| s.parse().unwrap()).collect()
     } else if !config.council.models.is_empty() {
-        // Config file models
         config
             .council
             .models
@@ -66,7 +104,6 @@ async fn main() -> Result<()> {
             .map(|s| s.parse().unwrap())
             .collect()
     } else {
-        // Built-in defaults
         Model::default_models()
     };
 
@@ -84,9 +121,6 @@ async fn main() -> Result<()> {
         config.behavior.enable_review
     };
 
-    // Determine quiet mode: CLI > config (inverted from show_progress)
-    let quiet = cli.quiet || !config.repl.show_progress;
-
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
     let gateway = Arc::new(CopilotLlmGateway::new().await?);
@@ -94,7 +128,7 @@ async fn main() -> Result<()> {
     // Chat mode
     if cli.chat {
         let repl = ChatRepl::new(gateway, models)
-            .with_progress(!quiet)
+            .with_progress(repl_config.show_progress)
             .with_skip_review(!enable_review);
 
         repl.run().await?;
@@ -119,7 +153,7 @@ async fn main() -> Result<()> {
     }
 
     // Print header
-    if !quiet {
+    if repl_config.show_progress {
         println!();
         println!("+============================================================+");
         println!("|           Copilot Quorum - LLM Council                     |");
@@ -141,21 +175,15 @@ async fn main() -> Result<()> {
     let use_case = RunQuorumUseCase::new(gateway);
 
     // Execute with or without progress reporting
-    let result = if quiet {
-        use_case.execute(input).await?
-    } else {
+    let result = if repl_config.show_progress {
         let progress = ProgressReporter::new();
         use_case.execute_with_progress(input, &progress).await?
+    } else {
+        use_case.execute(input).await?
     };
 
-    // Determine output format: CLI > config file > default (synthesis)
-    let output_format = cli
-        .output
-        .or_else(|| config.output.format.map(OutputFormat::from))
-        .unwrap_or(OutputFormat::Synthesis);
-
-    // Output results
-    let output = match output_format {
+    // Output results using config format
+    let output = match output_config.format {
         OutputFormat::Full => ConsoleFormatter::format(&result),
         OutputFormat::Synthesis => ConsoleFormatter::format_synthesis_only(&result),
         OutputFormat::Json => ConsoleFormatter::format_json(&result),
