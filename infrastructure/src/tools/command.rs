@@ -50,7 +50,9 @@ pub fn execute_run_command(call: &ToolCall) -> ToolResult {
     let working_dir = call.get_string("working_dir");
 
     // Get timeout
-    let timeout_secs = call.get_i64("timeout_secs").unwrap_or(DEFAULT_TIMEOUT_SECS as i64) as u64;
+    let timeout_secs = call
+        .get_i64("timeout_secs")
+        .unwrap_or(DEFAULT_TIMEOUT_SECS as i64) as u64;
 
     // Build the command
     let mut cmd = if cfg!(target_os = "windows") {
@@ -102,7 +104,10 @@ pub fn execute_run_command(call: &ToolCall) -> ToolResult {
         Err(e) => {
             return ToolResult::failure(
                 RUN_COMMAND,
-                ToolError::timeout(format!("Command timed out after {} seconds: {}", timeout_secs, e)),
+                ToolError::timeout(format!(
+                    "Command timed out after {} seconds: {}",
+                    timeout_secs, e
+                )),
             )
         }
     };
@@ -147,7 +152,10 @@ pub fn execute_run_command(call: &ToolCall) -> ToolResult {
         // Still return success from tool perspective, but include exit code
         ToolResult::success(
             RUN_COMMAND,
-            format!("Command exited with code {}\n{}", exit_code, combined_output),
+            format!(
+                "Command exited with code {}\n{}",
+                exit_code, combined_output
+            ),
         )
         .with_metadata(metadata)
     }
@@ -165,17 +173,25 @@ fn wait_with_timeout(
         match child.try_wait() {
             Ok(Some(status)) => {
                 // Process has exited
-                let stdout = child.stdout.take().map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                }).unwrap_or_default();
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
 
-                let stderr = child.stderr.take().map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                }).unwrap_or_default();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
 
                 return Ok(std::process::Output {
                     status,

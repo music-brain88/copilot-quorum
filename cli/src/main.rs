@@ -5,7 +5,9 @@
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase, RunQuorumInput, RunQuorumUseCase};
+use quorum_application::{
+    BehaviorConfig, RunAgentInput, RunAgentUseCase, RunQuorumInput, RunQuorumUseCase,
+};
 use quorum_domain::{AgentConfig, Model, OutputFormat};
 use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig, LocalToolExecutor};
 use quorum_presentation::{
@@ -132,7 +134,11 @@ async fn main() -> Result<()> {
             .working_dir
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
-            .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string()));
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string())
+            });
 
         let mut tool_executor = LocalToolExecutor::new();
         if let Some(ref dir) = working_dir {
@@ -175,8 +181,8 @@ async fn main() -> Result<()> {
         };
 
         // Build agent config
-        let mut agent_config = AgentConfig::new(primary_model.clone())
-            .with_quorum_models(quorum_models.clone());
+        let mut agent_config =
+            AgentConfig::new(primary_model.clone()).with_quorum_models(quorum_models.clone());
 
         if let Some(dir) = &working_dir {
             agent_config = agent_config.with_working_dir(dir);
@@ -237,7 +243,9 @@ async fn main() -> Result<()> {
     // Single question mode - question is required
     let question = match cli.question {
         Some(q) => q,
-        None => bail!("Question is required. Use --chat for interactive mode, or --agent for agent mode."),
+        None => bail!(
+            "Question is required. Use --chat for interactive mode, or --agent for agent mode."
+        ),
     };
 
     // Build input

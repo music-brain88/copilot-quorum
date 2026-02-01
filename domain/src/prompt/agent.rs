@@ -24,10 +24,7 @@ impl AgentPromptTemplate {
 
                 format!(
                     "- **{}**: {}\n  Risk: {}\n  Parameters:\n{}",
-                    t.name,
-                    t.description,
-                    t.risk_level,
-                    params
+                    t.name, t.description, t.risk_level, params
                 )
             })
             .collect::<Vec<_>>()

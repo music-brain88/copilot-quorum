@@ -24,8 +24,12 @@ pub fn read_file_definition() -> ToolDefinition {
     )
     .with_parameter(ToolParameter::new("path", "Path to the file to read", true).with_type("path"))
     .with_parameter(
-        ToolParameter::new("offset", "Line number to start reading from (0-indexed)", false)
-            .with_type("number"),
+        ToolParameter::new(
+            "offset",
+            "Line number to start reading from (0-indexed)",
+            false,
+        )
+        .with_type("number"),
     )
     .with_parameter(
         ToolParameter::new("limit", "Maximum number of lines to read", false).with_type("number"),
@@ -132,13 +136,12 @@ pub fn execute_read_file(call: &ToolCall) -> ToolResult {
     let duration_ms = start.elapsed().as_millis() as u64;
     let bytes = output.len();
 
-    ToolResult::success(READ_FILE, output)
-        .with_metadata(ToolResultMetadata {
-            duration_ms: Some(duration_ms),
-            bytes: Some(bytes),
-            path: Some(path_str.to_string()),
-            ..Default::default()
-        })
+    ToolResult::success(READ_FILE, output).with_metadata(ToolResultMetadata {
+        duration_ms: Some(duration_ms),
+        bytes: Some(bytes),
+        path: Some(path_str.to_string()),
+        ..Default::default()
+    })
 }
 
 /// Execute the write_file tool
@@ -204,13 +207,16 @@ pub fn execute_write_file(call: &ToolCall) -> ToolResult {
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    ToolResult::success(WRITE_FILE, format!("Successfully wrote {} bytes to {}", bytes, path_str))
-        .with_metadata(ToolResultMetadata {
-            duration_ms: Some(duration_ms),
-            bytes: Some(bytes),
-            path: Some(path_str.to_string()),
-            ..Default::default()
-        })
+    ToolResult::success(
+        WRITE_FILE,
+        format!("Successfully wrote {} bytes to {}", bytes, path_str),
+    )
+    .with_metadata(ToolResultMetadata {
+        duration_ms: Some(duration_ms),
+        bytes: Some(bytes),
+        path: Some(path_str.to_string()),
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]

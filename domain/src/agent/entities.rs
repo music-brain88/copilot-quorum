@@ -283,7 +283,7 @@ impl Default for AgentConfig {
         Self {
             primary_model: Model::ClaudeSonnet45,
             quorum_models: Model::default_models(),
-            require_plan_review: true,  // Always required
+            require_plan_review: true, // Always required
             require_final_review: false,
             max_iterations: 50,
             working_dir: None,

@@ -240,15 +240,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         progress.on_phase_change(&AgentPhase::PlanReview);
         state.set_phase(AgentPhase::PlanReview);
 
-        let plan_review = self
-            .review_plan(&input, &state, progress)
-            .await?;
+        let plan_review = self.review_plan(&input, &state, progress).await?;
 
         if plan_review.approved {
             state.approve_plan();
             state.add_thought(Thought::observation("Plan approved by quorum"));
         } else {
-            let feedback = plan_review.feedback.unwrap_or_else(|| "No specific feedback".to_string());
+            let feedback = plan_review
+                .feedback
+                .unwrap_or_else(|| "No specific feedback".to_string());
             state.reject_plan(&feedback);
             state.fail(format!("Plan rejected: {}", feedback));
             return Ok(RunAgentOutput {
@@ -320,8 +320,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         }
 
         // Ask the model to gather context using tools
-        let prompt =
-            AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
+        let prompt = AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
 
         let response = session
             .send(&prompt)
@@ -451,16 +450,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
                 }
             }
 
-            results.push(format!("Task {}: {}", task_id, if success { "OK" } else { "FAILED" }));
+            results.push(format!(
+                "Task {}: {}",
+                task_id,
+                if success { "OK" } else { "FAILED" }
+            ));
             previous_results.push_str(&format!("\n---\nTask {}: {}\n", task_id, output));
         }
 
         // Generate summary
-        let completed = state
-            .plan
-            .as_ref()
-            .map(|p| p.progress())
-            .unwrap_or((0, 0));
+        let completed = state.plan.as_ref().map(|p| p.progress()).unwrap_or((0, 0));
 
         Ok(format!(
             "Completed {}/{} tasks.\n\n{}",
@@ -503,7 +502,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
                 let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
                     "tool": tool_name,
                     "args": task.tool_args,
-                })).unwrap_or_default();
+                }))
+                .unwrap_or_default();
 
                 let review = self
                     .review_action(input, state, task, &tool_call_json, progress)
@@ -511,7 +511,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
 
                 if !review.approved {
                     return Err(RunAgentError::ActionRejected(
-                        review.feedback.unwrap_or_else(|| "Action rejected by quorum".to_string())
+                        review
+                            .feedback
+                            .unwrap_or_else(|| "Action rejected by quorum".to_string()),
                     ));
                 }
             }
@@ -561,7 +563,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
                 let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
                     "tool": call.tool_name,
                     "args": call.arguments,
-                })).unwrap_or_default();
+                }))
+                .unwrap_or_default();
 
                 let review = self
                     .review_action(input, state, task, &tool_call_json, progress)
@@ -585,11 +588,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
                     outputs.push(output.to_string());
                 }
             } else {
-                warn!(
-                    "Tool {} failed: {:?}",
-                    call.tool_name,
-                    result.error()
-                );
+                warn!("Tool {} failed: {:?}", call.tool_name, result.error());
             }
         }
 
@@ -615,9 +614,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         state: &AgentState,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<QuorumReviewResult, RunAgentError> {
-        let plan = state.plan.as_ref().ok_or_else(|| {
-            RunAgentError::PlanningFailed("No plan to review".to_string())
-        })?;
+        let plan = state
+            .plan
+            .as_ref()
+            .ok_or_else(|| RunAgentError::PlanningFailed("No plan to review".to_string()))?;
 
         let models = &input.config.quorum_models;
         if models.is_empty() {
@@ -656,7 +656,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
             match result {
                 Ok((model, Ok(response))) => {
                     let (approved, feedback) = parse_review_response(&response);
-                    info!("Model {} voted: {}", model, if approved { "APPROVE" } else { "REJECT" });
+                    info!(
+                        "Model {} voted: {}",
+                        model,
+                        if approved { "APPROVE" } else { "REJECT" }
+                    );
                     progress.on_quorum_model_complete(&model, approved);
                     votes.push((model.to_string(), approved, feedback));
                 }
@@ -726,7 +730,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
             match result {
                 Ok((model, Ok(response))) => {
                     let (approved, feedback) = parse_review_response(&response);
-                    info!("Model {} voted: {}", model, if approved { "APPROVE" } else { "REJECT" });
+                    info!(
+                        "Model {} voted: {}",
+                        model,
+                        if approved { "APPROVE" } else { "REJECT" }
+                    );
                     progress.on_quorum_model_complete(&model, approved);
                     votes.push((model.to_string(), approved, feedback));
                 }
@@ -798,7 +806,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
                 Ok((model, Ok(response))) => {
                     // For final review, we look for SUCCESS/PARTIAL/FAILURE
                     let (approved, feedback) = parse_final_review_response(&response);
-                    info!("Model {} assessment: {}", model, if approved { "SUCCESS" } else { "ISSUES" });
+                    info!(
+                        "Model {} assessment: {}",
+                        model,
+                        if approved { "SUCCESS" } else { "ISSUES" }
+                    );
                     progress.on_quorum_model_complete(&model, approved);
                     votes.push((model.to_string(), approved, feedback));
                 }
@@ -949,10 +961,7 @@ fn parse_plan(response: &str) -> Option<Plan> {
 
 fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
     let objective = json.get("objective")?.as_str()?;
-    let reasoning = json
-        .get("reasoning")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let reasoning = json.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
 
     let mut plan = Plan::new(objective, reasoning);
 

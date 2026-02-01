@@ -30,7 +30,10 @@ impl ToolError {
 
     // Common error constructors
     pub fn not_found(resource: impl Into<String>) -> Self {
-        Self::new("NOT_FOUND", format!("Resource not found: {}", resource.into()))
+        Self::new(
+            "NOT_FOUND",
+            format!("Resource not found: {}", resource.into()),
+        )
     }
 
     pub fn permission_denied(resource: impl Into<String>) -> Self {
@@ -49,7 +52,10 @@ impl ToolError {
     }
 
     pub fn timeout(operation: impl Into<String>) -> Self {
-        Self::new("TIMEOUT", format!("Operation timed out: {}", operation.into()))
+        Self::new(
+            "TIMEOUT",
+            format!("Operation timed out: {}", operation.into()),
+        )
     }
 }
 
@@ -175,8 +181,7 @@ mod tests {
 
     #[test]
     fn test_tool_result_success() {
-        let result =
-            ToolResult::success("read_file", "file contents").with_path("/test/file.txt");
+        let result = ToolResult::success("read_file", "file contents").with_path("/test/file.txt");
 
         assert!(result.is_success());
         assert_eq!(result.output(), Some("file contents"));

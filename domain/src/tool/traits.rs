@@ -31,8 +31,11 @@ impl ToolValidator for DefaultToolValidator {
         }
 
         // Check that all provided arguments are valid parameters
-        let valid_params: std::collections::HashSet<&str> =
-            definition.parameters.iter().map(|p| p.name.as_str()).collect();
+        let valid_params: std::collections::HashSet<&str> = definition
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
 
         for arg_name in call.arguments.keys() {
             if !valid_params.contains(arg_name.as_str()) {
@@ -55,8 +58,9 @@ mod tests {
     #[test]
     fn test_validator_missing_required() {
         let validator = DefaultToolValidator;
-        let definition = ToolDefinition::new("test", "test tool", RiskLevel::Low)
-            .with_parameter(ToolParameter::new("required_param", "A required param", true));
+        let definition = ToolDefinition::new("test", "test tool", RiskLevel::Low).with_parameter(
+            ToolParameter::new("required_param", "A required param", true),
+        );
 
         let call = ToolCall::new("test");
         let result = validator.validate(&call, &definition);

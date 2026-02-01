@@ -189,7 +189,12 @@ impl AgentProgressNotifier for AgentProgressReporter {
     fn on_tool_result(&self, tool_name: &str, success: bool) {
         if self.verbose {
             if success {
-                println!("      {} {} {}", "✓".green(), tool_name.green(), "OK".dimmed());
+                println!(
+                    "      {} {} {}",
+                    "✓".green(),
+                    tool_name.green(),
+                    "OK".dimmed()
+                );
             } else {
                 println!(
                     "      {} {} {}",
@@ -301,7 +306,12 @@ impl AgentProgressNotifier for SimpleAgentProgress {
 
     fn on_quorum_model_complete(&self, model: &Model, approved: bool) {
         let vote = if approved { "APPROVE" } else { "REJECT" };
-        println!("    {} {}: {}", if approved { "✓" } else { "✗" }, model, vote);
+        println!(
+            "    {} {}: {}",
+            if approved { "✓" } else { "✗" },
+            model,
+            vote
+        );
     }
 
     fn on_quorum_complete(&self, phase: &str, approved: bool, feedback: Option<&str>) {

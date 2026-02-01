@@ -138,11 +138,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
             "╰─────────────────────────────────────────────╯".cyan()
         );
         println!();
-        println!(
-            "{} {}",
-            "Primary Model:".bold(),
-            self.config.primary_model
-        );
+        println!("{} {}", "Primary Model:".bold(), self.config.primary_model);
         if !self.config.quorum_models.is_empty() {
             println!(
                 "{} {}",
@@ -266,28 +262,29 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
 
         let result = if self.verbose {
             let progress = AgentProgressReporter::verbose();
-            self.use_case
-                .execute_with_progress(input, &progress)
-                .await
+            self.use_case.execute_with_progress(input, &progress).await
         } else {
             let progress = AgentProgressReporter::new();
-            self.use_case
-                .execute_with_progress(input, &progress)
-                .await
+            self.use_case.execute_with_progress(input, &progress).await
         };
 
         println!();
-        println!(
-            "{}",
-            "━".repeat(60).dimmed()
-        );
+        println!("{}", "━".repeat(60).dimmed());
 
         match result {
             Ok(output) => {
                 if output.success {
-                    println!("{} {}", "✅".green(), "Agent completed successfully".green().bold());
+                    println!(
+                        "{} {}",
+                        "✅".green(),
+                        "Agent completed successfully".green().bold()
+                    );
                 } else {
-                    println!("{} {}", "⚠️".yellow(), "Agent completed with issues".yellow().bold());
+                    println!(
+                        "{} {}",
+                        "⚠️".yellow(),
+                        "Agent completed with issues".yellow().bold()
+                    );
                 }
                 println!();
                 println!("{}", "Summary:".bold());

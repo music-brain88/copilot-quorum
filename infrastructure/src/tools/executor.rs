@@ -66,11 +66,9 @@ impl LocalToolExecutor {
 
         // Validate the call
         let validator = quorum_domain::tool::traits::DefaultToolValidator;
-        if let Err(e) = quorum_domain::tool::traits::ToolValidator::validate(
-            &validator,
-            call,
-            definition,
-        ) {
+        if let Err(e) =
+            quorum_domain::tool::traits::ToolValidator::validate(&validator, call, definition)
+        {
             return ToolResult::failure(&call.tool_name, ToolError::invalid_argument(e));
         }
 
@@ -94,7 +92,10 @@ impl LocalToolExecutor {
             search::GREP_SEARCH => search::execute_grep_search(call),
             _ => ToolResult::failure(
                 &call.tool_name,
-                ToolError::execution_failed(format!("Tool '{}' is not implemented", call.tool_name)),
+                ToolError::execution_failed(format!(
+                    "Tool '{}' is not implemented",
+                    call.tool_name
+                )),
             ),
         }
     }

@@ -31,12 +31,20 @@ pub fn glob_search_definition() -> ToolDefinition {
         ToolParameter::new("pattern", "Glob pattern to match files", true).with_type("string"),
     )
     .with_parameter(
-        ToolParameter::new("base_dir", "Base directory to search from (default: current dir)", false)
-            .with_type("path"),
+        ToolParameter::new(
+            "base_dir",
+            "Base directory to search from (default: current dir)",
+            false,
+        )
+        .with_type("path"),
     )
     .with_parameter(
-        ToolParameter::new("max_results", "Maximum number of results to return (default: 1000)", false)
-            .with_type("number"),
+        ToolParameter::new(
+            "max_results",
+            "Maximum number of results to return (default: 1000)",
+            false,
+        )
+        .with_type("number"),
     )
 }
 
@@ -54,12 +62,20 @@ pub fn grep_search_definition() -> ToolDefinition {
         ToolParameter::new("path", "File or directory to search in", true).with_type("path"),
     )
     .with_parameter(
-        ToolParameter::new("file_pattern", "Glob pattern to filter files (e.g., '*.rs')", false)
-            .with_type("string"),
+        ToolParameter::new(
+            "file_pattern",
+            "Glob pattern to filter files (e.g., '*.rs')",
+            false,
+        )
+        .with_type("string"),
     )
     .with_parameter(
-        ToolParameter::new("context_lines", "Number of context lines before and after match", false)
-            .with_type("number"),
+        ToolParameter::new(
+            "context_lines",
+            "Number of context lines before and after match",
+            false,
+        )
+        .with_type("number"),
     )
     .with_parameter(
         ToolParameter::new("case_insensitive", "Perform case-insensitive search", false)
@@ -236,8 +252,10 @@ pub fn execute_grep_search(call: &ToolCall) -> ToolResult {
                             } else {
                                 " "
                             };
-                            context_result
-                                .push_str(&format!("\n{}{}: {}", marker, actual_line_num, ctx_line));
+                            context_result.push_str(&format!(
+                                "\n{}{}: {}",
+                                marker, actual_line_num, ctx_line
+                            ));
                         }
                         results.push(context_result);
                     } else {

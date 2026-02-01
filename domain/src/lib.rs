@@ -12,6 +12,10 @@ pub mod session;
 pub mod tool;
 
 // Re-export commonly used types
+pub use agent::{
+    entities::{AgentConfig, AgentPhase, AgentState, Plan, Task, TaskStatus},
+    value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
+};
 pub use config::OutputFormat;
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
@@ -20,10 +24,6 @@ pub use orchestration::{
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
 pub use prompt::{AgentPromptTemplate, PromptTemplate};
-pub use agent::{
-    entities::{AgentConfig, AgentPhase, AgentState, Plan, Task, TaskStatus},
-    value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
-};
 pub use session::{entities::Message, repository::LlmSessionRepository};
 pub use tool::{
     entities::{RiskLevel, ToolCall, ToolDefinition, ToolParameter, ToolSpec},

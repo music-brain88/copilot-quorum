@@ -64,7 +64,12 @@ impl ThoughtStream {
         // Verbose or long thoughts get formatted display
         let _ = writeln!(writer, "{}{}", self.indent, type_info);
         for line in thought.content.lines() {
-            let _ = writeln!(writer, "{}  {}", self.indent, self.style_line(line, &thought.thought_type));
+            let _ = writeln!(
+                writer,
+                "{}  {}",
+                self.indent,
+                self.style_line(line, &thought.thought_type)
+            );
         }
         let _ = writeln!(writer);
     }
@@ -155,9 +160,18 @@ pub fn summarize_thoughts(thoughts: &[Thought]) -> String {
     let mut lines = Vec::new();
 
     // Group by type
-    let observations: Vec<_> = thoughts.iter().filter(|t| matches!(t.thought_type, ThoughtType::Observation)).collect();
-    let reasoning: Vec<_> = thoughts.iter().filter(|t| matches!(t.thought_type, ThoughtType::Reasoning)).collect();
-    let conclusions: Vec<_> = thoughts.iter().filter(|t| matches!(t.thought_type, ThoughtType::Conclusion)).collect();
+    let observations: Vec<_> = thoughts
+        .iter()
+        .filter(|t| matches!(t.thought_type, ThoughtType::Observation))
+        .collect();
+    let reasoning: Vec<_> = thoughts
+        .iter()
+        .filter(|t| matches!(t.thought_type, ThoughtType::Reasoning))
+        .collect();
+    let conclusions: Vec<_> = thoughts
+        .iter()
+        .filter(|t| matches!(t.thought_type, ThoughtType::Conclusion))
+        .collect();
 
     if !observations.is_empty() {
         lines.push(format!("Observations: {}", observations.len()));

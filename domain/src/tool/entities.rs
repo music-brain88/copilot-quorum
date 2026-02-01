@@ -203,7 +203,9 @@ mod tests {
     #[test]
     fn test_tool_definition() {
         let tool = ToolDefinition::new("read_file", "Read file contents", RiskLevel::Low)
-            .with_parameter(ToolParameter::new("path", "File path to read", true).with_type("path"));
+            .with_parameter(
+                ToolParameter::new("path", "File path to read", true).with_type("path"),
+            );
 
         assert_eq!(tool.name, "read_file");
         assert!(!tool.is_high_risk());
