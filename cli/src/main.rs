@@ -1,21 +1,68 @@
 //! CLI entrypoint for Copilot Quorum
 //!
 //! This is the main binary that wires together all layers using
-//! dependency injection.
+//! dependency injection. Config conversion logic is centralized here.
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use quorum_application::{RunQuorumInput, RunQuorumUseCase};
-use quorum_domain::Model;
-use quorum_infrastructure::CopilotLlmGateway;
-use quorum_presentation::{ChatRepl, Cli, ConsoleFormatter, OutputFormat, ProgressReporter};
+use quorum_application::{BehaviorConfig, RunQuorumInput, RunQuorumUseCase};
+use quorum_domain::{Model, OutputFormat};
+use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig};
+use quorum_presentation::{
+    ChatRepl, Cli, ConsoleFormatter, OutputConfig, ProgressReporter, ReplConfig,
+};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+/// Convert FileConfig + CLI args to layer-specific configs
+/// This is the single place where FileConfig is translated to application/presentation types
+fn build_configs(cli: &Cli, file: &FileConfig) -> (BehaviorConfig, OutputConfig, ReplConfig) {
+    // Application layer config
+    let behavior = BehaviorConfig::from_timeout_seconds(file.behavior.timeout_seconds);
+
+    // Presentation layer configs
+    // CLI uses CliOutputFormat (for clap), convert to domain OutputFormat
+    let output_format = cli
+        .output
+        .map(OutputFormat::from)
+        .or(file.output.format)
+        .unwrap_or_default();
+
+    let output = OutputConfig::new(output_format, file.output.color);
+
+    let repl = ReplConfig::new(
+        !cli.quiet && file.repl.show_progress,
+        file.repl.history_file.clone(),
+    );
+
+    (behavior, output, repl)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Handle --show-config flag
+    if cli.show_config {
+        ConfigLoader::print_config_sources();
+        return Ok(());
+    }
+
+    // Load configuration (respecting --no-config flag)
+    let config: FileConfig = if cli.no_config {
+        ConfigLoader::load_defaults()
+    } else {
+        ConfigLoader::load(cli.config.as_ref()).unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to load config file: {}", e);
+            ConfigLoader::load_defaults()
+        })
+    };
+
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        bail!("Invalid configuration: {}", e);
+    }
 
     // Initialize logging based on verbosity level
     let filter = match cli.verbose {
@@ -32,11 +79,35 @@ async fn main() -> Result<()> {
 
     info!("Starting Copilot Quorum");
 
-    // Parse models
-    let models: Vec<Model> = if cli.model.is_empty() {
-        Model::default_models()
-    } else {
+    // Build layer-specific configs from FileConfig + CLI
+    let (_behavior, output_config, repl_config) = build_configs(&cli, &config);
+
+    // Parse models: CLI > config file > default
+    let models: Vec<Model> = if !cli.model.is_empty() {
         cli.model.iter().map(|s| s.parse().unwrap()).collect()
+    } else if !config.council.models.is_empty() {
+        config
+            .council
+            .models
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect()
+    } else {
+        Model::default_models()
+    };
+
+    // Determine moderator: CLI > config file
+    let moderator: Option<Model> = cli
+        .moderator
+        .as_ref()
+        .or(config.council.moderator.as_ref())
+        .map(|s| s.parse().unwrap());
+
+    // Determine if review is enabled: CLI --no-review overrides config
+    let enable_review = if cli.no_review {
+        false
+    } else {
+        config.behavior.enable_review
     };
 
     // === Dependency Injection ===
@@ -46,8 +117,8 @@ async fn main() -> Result<()> {
     // Chat mode
     if cli.chat {
         let repl = ChatRepl::new(gateway, models)
-            .with_progress(!cli.quiet)
-            .with_skip_review(cli.no_review);
+            .with_progress(repl_config.show_progress)
+            .with_skip_review(!enable_review);
 
         repl.run().await?;
         return Ok(());
@@ -62,16 +133,16 @@ async fn main() -> Result<()> {
     // Build input
     let mut input = RunQuorumInput::new(question.clone(), models.clone());
 
-    if let Some(mod_str) = &cli.moderator {
-        input = input.with_moderator(mod_str.parse().unwrap());
+    if let Some(mod_model) = moderator.clone() {
+        input = input.with_moderator(mod_model);
     }
 
-    if cli.no_review {
+    if !enable_review {
         input = input.without_review();
     }
 
     // Print header
-    if !cli.quiet {
+    if repl_config.show_progress {
         println!();
         println!("+============================================================+");
         println!("|           Copilot Quorum - LLM Council                     |");
@@ -93,15 +164,15 @@ async fn main() -> Result<()> {
     let use_case = RunQuorumUseCase::new(gateway);
 
     // Execute with or without progress reporting
-    let result = if cli.quiet {
-        use_case.execute(input).await?
-    } else {
+    let result = if repl_config.show_progress {
         let progress = ProgressReporter::new();
         use_case.execute_with_progress(input, &progress).await?
+    } else {
+        use_case.execute(input).await?
     };
 
-    // Output results
-    let output = match cli.output {
+    // Output results using config format
+    let output = match output_config.format {
         OutputFormat::Full => ConsoleFormatter::format(&result),
         OutputFormat::Synthesis => ConsoleFormatter::format_synthesis_only(&result),
         OutputFormat::Json => ConsoleFormatter::format_json(&result),

@@ -290,7 +290,10 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
         progress.on_task_complete(&Phase::Synthesis, &moderator, true);
         progress.on_phase_complete(&Phase::Synthesis);
 
-        Ok(SynthesisResult::new(moderator.to_string(), synthesis_content))
+        Ok(SynthesisResult::new(
+            moderator.to_string(),
+            synthesis_content,
+        ))
     }
 
     /// Query a single model

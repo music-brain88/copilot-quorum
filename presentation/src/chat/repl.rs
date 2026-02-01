@@ -44,8 +44,7 @@ impl<G: LlmGateway + 'static> ChatRepl<G> {
         let mut rl = DefaultEditor::new()?;
 
         // Try to load history
-        let history_path = dirs::data_dir()
-            .map(|p| p.join("copilot-quorum").join("history.txt"));
+        let history_path = dirs::data_dir().map(|p| p.join("copilot-quorum").join("history.txt"));
 
         if let Some(ref path) = history_path {
             if let Some(parent) = path.parent() {

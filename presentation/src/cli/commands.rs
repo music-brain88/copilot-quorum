@@ -1,10 +1,15 @@
 //! CLI command definitions
 
 use clap::{Parser, ValueEnum};
+use quorum_domain::OutputFormat;
+use std::path::PathBuf;
 
-/// Output format for Quorum results
+/// CLI-specific output format (newtype for clap ValueEnum)
+///
+/// This wrapper exists because Rust's orphan rules prevent implementing
+/// an external trait (ValueEnum) for an external type (domain::OutputFormat).
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum OutputFormat {
+pub enum CliOutputFormat {
     /// Full formatted output with all phases
     Full,
     /// Only the final synthesis
@@ -13,10 +18,24 @@ pub enum OutputFormat {
     Json,
 }
 
+impl From<CliOutputFormat> for OutputFormat {
+    fn from(format: CliOutputFormat) -> Self {
+        match format {
+            CliOutputFormat::Full => OutputFormat::Full,
+            CliOutputFormat::Synthesis => OutputFormat::Synthesis,
+            CliOutputFormat::Json => OutputFormat::Json,
+        }
+    }
+}
+
 /// CLI arguments for copilot-quorum
 #[derive(Parser, Debug)]
 #[command(name = "copilot-quorum")]
-#[command(author, version, about = "LLM Council - Multiple LLMs discuss and reach consensus")]
+#[command(
+    author,
+    version,
+    about = "LLM Council - Multiple LLMs discuss and reach consensus"
+)]
 #[command(long_about = r#"
 Copilot Quorum runs a council of LLMs to discuss a question and reach consensus.
 
@@ -24,6 +43,11 @@ The process has three phases:
 1. Initial Query: All models respond to your question in parallel
 2. Peer Review: Each model reviews the other responses
 3. Synthesis: A moderator model synthesizes everything into a final conclusion
+
+Configuration files are loaded from (in priority order):
+1. --config <path>     Explicit config file
+2. ./quorum.toml       Project-level config
+3. ~/.config/copilot-quorum/config.toml   Global config
 
 Example:
   copilot-quorum "What's the best way to handle errors in Rust?"
@@ -50,9 +74,9 @@ pub struct Cli {
     #[arg(long)]
     pub no_review: bool,
 
-    /// Output format
-    #[arg(short, long, value_enum, default_value = "synthesis")]
-    pub output: OutputFormat,
+    /// Output format (default: synthesis, or from config file)
+    #[arg(short, long, value_enum)]
+    pub output: Option<CliOutputFormat>,
 
     /// Verbosity level (-v = info, -vv = debug, -vvv = trace)
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -61,4 +85,16 @@ pub struct Cli {
     /// Suppress progress indicators
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Path to configuration file
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Disable loading of configuration files
+    #[arg(long)]
+    pub no_config: bool,
+
+    /// Show configuration file locations and exit
+    #[arg(long)]
+    pub show_config: bool,
 }

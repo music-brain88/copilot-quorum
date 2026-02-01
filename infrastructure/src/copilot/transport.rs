@@ -1,7 +1,9 @@
 //! Transport layer for Copilot CLI communication
 
 use crate::copilot::error::{CopilotError, Result};
-use crate::copilot::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, SessionEventParams};
+use crate::copilot::protocol::{
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, SessionEventParams,
+};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
@@ -35,10 +37,9 @@ impl StdioTransport {
             .spawn()?;
 
         // Read stdout to get the port number
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| CopilotError::SpawnError(std::io::Error::other("Failed to capture stdout")))?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            CopilotError::SpawnError(std::io::Error::other("Failed to capture stdout"))
+        })?;
 
         let mut stdout_reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -214,7 +215,9 @@ impl StdioTransport {
             if let Ok(notification) = serde_json::from_slice::<JsonRpcNotification>(&body) {
                 if notification.method == "session.event" {
                     if let Some(params) = notification.params {
-                        if let Ok(event_params) = serde_json::from_value::<SessionEventParams>(params) {
+                        if let Ok(event_params) =
+                            serde_json::from_value::<SessionEventParams>(params)
+                        {
                             if event_params.event.event_type == "session.start" {
                                 debug!("Got session.start with id: {}", event_params.session_id);
                                 return Ok(event_params.session_id);
@@ -291,13 +294,14 @@ impl StdioTransport {
             }
 
             // Parse as notification
-            let notification: JsonRpcNotification = serde_json::from_value(json_value).map_err(|e| {
-                warn!("Failed to parse notification: {}", body_str);
-                CopilotError::ParseError {
-                    error: e.to_string(),
-                    raw: body_str.to_string(),
-                }
-            })?;
+            let notification: JsonRpcNotification =
+                serde_json::from_value(json_value).map_err(|e| {
+                    warn!("Failed to parse notification: {}", body_str);
+                    CopilotError::ParseError {
+                        error: e.to_string(),
+                        raw: body_str.to_string(),
+                    }
+                })?;
 
             // Handle session.event notifications
             if notification.method == "session.event" {
@@ -309,7 +313,9 @@ impl StdioTransport {
                                 "assistant.message.delta" => {
                                     // Extract content from event.data.content
                                     if let Some(data) = event.get("data") {
-                                        if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
+                                        if let Some(content) =
+                                            data.get("content").and_then(|c| c.as_str())
+                                        {
                                             if !content.is_empty() {
                                                 on_chunk(content);
                                                 full_content.push_str(content);
@@ -320,7 +326,9 @@ impl StdioTransport {
                                 "assistant.message" => {
                                     // Final message, extract content
                                     if let Some(data) = event.get("data") {
-                                        if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
+                                        if let Some(content) =
+                                            data.get("content").and_then(|c| c.as_str())
+                                        {
                                             if !content.is_empty() && full_content.is_empty() {
                                                 // Only use if we haven't gotten deltas
                                                 on_chunk(content);
