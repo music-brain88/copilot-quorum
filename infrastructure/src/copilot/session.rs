@@ -1,4 +1,7 @@
-//! Copilot session management
+//! Copilot session management.
+//!
+//! Provides [`CopilotSession`] which implements [`LlmSession`] for
+//! maintaining a conversation with a specific LLM model through Copilot CLI.
 
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{CreateSessionParams, JsonRpcRequest, SendParams};
@@ -9,7 +12,10 @@ use quorum_domain::Model;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// A session with a specific Copilot model
+/// An active conversation session with a specific Copilot model.
+///
+/// Maintains session state and allows sending prompts and receiving responses.
+/// Implements [`LlmSession`] for use with the application layer.
 pub struct CopilotSession {
     transport: Arc<StdioTransport>,
     session_id: String,
@@ -52,17 +58,17 @@ impl CopilotSession {
         })
     }
 
-    /// Get the session ID
+    /// Returns the Copilot session ID.
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    /// Send a message and get a response (non-streaming)
+    /// Sends a prompt and waits for the complete response.
     pub async fn ask(&self, content: &str) -> Result<String> {
         self.ask_streaming(content, |_| {}).await
     }
 
-    /// Send a message and stream the response
+    /// Sends a prompt and streams the response, calling `on_chunk` for each piece.
     pub async fn ask_streaming<F>(&self, content: &str, on_chunk: F) -> Result<String>
     where
         F: FnMut(&str),

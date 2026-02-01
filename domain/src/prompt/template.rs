@@ -1,10 +1,26 @@
-//! Prompt templates for the Quorum flow
+//! Prompt templates for the Quorum (合議) flow.
+//!
+//! This module provides prompt templates used in each phase of a Quorum session:
+//!
+//! | Phase | System Prompt | User Prompt |
+//! |-------|--------------|-------------|
+//! | Initial Query | [`initial_system()`](PromptTemplate::initial_system) | [`initial_query()`](PromptTemplate::initial_query) |
+//! | Peer Review | [`review_system()`](PromptTemplate::review_system) | [`review_prompt()`](PromptTemplate::review_prompt) |
+//! | Synthesis | [`synthesis_system()`](PromptTemplate::synthesis_system) | [`synthesis_prompt()`](PromptTemplate::synthesis_prompt) |
+//!
+//! Each prompt is designed to guide the LLM's behavior for its specific role in the Quorum process.
 
-/// Templates for generating prompts at each stage
+/// Templates for generating prompts at each Quorum phase.
+///
+/// All methods are static and return either `&'static str` for system prompts
+/// or `String` for dynamically generated user prompts.
 pub struct PromptTemplate;
 
 impl PromptTemplate {
-    /// System prompt for initial query phase
+    /// System prompt for the Initial Query phase.
+    ///
+    /// Sets up the model to act as a knowledgeable expert providing
+    /// a well-reasoned, accurate response to the question.
     pub fn initial_system() -> &'static str {
         r#"You are a knowledgeable expert participating in a collaborative discussion.
 Your task is to provide a thoughtful, well-reasoned response to the question.
@@ -12,7 +28,10 @@ Be concise but comprehensive. Support your points with reasoning and examples wh
 Focus on accuracy and clarity."#
     }
 
-    /// User prompt for initial query
+    /// Generates the user prompt for the Initial Query phase.
+    ///
+    /// # Arguments
+    /// * `question` - The user's question to be answered
     pub fn initial_query(question: &str) -> String {
         format!(
             r#"Please answer the following question:
@@ -24,7 +43,10 @@ Provide a clear, well-structured response."#,
         )
     }
 
-    /// System prompt for peer review phase
+    /// System prompt for the Peer Review phase.
+    ///
+    /// Instructs the model to critically evaluate other responses,
+    /// identifying strengths, weaknesses, and providing scores.
     pub fn review_system() -> &'static str {
         r#"You are a critical reviewer evaluating responses from other experts.
 Your task is to objectively assess the quality, accuracy, and completeness of responses.
@@ -32,7 +54,11 @@ Be fair but thorough in your evaluation. Identify both strengths and weaknesses.
 Provide constructive feedback that would help improve the response."#
     }
 
-    /// User prompt for peer review
+    /// Generates the user prompt for the Peer Review phase.
+    ///
+    /// # Arguments
+    /// * `question` - The original question for context
+    /// * `responses` - List of (anonymous_id, content) pairs to review
     pub fn review_prompt(question: &str, responses: &[(String, String)]) -> String {
         let mut prompt = format!(
             r#"Original question: {}
@@ -66,7 +92,10 @@ Format your review clearly with headers for each response."#,
         prompt
     }
 
-    /// System prompt for synthesis phase
+    /// System prompt for the Synthesis phase.
+    ///
+    /// Sets up the model as a moderator who combines multiple responses
+    /// into a final answer, identifying consensus and disagreements.
     pub fn synthesis_system() -> &'static str {
         r#"You are a moderator synthesizing multiple expert opinions into a coherent conclusion.
 Your task is to:
@@ -78,7 +107,12 @@ Your task is to:
 Be balanced and objective. Give weight to well-reasoned arguments regardless of source."#
     }
 
-    /// User prompt for synthesis
+    /// Generates the user prompt for the Synthesis phase.
+    ///
+    /// # Arguments
+    /// * `question` - The original question
+    /// * `responses` - List of (model_name, response_content) pairs
+    /// * `reviews` - List of (reviewer_name, review_content) pairs
     pub fn synthesis_prompt(
         question: &str,
         responses: &[(String, String)],
@@ -122,7 +156,10 @@ Format your response with clear markdown headers."#,
         prompt
     }
 
-    /// User prompt for synthesis when there are no reviews
+    /// Generates the user prompt for Synthesis when peer review was skipped.
+    ///
+    /// This is a convenience method that calls [`synthesis_prompt`](Self::synthesis_prompt)
+    /// with an empty reviews list.
     pub fn synthesis_prompt_no_reviews(question: &str, responses: &[(String, String)]) -> String {
         Self::synthesis_prompt(question, responses, &[])
     }
