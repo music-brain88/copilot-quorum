@@ -240,8 +240,17 @@ impl AgentProgressNotifier for AgentProgressReporter {
             if let Some(fb) = feedback {
                 println!();
                 println!("    {} Feedback:", "ℹ".yellow());
-                for line in fb.lines().take(5) {
+                // Show all feedback lines (up to 20) for better visibility
+                for line in fb.lines().take(20) {
                     println!("      {}", line.yellow());
+                }
+                let total_lines = fb.lines().count();
+                if total_lines > 20 {
+                    println!(
+                        "      {} ...and {} more lines",
+                        "".dimmed(),
+                        total_lines - 20
+                    );
                 }
             }
         }
@@ -320,7 +329,14 @@ impl AgentProgressNotifier for SimpleAgentProgress {
         } else {
             println!("  ✗ {} REJECTED", phase);
             if let Some(fb) = feedback {
-                println!("    Feedback: {}", fb);
+                println!("    Feedback:");
+                for line in fb.lines().take(20) {
+                    println!("      {}", line);
+                }
+                let total_lines = fb.lines().count();
+                if total_lines > 20 {
+                    println!("      ...and {} more lines", total_lines - 20);
+                }
             }
         }
     }
