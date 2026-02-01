@@ -551,14 +551,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
                 }
             }
 
-            progress.on_tool_call(tool_name, &format!("{:?}", task.tool_args));
+            // Execute with retry for validation errors
+            let result = self
+                .execute_tool_with_retry(
+                    session,
+                    &tool_call,
+                    input.config.max_tool_retries,
+                    progress,
+                )
+                .await;
 
-            let result = self.tool_executor.execute(&tool_call).await;
-            let success = result.is_success();
-
-            progress.on_tool_result(tool_name, success);
-
-            if success {
+            if result.is_success() {
                 return Ok(result.output().unwrap_or("").to_string());
             } else {
                 return Err(RunAgentError::TaskExecutionFailed(
@@ -609,14 +612,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
                 }
             }
 
-            progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+            // Execute with retry for validation errors
+            let result = self
+                .execute_tool_with_retry(session, &call, input.config.max_tool_retries, progress)
+                .await;
 
-            let result = self.tool_executor.execute(&call).await;
-            let success = result.is_success();
-
-            progress.on_tool_result(&call.tool_name, success);
-
-            if success {
+            if result.is_success() {
                 if let Some(output) = result.output() {
                     outputs.push(output.to_string());
                 }
@@ -635,6 +636,89 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         } else {
             // Unknown tools are considered high-risk by default
             true
+        }
+    }
+
+    /// Execute a tool with retry on validation errors
+    ///
+    /// If the tool execution fails with INVALID_ARGUMENT, this method will:
+    /// 1. Send the error back to the LLM with the tool_retry prompt
+    /// 2. Parse the corrected tool call from the response
+    /// 3. Retry execution up to max_tool_retries times
+    async fn execute_tool_with_retry(
+        &self,
+        session: &dyn LlmSession,
+        tool_call: &ToolCall,
+        max_retries: usize,
+        progress: &dyn AgentProgressNotifier,
+    ) -> quorum_domain::ToolResult {
+        let mut current_call = tool_call.clone();
+        let mut attempts = 0;
+
+        loop {
+            progress.on_tool_call(
+                &current_call.tool_name,
+                &format!("{:?}", current_call.arguments),
+            );
+
+            let result = self.tool_executor.execute(&current_call).await;
+
+            progress.on_tool_result(&current_call.tool_name, result.is_success());
+
+            // If successful or not a validation error, return immediately
+            if result.is_success() || !is_validation_error(&result) {
+                return result;
+            }
+
+            // Check if we've exceeded retry limit
+            attempts += 1;
+            if attempts >= max_retries {
+                debug!(
+                    "Tool {} failed after {} retry attempts",
+                    current_call.tool_name, attempts
+                );
+                return result;
+            }
+
+            // Get error message for the retry prompt
+            let error_message = result
+                .error()
+                .map(|e| e.message.clone())
+                .unwrap_or_else(|| "Unknown validation error".to_string());
+
+            info!(
+                "Tool {} validation error (attempt {}): {}. Requesting corrected call from LLM.",
+                current_call.tool_name, attempts, error_message
+            );
+
+            // Ask LLM to fix the tool call
+            let retry_prompt = AgentPromptTemplate::tool_retry(
+                &current_call.tool_name,
+                &error_message,
+                &current_call.arguments,
+            );
+
+            let response = match session.send(&retry_prompt).await {
+                Ok(response) => response,
+                Err(e) => {
+                    warn!("Failed to get retry response from LLM: {}", e);
+                    return result;
+                }
+            };
+
+            // Parse the corrected tool call from the response
+            let corrected_calls = parse_tool_calls(&response);
+
+            if let Some(corrected) = corrected_calls.into_iter().next() {
+                debug!(
+                    "LLM provided corrected tool call with args: {:?}",
+                    corrected.arguments
+                );
+                current_call = corrected;
+            } else {
+                warn!("LLM did not provide a valid corrected tool call");
+                return result;
+            }
         }
     }
 
@@ -892,6 +976,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
 
         session.send(prompt).await
     }
+}
+
+/// Check if a ToolResult error is a validation error that can be retried
+fn is_validation_error(result: &quorum_domain::ToolResult) -> bool {
+    result
+        .error()
+        .map(|e| e.code == "INVALID_ARGUMENT")
+        .unwrap_or(false)
 }
 
 /// Parse a review response to extract approval status and feedback
