@@ -410,7 +410,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         previous_feedback: Option<&str>,
         _progress: &dyn AgentProgressNotifier,
     ) -> Result<Plan, RunAgentError> {
-        let prompt = AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
+        let prompt =
+            AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
 
         let response = session
             .send(&prompt)
