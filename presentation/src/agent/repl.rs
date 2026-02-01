@@ -2,35 +2,55 @@
 
 use crate::agent::progress::AgentProgressReporter;
 use crate::agent::thought::summarize_thoughts;
+use crate::progress::reporter::ProgressReporter;
 use crate::ConsoleFormatter;
 use colored::Colorize;
-use quorum_application::{LlmGateway, RunAgentInput, RunAgentUseCase, ToolExecutorPort};
-use quorum_domain::{AgentConfig, Model};
+use quorum_application::{
+    LlmGateway, RunAgentInput, RunAgentUseCase, RunQuorumInput, RunQuorumUseCase, ToolExecutorPort,
+};
+use quorum_domain::{AgentConfig, Model, OutputFormat};
 use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
 use std::sync::Arc;
 
+/// Entry in conversation history
+#[derive(Debug, Clone)]
+struct HistoryEntry {
+    /// User's request
+    request: String,
+    /// Summary of agent's response
+    summary: String,
+}
+
 /// Interactive REPL for agent mode
 pub struct AgentRepl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> {
+    gateway: Arc<G>,
     use_case: RunAgentUseCase<G, T>,
     config: AgentConfig,
+    quorum_models: Vec<Model>,
     verbose: bool,
     working_dir: Option<String>,
+    /// Conversation history for /council context
+    conversation_history: Vec<HistoryEntry>,
 }
 
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
     /// Create a new AgentRepl
     pub fn new(gateway: Arc<G>, tool_executor: Arc<T>, primary_model: Model) -> Self {
         Self {
+            gateway: gateway.clone(),
             use_case: RunAgentUseCase::new(gateway, tool_executor),
             config: AgentConfig::new(primary_model),
+            quorum_models: Model::default_models(),
             verbose: false,
             working_dir: None,
+            conversation_history: Vec::new(),
         }
     }
 
     /// Set quorum models for review
     pub fn with_quorum_models(mut self, models: Vec<Model>) -> Self {
+        self.quorum_models = models.clone();
         self.config = self.config.with_quorum_models(models);
         self
     }
@@ -58,7 +78,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
     }
 
     /// Run the interactive REPL
-    pub async fn run(&self) -> RlResult<()> {
+    pub async fn run(&mut self) -> RlResult<()> {
         let mut rl = DefaultEditor::new()?;
 
         // Try to load history
@@ -88,7 +108,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
 
                     // Handle commands
                     if line.starts_with('/') {
-                        match self.handle_command(line) {
+                        match self.handle_command(line).await {
                             CommandResult::Exit => break,
                             CommandResult::Continue => continue,
                         }
@@ -139,12 +159,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
         );
         println!();
         println!("{} {}", "Primary Model:".bold(), self.config.primary_model);
-        if !self.config.quorum_models.is_empty() {
+        if !self.quorum_models.is_empty() {
             println!(
                 "{} {}",
                 "Quorum Models:".bold(),
-                self.config
-                    .quorum_models
+                self.quorum_models
                     .iter()
                     .map(|m| m.to_string())
                     .collect::<Vec<_>>()
@@ -162,17 +181,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
         println!();
         println!("Commands:");
         println!("  {}    - Show this help", "/help".cyan());
+        println!("  {} - Consult quorum on a question", "/council".cyan());
         println!("  {}  - Show current configuration", "/config".cyan());
+        println!("  {}   - Clear conversation history", "/clear".cyan());
         println!("  {}    - Exit agent mode", "/quit".cyan());
         println!();
     }
 
     /// Handle slash commands. Returns whether to continue or exit.
-    fn handle_command(&self, cmd: &str) -> CommandResult {
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        let cmd = parts.first().copied().unwrap_or("");
+    async fn handle_command(&mut self, cmd: &str) -> CommandResult {
+        let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
+        let command = parts.first().copied().unwrap_or("");
+        let args = parts.get(1).copied().unwrap_or("").trim();
 
-        match cmd {
+        match command {
             "/quit" | "/exit" | "/q" => {
                 println!("Bye!");
                 CommandResult::Exit
@@ -180,21 +202,37 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
             "/help" | "/h" | "/?" => {
                 println!();
                 println!("{}", "Commands:".bold());
-                println!("  /help, /h, /?   - Show this help");
-                println!("  /config         - Show current configuration");
-                println!("  /verbose        - Toggle verbose mode");
-                println!("  /quit, /exit, /q - Exit agent mode");
+                println!("  /help, /h, /?        - Show this help");
+                println!("  /council <question>  - Consult quorum (multiple models)");
+                println!("  /config              - Show current configuration");
+                println!("  /clear               - Clear conversation history");
+                println!("  /verbose             - Toggle verbose mode");
+                println!("  /quit, /exit, /q     - Exit agent mode");
                 println!();
                 println!("{}", "Usage:".bold());
                 println!("  Type your request and press Enter.");
                 println!("  The agent will create a plan and execute it.");
                 println!("  High-risk operations require quorum approval.");
                 println!();
+                println!("{}", "/council:".bold());
+                println!("  Use /council to consult multiple models on a question.");
+                println!("  The conversation history provides context to the quorum.");
+                println!();
                 println!("{}", "Examples:".bold());
                 println!("  - \"Fix the bug in login.rs\"");
+                println!("  - \"/council What do you think about this design?\"");
                 println!("  - \"Add unit tests for the User struct\"");
-                println!("  - \"Refactor the error handling in api.rs\"");
                 println!();
+                CommandResult::Continue
+            }
+            "/council" => {
+                if args.is_empty() {
+                    println!("{} Usage: /council <your question>", "Error:".red().bold());
+                    println!("Example: /council What do you think about the current architecture?");
+                    return CommandResult::Continue;
+                }
+
+                self.run_council(args).await;
                 CommandResult::Continue
             }
             "/config" => {
@@ -203,11 +241,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
                 println!("  Primary Model:    {}", self.config.primary_model);
                 println!(
                     "  Quorum Models:    {}",
-                    if self.config.quorum_models.is_empty() {
+                    if self.quorum_models.is_empty() {
                         "None (auto-approve)".to_string()
                     } else {
-                        self.config
-                            .quorum_models
+                        self.quorum_models
                             .iter()
                             .map(|m| m.to_string())
                             .collect::<Vec<_>>()
@@ -229,7 +266,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
                     self.working_dir.as_deref().unwrap_or("(current)")
                 );
                 println!("  Verbose:          {}", self.verbose);
+                println!(
+                    "  History:          {} entries",
+                    self.conversation_history.len()
+                );
                 println!();
+                CommandResult::Continue
+            }
+            "/clear" => {
+                self.conversation_history.clear();
+                println!("{}", "Conversation history cleared.".green());
                 CommandResult::Continue
             }
             "/verbose" => {
@@ -242,14 +288,90 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
                 CommandResult::Continue
             }
             _ => {
-                println!("{} Unknown command: {}", "?".yellow(), cmd);
+                println!("{} Unknown command: {}", "?".yellow(), command);
                 println!("Type {} for available commands", "/help".cyan());
                 CommandResult::Continue
             }
         }
     }
 
-    async fn process_request(&self, request: &str) {
+    /// Build context string from conversation history
+    fn build_context_from_history(&self) -> String {
+        if self.conversation_history.is_empty() {
+            return String::new();
+        }
+
+        let mut context = String::from("## Previous Conversation Context\n\n");
+        for (i, entry) in self.conversation_history.iter().enumerate() {
+            context.push_str(&format!(
+                "### Exchange {}\n**User**: {}\n**Agent Summary**: {}\n\n",
+                i + 1,
+                entry.request,
+                entry.summary
+            ));
+        }
+        context
+    }
+
+    /// Run quorum council with conversation context
+    async fn run_council(&self, question: &str) {
+        println!();
+        println!(
+            "{} {}",
+            "━".repeat(50).dimmed(),
+            "Council Starting".bold().magenta()
+        );
+        println!();
+
+        // Build the question with context
+        let context = self.build_context_from_history();
+        let full_question = if context.is_empty() {
+            question.to_string()
+        } else {
+            format!("{}\n\n## Current Question\n\n{}", context, question)
+        };
+
+        // Create quorum input
+        let mut input = RunQuorumInput::new(full_question, self.quorum_models.clone());
+
+        // Use first quorum model as moderator if available
+        if let Some(moderator) = self.quorum_models.first() {
+            input = input.with_moderator(moderator.clone());
+        }
+
+        // Run quorum
+        let use_case = RunQuorumUseCase::new(self.gateway.clone());
+        let progress = ProgressReporter::new();
+        let result = use_case.execute_with_progress(input, &progress).await;
+
+        println!();
+        println!("{}", "━".repeat(60).dimmed());
+
+        match result {
+            Ok(output) => {
+                // Show synthesis
+                println!();
+                println!("{}", "Council Conclusion:".bold().magenta());
+                println!();
+
+                let formatted = match OutputFormat::Synthesis {
+                    OutputFormat::Synthesis => ConsoleFormatter::format_synthesis_only(&output),
+                    OutputFormat::Full => ConsoleFormatter::format(&output),
+                    OutputFormat::Json => ConsoleFormatter::format_json(&output),
+                };
+                println!("{}", formatted);
+            }
+            Err(e) => {
+                println!("{} {}", "❌".red(), "Council failed".red().bold());
+                println!();
+                println!("{} {}", "Error:".red().bold(), e);
+            }
+        }
+
+        println!();
+    }
+
+    async fn process_request(&mut self, request: &str) {
         println!();
         println!(
             "{} {}",
@@ -273,6 +395,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
 
         match result {
             Ok(output) => {
+                // Add to conversation history
+                self.conversation_history.push(HistoryEntry {
+                    request: request.to_string(),
+                    summary: output.summary.clone(),
+                });
+
                 if output.success {
                     println!(
                         "{} {}",

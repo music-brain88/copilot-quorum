@@ -652,6 +652,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
             .as_ref()
             .ok_or_else(|| RunAgentError::PlanningFailed("No plan to review".to_string()))?;
 
+        // Skip plan review if configured to do so (e.g., --no-quorum flag)
+        if !input.config.require_plan_review {
+            info!("Plan review disabled, auto-approving plan");
+            return Ok(QuorumReviewResult {
+                approved: true,
+                votes: vec![],
+                feedback: None,
+            });
+        }
+
         let models = &input.config.quorum_models;
         if models.is_empty() {
             // No quorum models configured, auto-approve

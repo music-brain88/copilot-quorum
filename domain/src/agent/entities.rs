@@ -318,6 +318,12 @@ impl AgentConfig {
         self.working_dir = Some(dir.into());
         self
     }
+
+    /// Skip plan review (for CI/scripting use cases)
+    pub fn with_skip_plan_review(mut self) -> Self {
+        self.require_plan_review = false;
+        self
+    }
 }
 
 /// State of an agent execution (Entity).

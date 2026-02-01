@@ -31,25 +31,18 @@ impl From<CliOutputFormat> for OutputFormat {
 /// CLI arguments for copilot-quorum
 #[derive(Parser, Debug)]
 #[command(name = "copilot-quorum")]
-#[command(
-    author,
-    version,
-    about = "LLM Council - Multiple LLMs discuss and reach consensus"
-)]
+#[command(author, version, about = "AI Agent with Quorum-based safety reviews")]
 #[command(long_about = r#"
-Copilot Quorum runs a council of LLMs to discuss a question and reach consensus.
+Copilot Quorum is an AI Agent that executes tasks with quorum-based safety reviews.
 
-The process has three phases:
-1. Initial Query: All models respond to your question in parallel
-2. Peer Review: Each model reviews the other responses
-3. Synthesis: A moderator model synthesizes everything into a final conclusion
+By default, it starts an interactive Agent REPL. Provide a task to run it directly.
 
-Agent Mode (--agent):
-  Autonomous task execution with quorum-based safety reviews.
-  The agent will:
-  1. Gather context about your project
-  2. Create a plan (reviewed by quorum)
-  3. Execute tasks (high-risk operations reviewed by quorum)
+The agent will:
+1. Gather context about your project
+2. Create a plan (reviewed by quorum)
+3. Execute tasks (high-risk operations reviewed by quorum)
+
+Use /council in the REPL to consult multiple models on a question.
 
 Configuration files are loaded from (in priority order):
 1. --config <path>     Explicit config file
@@ -57,40 +50,22 @@ Configuration files are loaded from (in priority order):
 3. ~/.config/copilot-quorum/config.toml   Global config
 
 Example:
-  copilot-quorum "What's the best way to handle errors in Rust?"
-  copilot-quorum -m gpt-5.2-codex -m claude-sonnet-4.5 "Compare async/await patterns"
-  copilot-quorum --chat -m claude-haiku-4.5
-  copilot-quorum --agent "Fix the bug in login.rs"
-  copilot-quorum --agent --agent-interactive
+  copilot-quorum                         # Start Agent REPL (default)
+  copilot-quorum "Fix the bug in login.rs"  # Run single task
+  copilot-quorum --no-quorum "Show README"  # Skip quorum review (faster)
+  copilot-quorum -m claude-haiku-4.5 "Add tests"  # Use specific model
 "#)]
 pub struct Cli {
-    /// The question to ask the council (not required in chat/agent mode)
+    /// The task/question to process (if not provided, starts Agent REPL)
     pub question: Option<String>,
 
-    /// Start interactive chat mode
-    #[arg(short, long)]
-    pub chat: bool,
-
-    /// Start agent mode (autonomous task execution)
-    #[arg(short, long)]
-    pub agent: bool,
-
-    /// Start interactive agent REPL
+    /// Skip quorum review (plan review will be auto-approved)
     #[arg(long)]
-    pub agent_interactive: bool,
+    pub no_quorum: bool,
 
-    /// Models to include in the council (can be specified multiple times)
-    /// In agent mode: first model is primary, rest are quorum reviewers
+    /// Models to use (first = primary, rest = quorum reviewers)
     #[arg(short, long, value_name = "MODEL")]
     pub model: Vec<String>,
-
-    /// Model to use as moderator for final synthesis
-    #[arg(long, value_name = "MODEL")]
-    pub moderator: Option<String>,
-
-    /// Skip the peer review phase
-    #[arg(long)]
-    pub no_review: bool,
 
     /// Enable final review in agent mode
     #[arg(long)]
