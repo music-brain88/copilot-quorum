@@ -326,11 +326,17 @@ impl AgentProgressNotifier for SimpleAgentProgress {
     }
 }
 
-/// Truncate a string to a maximum length
+/// Truncate a string to a maximum length (char-aware for UTF-8)
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        // Find a valid char boundary at or before (max_len - 3)
+        let target = max_len.saturating_sub(3);
+        let mut end = target.min(s.len());
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
