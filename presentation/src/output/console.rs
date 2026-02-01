@@ -141,6 +141,14 @@ impl ConsoleFormatter {
     fn footer() -> String {
         format!("\n{}\n", "=".repeat(60).cyan())
     }
+
+    /// Indent a multi-line string
+    pub fn indent(text: &str, prefix: &str) -> String {
+        text.lines()
+            .map(|line| format!("{}{}", prefix, line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 impl OutputFormatter for ConsoleFormatter {
