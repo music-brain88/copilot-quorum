@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod copilot;
+pub mod tools;
 
 // Re-export commonly used types
 pub use config::{
@@ -17,3 +18,4 @@ pub use copilot::{
     session::CopilotSession,
     transport::StdioTransport,
 };
+pub use tools::{default_tool_spec, read_only_tool_spec, LocalToolExecutor};
