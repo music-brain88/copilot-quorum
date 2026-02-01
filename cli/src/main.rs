@@ -33,6 +33,11 @@ async fn main() -> Result<()> {
         })
     };
 
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        bail!("Invalid configuration: {}", e);
+    }
+
     // Initialize logging based on verbosity level
     let filter = match cli.verbose {
         0 => EnvFilter::new("warn"),
@@ -143,8 +148,14 @@ async fn main() -> Result<()> {
         use_case.execute_with_progress(input, &progress).await?
     };
 
+    // Determine output format: CLI > config file > default (synthesis)
+    let output_format = cli
+        .output
+        .or_else(|| config.output.format.map(OutputFormat::from))
+        .unwrap_or(OutputFormat::Synthesis);
+
     // Output results
-    let output = match cli.output {
+    let output = match output_format {
         OutputFormat::Full => ConsoleFormatter::format(&result),
         OutputFormat::Synthesis => ConsoleFormatter::format_synthesis_only(&result),
         OutputFormat::Json => ConsoleFormatter::format_json(&result),

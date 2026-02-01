@@ -4,6 +4,38 @@
 //! They are deserialized directly and then converted to domain/application types.
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Output format for Quorum results (config file version)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileOutputFormat {
+    /// Full formatted output with all phases
+    Full,
+    /// Only the final synthesis
+    Synthesis,
+    /// JSON output
+    Json,
+}
+
+impl Default for FileOutputFormat {
+    fn default() -> Self {
+        Self::Synthesis
+    }
+}
+
+/// Configuration validation errors
+#[derive(Debug, Error)]
+pub enum ConfigValidationError {
+    #[error("timeout_seconds cannot be 0")]
+    InvalidTimeout,
+
+    #[error("model name cannot be empty")]
+    EmptyModelName,
+
+    #[error("moderator name cannot be empty")]
+    EmptyModeratorName,
+}
 
 /// Raw council configuration from TOML
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -38,8 +70,8 @@ impl Default for FileBehaviorConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileOutputConfig {
-    /// Output format: "full", "synthesis", or "json"
-    pub format: Option<String>,
+    /// Output format
+    pub format: Option<FileOutputFormat>,
     /// Enable colored terminal output
     pub color: bool,
 }
@@ -86,6 +118,32 @@ pub struct FileConfig {
     pub repl: FileReplConfig,
 }
 
+impl FileConfig {
+    /// Validate the configuration
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        // Timeout of 0 seconds doesn't make sense
+        if let Some(0) = self.behavior.timeout_seconds {
+            return Err(ConfigValidationError::InvalidTimeout);
+        }
+
+        // Check for empty model names
+        for model in &self.council.models {
+            if model.trim().is_empty() {
+                return Err(ConfigValidationError::EmptyModelName);
+            }
+        }
+
+        // Check for empty moderator name
+        if let Some(ref moderator) = self.council.moderator {
+            if moderator.trim().is_empty() {
+                return Err(ConfigValidationError::EmptyModeratorName);
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,7 +176,7 @@ history_file = "~/.local/share/quorum/history.txt"
         );
         assert!(!config.behavior.enable_review);
         assert_eq!(config.behavior.timeout_seconds, Some(120));
-        assert_eq!(config.output.format, Some("full".to_string()));
+        assert_eq!(config.output.format, Some(FileOutputFormat::Full));
         assert!(!config.output.color);
         assert!(!config.repl.show_progress);
     }
@@ -147,5 +205,60 @@ models = ["gpt-5.2-codex"]
         assert!(config.behavior.enable_review);
         assert!(config.output.color);
         assert!(config.repl.show_progress);
+    }
+
+    #[test]
+    fn test_validate_valid_config() {
+        let config = FileConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_zero_timeout() {
+        let toml_str = r#"
+[behavior]
+timeout_seconds = 0
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigValidationError::InvalidTimeout)
+        ));
+    }
+
+    #[test]
+    fn test_validate_empty_model_name() {
+        let toml_str = r#"
+[council]
+models = ["gpt-5.2-codex", ""]
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigValidationError::EmptyModelName)
+        ));
+    }
+
+    #[test]
+    fn test_validate_empty_moderator() {
+        let toml_str = r#"
+[council]
+moderator = "  "
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigValidationError::EmptyModeratorName)
+        ));
+    }
+
+    #[test]
+    fn test_output_format_deserialize() {
+        let toml_str = r#"
+[output]
+format = "json"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.output.format, Some(FileOutputFormat::Json));
     }
 }

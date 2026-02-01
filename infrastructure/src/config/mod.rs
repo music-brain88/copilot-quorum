@@ -12,5 +12,8 @@
 mod file_config;
 mod loader;
 
-pub use file_config::{FileConfig, FileCouncilConfig};
+pub use file_config::{
+    ConfigValidationError, FileConfig, FileCouncilConfig, FileOutputConfig, FileOutputFormat,
+    FileReplConfig,
+};
 pub use loader::ConfigLoader;

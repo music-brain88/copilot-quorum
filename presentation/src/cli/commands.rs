@@ -56,9 +56,9 @@ pub struct Cli {
     #[arg(long)]
     pub no_review: bool,
 
-    /// Output format
-    #[arg(short, long, value_enum, default_value = "synthesis")]
-    pub output: OutputFormat,
+    /// Output format (default: synthesis, or from config file)
+    #[arg(short, long, value_enum)]
+    pub output: Option<OutputFormat>,
 
     /// Verbosity level (-v = info, -vv = debug, -vvv = trace)
     #[arg(short, long, action = clap::ArgAction::Count)]

@@ -7,7 +7,10 @@ pub mod config;
 pub mod copilot;
 
 // Re-export commonly used types
-pub use config::{ConfigLoader, FileConfig, FileCouncilConfig};
+pub use config::{
+    ConfigLoader, ConfigValidationError, FileConfig, FileCouncilConfig, FileOutputConfig,
+    FileOutputFormat, FileReplConfig,
+};
 pub use copilot::{
     error::{CopilotError, Result},
     gateway::CopilotLlmGateway,
