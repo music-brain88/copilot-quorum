@@ -320,7 +320,14 @@ impl AgentConfig {
     }
 }
 
-/// State of an agent execution (Entity)
+/// State of an agent execution (Entity).
+///
+/// Tracks the complete state of an autonomous agent run, including:
+/// - Current execution phase
+/// - Gathered project context
+/// - The execution plan and its approval status
+/// - Agent's reasoning history (thoughts)
+/// - Iteration count for loop limits
 #[derive(Debug, Clone)]
 pub struct AgentState {
     /// Unique identifier for this agent run
@@ -344,6 +351,7 @@ pub struct AgentState {
 }
 
 impl AgentState {
+    /// Creates a new agent state starting in the ContextGathering phase.
     pub fn new(id: impl Into<AgentId>, request: impl Into<String>, config: AgentConfig) -> Self {
         Self {
             id: id.into(),
@@ -358,15 +366,18 @@ impl AgentState {
         }
     }
 
+    /// Records a reasoning step in the agent's thought history.
     pub fn add_thought(&mut self, thought: Thought) {
         self.thoughts.push(thought);
     }
 
+    /// Sets the execution plan and transitions to PlanReview phase.
     pub fn set_plan(&mut self, plan: Plan) {
         self.plan = Some(plan);
         self.phase = AgentPhase::PlanReview;
     }
 
+    /// Marks the plan as approved and transitions to Executing phase.
     pub fn approve_plan(&mut self) {
         if let Some(plan) = &mut self.plan {
             plan.approve();
@@ -374,6 +385,7 @@ impl AgentState {
         }
     }
 
+    /// Marks the plan as rejected and returns to Planning phase for revision.
     pub fn reject_plan(&mut self, feedback: impl Into<String>) {
         if let Some(plan) = &mut self.plan {
             plan.reject(feedback);
@@ -382,24 +394,31 @@ impl AgentState {
         }
     }
 
+    /// Manually sets the execution phase.
     pub fn set_phase(&mut self, phase: AgentPhase) {
         self.phase = phase;
     }
 
+    /// Marks the agent as failed with an error message.
     pub fn fail(&mut self, error: impl Into<String>) {
         self.error = Some(error.into());
         self.phase = AgentPhase::Failed;
     }
 
+    /// Marks the agent as successfully completed.
     pub fn complete(&mut self) {
         self.phase = AgentPhase::Completed;
     }
 
+    /// Increments iteration count and returns `true` if within limits.
+    ///
+    /// Used to prevent infinite loops during planning and execution.
     pub fn increment_iteration(&mut self) -> bool {
         self.iteration_count += 1;
         self.iteration_count <= self.config.max_iterations
     }
 
+    /// Returns `true` if the agent has finished (completed or failed).
     pub fn is_finished(&self) -> bool {
         matches!(self.phase, AgentPhase::Completed | AgentPhase::Failed)
     }

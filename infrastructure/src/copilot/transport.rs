@@ -1,4 +1,7 @@
-//! Transport layer for Copilot CLI communication
+//! Transport layer for Copilot CLI communication.
+//!
+//! Handles the low-level JSON-RPC communication with the Copilot CLI process,
+//! including process spawning, TCP connection, and message serialization.
 
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
@@ -11,7 +14,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
-/// Transport for communicating with Copilot CLI via TCP
+/// Transport for communicating with Copilot CLI via TCP.
+///
+/// Manages the Copilot CLI child process and TCP socket connection,
+/// providing methods for sending JSON-RPC requests and receiving responses.
 pub struct StdioTransport {
     #[allow(dead_code)]
     child: Child,

@@ -1,10 +1,21 @@
-//! JSON-RPC protocol types for Copilot CLI communication
+//! JSON-RPC protocol types for Copilot CLI communication.
+//!
+//! This module defines the message structures used in the JSON-RPC 2.0 protocol
+//! for communicating with the Copilot CLI process.
+//!
+//! # Protocol Overview
+//!
+//! - **Requests**: Client → Copilot CLI (e.g., `session.create`, `session.send`)
+//! - **Responses**: Copilot CLI → Client (result or error)
+//! - **Notifications**: Copilot CLI → Client (e.g., `assistant.message`, `session.idle`)
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Global request ID counter for JSON-RPC requests.
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Generates a unique request ID.
 fn next_id() -> u64 {
     REQUEST_ID.fetch_add(1, Ordering::SeqCst)
 }
@@ -20,6 +31,7 @@ pub struct JsonRpcRequest {
 }
 
 impl JsonRpcRequest {
+    /// Creates a new JSON-RPC request with an auto-generated ID.
     pub fn new(method: impl Into<String>, params: Option<serde_json::Value>) -> Self {
         Self {
             jsonrpc: "2.0",
@@ -64,6 +76,7 @@ pub struct Message {
 }
 
 impl Message {
+    /// Creates a system message (instructions for the model).
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: Role::System,
@@ -71,6 +84,7 @@ impl Message {
         }
     }
 
+    /// Creates a user message (human input).
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: Role::User,
@@ -78,6 +92,7 @@ impl Message {
         }
     }
 
+    /// Creates an assistant message (model response).
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
