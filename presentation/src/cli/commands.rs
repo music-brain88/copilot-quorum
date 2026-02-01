@@ -31,7 +31,11 @@ impl From<CliOutputFormat> for OutputFormat {
 /// CLI arguments for copilot-quorum
 #[derive(Parser, Debug)]
 #[command(name = "copilot-quorum")]
-#[command(author, version, about = "LLM Council - Multiple LLMs discuss and reach consensus")]
+#[command(
+    author,
+    version,
+    about = "LLM Council - Multiple LLMs discuss and reach consensus"
+)]
 #[command(long_about = r#"
 Copilot Quorum runs a council of LLMs to discuss a question and reach consensus.
 

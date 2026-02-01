@@ -123,10 +123,7 @@ Format your response with clear markdown headers."#,
     }
 
     /// User prompt for synthesis when there are no reviews
-    pub fn synthesis_prompt_no_reviews(
-        question: &str,
-        responses: &[(String, String)],
-    ) -> String {
+    pub fn synthesis_prompt_no_reviews(question: &str, responses: &[(String, String)]) -> String {
         Self::synthesis_prompt(question, responses, &[])
     }
 }
@@ -146,8 +143,14 @@ mod tests {
     fn test_review_prompt_format() {
         let question = "What is Rust?";
         let responses = vec![
-            ("Response A".to_string(), "Rust is a systems programming language.".to_string()),
-            ("Response B".to_string(), "Rust focuses on safety and performance.".to_string()),
+            (
+                "Response A".to_string(),
+                "Rust is a systems programming language.".to_string(),
+            ),
+            (
+                "Response B".to_string(),
+                "Rust focuses on safety and performance.".to_string(),
+            ),
         ];
         let prompt = PromptTemplate::review_prompt(question, &responses);
         assert!(prompt.contains("Response A"));
@@ -158,12 +161,11 @@ mod tests {
     #[test]
     fn test_synthesis_prompt_format() {
         let question = "What is Rust?";
-        let responses = vec![
-            ("GPT-4".to_string(), "Rust is a systems language.".to_string()),
-        ];
-        let reviews = vec![
-            ("Claude".to_string(), "Good response, accurate.".to_string()),
-        ];
+        let responses = vec![(
+            "GPT-4".to_string(),
+            "Rust is a systems language.".to_string(),
+        )];
+        let reviews = vec![("Claude".to_string(), "Good response, accurate.".to_string())];
         let prompt = PromptTemplate::synthesis_prompt(question, &responses, &reviews);
         assert!(prompt.contains("GPT-4"));
         assert!(prompt.contains("Claude"));
@@ -173,9 +175,10 @@ mod tests {
     #[test]
     fn test_synthesis_without_reviews() {
         let question = "What is Rust?";
-        let responses = vec![
-            ("GPT-4".to_string(), "Rust is a systems language.".to_string()),
-        ];
+        let responses = vec![(
+            "GPT-4".to_string(),
+            "Rust is a systems language.".to_string(),
+        )];
         let prompt = PromptTemplate::synthesis_prompt_no_reviews(question, &responses);
         assert!(prompt.contains("GPT-4"));
         assert!(!prompt.contains("Peer reviews:"));
