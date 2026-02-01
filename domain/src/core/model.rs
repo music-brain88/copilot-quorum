@@ -60,7 +60,10 @@ impl Model {
     pub fn is_claude(&self) -> bool {
         matches!(
             self,
-            Model::ClaudeSonnet45 | Model::ClaudeHaiku45 | Model::ClaudeOpus45 | Model::ClaudeSonnet4
+            Model::ClaudeSonnet45
+                | Model::ClaudeHaiku45
+                | Model::ClaudeOpus45
+                | Model::ClaudeSonnet4
         )
     }
 

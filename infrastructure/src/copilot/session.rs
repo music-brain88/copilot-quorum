@@ -35,10 +35,7 @@ impl CopilotSession {
             system_prompt,
         };
 
-        let request = JsonRpcRequest::new(
-            "session.create",
-            Some(serde_json::to_value(&params)?),
-        );
+        let request = JsonRpcRequest::new("session.create", Some(serde_json::to_value(&params)?));
 
         // Send the request and wait for session.start event
         transport.send_request(&request).await?;

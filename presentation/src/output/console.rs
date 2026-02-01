@@ -131,12 +131,7 @@ impl ConsoleFormatter {
 
     fn header(title: &str) -> String {
         let line = "=".repeat(60);
-        format!(
-            "{}\n{:^60}\n{}",
-            line.cyan(),
-            title.bold(),
-            line.cyan()
-        )
+        format!("{}\n{:^60}\n{}", line.cyan(), title.bold(), line.cyan())
     }
 
     fn section_header(title: &str) -> String {

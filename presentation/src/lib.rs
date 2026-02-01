@@ -5,11 +5,16 @@
 
 pub mod chat;
 pub mod cli;
+pub mod config;
 pub mod output;
 pub mod progress;
 
 // Re-export commonly used types
 pub use chat::ChatRepl;
-pub use cli::commands::{Cli, OutputFormat};
+pub use cli::commands::{Cli, CliOutputFormat};
+pub use config::{OutputConfig, ReplConfig};
 pub use output::console::ConsoleFormatter;
 pub use progress::reporter::{ProgressReporter, SimpleProgress};
+
+// Re-export OutputFormat from domain layer
+pub use quorum_domain::OutputFormat;
