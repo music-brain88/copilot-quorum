@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "LLM Council - Multiple LLMs discuss and reach consensus"
+description = "AI Agent with Quorum-based safety reviews"
 
 [[bin]]
 name = "copilot-quorum"
