@@ -1,21 +1,40 @@
-//! Agent domain value objects
+//! Agent domain value objects - immutable types for the autonomous Agent system.
+//!
+//! This module contains value objects used throughout the Agent execution flow:
+//!
+//! # Identifiers
+//! - [`AgentId`] - Unique identifier for an agent run
+//! - [`TaskId`] - Unique identifier for a task within a plan
+//!
+//! # Execution Data
+//! - [`TaskResult`] - Outcome of a task execution (success/failure)
+//! - [`AgentContext`] - Gathered information about the project
+//!
+//! # Reasoning
+//! - [`Thought`] - A recorded reasoning step from the agent
+//! - [`ThoughtType`] - Categories of agent thoughts (analysis, planning, etc.)
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Unique identifier for an agent run
+/// Unique identifier for an agent run.
+///
+/// Each agent execution session has a unique ID for tracking and correlation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentId(String);
 
 impl AgentId {
+    /// Creates an AgentId from an existing string.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    /// Generates a new unique AgentId using a UUID-like format.
     pub fn generate() -> Self {
         Self(uuid_v4())
     }
 
+    /// Returns the ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -33,15 +52,19 @@ impl std::fmt::Display for AgentId {
     }
 }
 
-/// Unique identifier for a task within a plan
+/// Unique identifier for a task within a plan.
+///
+/// Tasks are numbered sequentially within a plan (e.g., "1", "2", "3").
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(String);
 
 impl TaskId {
+    /// Creates a TaskId from a string.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    /// Returns the ID as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -73,6 +96,7 @@ pub struct TaskResult {
 }
 
 impl TaskResult {
+    /// Creates a successful task result with the given output.
     pub fn success(output: impl Into<String>) -> Self {
         Self {
             success: true,
@@ -82,6 +106,7 @@ impl TaskResult {
         }
     }
 
+    /// Creates a failed task result with an error message.
     pub fn failure(error: impl Into<String>) -> Self {
         Self {
             success: false,
@@ -91,6 +116,9 @@ impl TaskResult {
         }
     }
 
+    /// Creates a TaskResult from a tool execution result.
+    ///
+    /// Extracts success status, output, and error from the tool result.
     pub fn from_tool_result(tool_result: crate::tool::value_objects::ToolResult) -> Self {
         Self {
             success: tool_result.success,
@@ -117,33 +145,39 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
+    /// Creates an empty context.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the project root directory path.
     pub fn with_project_root(mut self, root: impl Into<String>) -> Self {
         self.project_root = Some(root.into());
         self
     }
 
+    /// Sets the detected project type (e.g., "rust", "python", "nodejs").
     pub fn with_project_type(mut self, project_type: impl Into<String>) -> Self {
         self.project_type = Some(project_type.into());
         self
     }
 
+    /// Adds an important file discovered during context gathering.
     pub fn add_key_file(&mut self, file: impl Into<String>) {
         self.key_files.push(file.into());
     }
 
+    /// Sets the project structure summary.
     pub fn set_structure_summary(&mut self, summary: impl Into<String>) {
         self.structure_summary = Some(summary.into());
     }
 
+    /// Adds arbitrary key-value context information.
     pub fn add_context(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.additional.insert(key.into(), value.into());
     }
 
-    /// Format context as a string for use in prompts
+    /// Formats all gathered context as a string for use in LLM prompts.
     pub fn to_prompt_context(&self) -> String {
         let mut parts = Vec::new();
 
@@ -200,6 +234,7 @@ pub enum ThoughtType {
 }
 
 impl ThoughtType {
+    /// Returns the type as a lowercase string identifier.
     pub fn as_str(&self) -> &str {
         match self {
             ThoughtType::Analysis => "analysis",
@@ -211,6 +246,7 @@ impl ThoughtType {
         }
     }
 
+    /// Returns an emoji representing this thought type for display.
     pub fn emoji(&self) -> &str {
         match self {
             ThoughtType::Analysis => "🔍",
@@ -224,6 +260,7 @@ impl ThoughtType {
 }
 
 impl Thought {
+    /// Creates a new thought with the specified type and content.
     pub fn new(thought_type: ThoughtType, content: impl Into<String>) -> Self {
         Self {
             thought_type,
@@ -232,26 +269,32 @@ impl Thought {
         }
     }
 
+    /// Creates an analysis thought (initial examination of the request).
     pub fn analysis(content: impl Into<String>) -> Self {
         Self::new(ThoughtType::Analysis, content)
     }
 
+    /// Creates a planning thought (strategizing approach).
     pub fn planning(content: impl Into<String>) -> Self {
         Self::new(ThoughtType::Planning, content)
     }
 
+    /// Creates a reasoning thought (explaining a decision).
     pub fn reasoning(content: impl Into<String>) -> Self {
         Self::new(ThoughtType::Reasoning, content)
     }
 
+    /// Creates an observation thought (noting action results).
     pub fn observation(content: impl Into<String>) -> Self {
         Self::new(ThoughtType::Observation, content)
     }
 
+    /// Creates a reflection thought (considering progress or issues).
     pub fn reflection(content: impl Into<String>) -> Self {
         Self::new(ThoughtType::Reflection, content)
     }
 
+    /// Creates a conclusion thought (final summary).
     pub fn conclusion(content: impl Into<String>) -> Self {
         Self::new(ThoughtType::Conclusion, content)
     }
