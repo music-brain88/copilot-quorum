@@ -1,12 +1,12 @@
 //! Run Agent use case
 //!
-//! Orchestrates the agent execution flow:
+//! Orchestrates the agent execution flow with quorum integration:
 //! 1. Context Gathering - Understand the project
-//! 2. Planning - Create a task plan
-//! 3. Executing - Execute tasks using tools
-//!
-//! Note: This is the basic version without quorum integration.
-//! Quorum review will be added in Phase 3.
+//! 2. Planning - Create a task plan (single model)
+//! 3. Plan Review - Quorum reviews the plan (REQUIRED)
+//! 4. Executing - Execute tasks using tools
+//!    - Action Review - Quorum reviews high-risk operations
+//! 5. Final Review - Quorum reviews results (optional)
 
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
@@ -16,6 +16,7 @@ use quorum_domain::{
 };
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 /// Errors that can occur during Agent execution
@@ -30,11 +31,20 @@ pub enum RunAgentError {
     #[error("Planning failed: {0}")]
     PlanningFailed(String),
 
+    #[error("Plan rejected by quorum: {0}")]
+    PlanRejected(String),
+
+    #[error("Action rejected by quorum: {0}")]
+    ActionRejected(String),
+
     #[error("Task execution failed: {0}")]
     TaskExecutionFailed(String),
 
     #[error("Max iterations exceeded")]
     MaxIterationsExceeded,
+
+    #[error("All quorum models failed")]
+    QuorumFailed,
 
     #[error("Gateway error: {0}")]
     GatewayError(#[from] GatewayError),
@@ -84,12 +94,59 @@ pub trait AgentProgressNotifier: Send + Sync {
     fn on_task_complete(&self, _task: &Task, _success: bool) {}
     fn on_tool_call(&self, _tool_name: &str, _args: &str) {}
     fn on_tool_result(&self, _tool_name: &str, _success: bool) {}
+
+    // Quorum-related callbacks
+    fn on_quorum_start(&self, _phase: &str, _model_count: usize) {}
+    fn on_quorum_model_complete(&self, _model: &Model, _approved: bool) {}
+    fn on_quorum_complete(&self, _phase: &str, _approved: bool, _feedback: Option<&str>) {}
 }
 
 /// No-op implementation for when progress isn't needed
 pub struct NoAgentProgress;
 
 impl AgentProgressNotifier for NoAgentProgress {}
+
+/// Result of a quorum review
+#[derive(Debug, Clone)]
+pub struct QuorumReviewResult {
+    /// Whether the quorum approved
+    pub approved: bool,
+    /// Individual model votes (model name, approved, feedback)
+    pub votes: Vec<(String, bool, String)>,
+    /// Aggregated feedback
+    pub feedback: Option<String>,
+}
+
+impl QuorumReviewResult {
+    /// Create from individual votes, requiring majority approval
+    pub fn from_votes(votes: Vec<(String, bool, String)>) -> Self {
+        let approve_count = votes.iter().filter(|(_, approved, _)| *approved).count();
+        let total = votes.len();
+        let approved = approve_count > total / 2; // Majority wins
+
+        // Aggregate feedback from rejections
+        let feedback = if !approved {
+            let rejections: Vec<_> = votes
+                .iter()
+                .filter(|(_, approved, _)| !*approved)
+                .map(|(model, _, feedback)| format!("{}: {}", model, feedback))
+                .collect();
+            if rejections.is_empty() {
+                None
+            } else {
+                Some(rejections.join("\n\n"))
+            }
+        } else {
+            None
+        };
+
+        Self {
+            approved,
+            votes,
+            feedback,
+        }
+    }
+}
 
 /// Use case for running an autonomous agent
 pub struct RunAgentUseCase<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> {
@@ -179,36 +236,73 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
 
         state.set_plan(plan);
 
-        // Skip plan review for now (Phase 3 will add quorum integration)
-        // For basic version, auto-approve the plan
-        state.approve_plan();
+        // Phase 3: Plan Review (Quorum) - REQUIRED
+        progress.on_phase_change(&AgentPhase::PlanReview);
+        state.set_phase(AgentPhase::PlanReview);
 
-        // Phase 3: Task Execution
+        let plan_review = self
+            .review_plan(&input, &state, progress)
+            .await?;
+
+        if plan_review.approved {
+            state.approve_plan();
+            state.add_thought(Thought::observation("Plan approved by quorum"));
+        } else {
+            let feedback = plan_review.feedback.unwrap_or_else(|| "No specific feedback".to_string());
+            state.reject_plan(&feedback);
+            state.fail(format!("Plan rejected: {}", feedback));
+            return Ok(RunAgentOutput {
+                summary: format!("Plan rejected by quorum: {}", feedback),
+                success: false,
+                state,
+            });
+        }
+
+        // Phase 4: Task Execution
         progress.on_phase_change(&AgentPhase::Executing);
         state.set_phase(AgentPhase::Executing);
 
         let execution_result = self
-            .execute_tasks(session.as_ref(), &mut state, progress)
+            .execute_tasks(session.as_ref(), &input, &mut state, progress)
             .await;
 
-        match execution_result {
-            Ok(summary) => {
-                state.complete();
-                Ok(RunAgentOutput {
-                    summary,
-                    success: true,
-                    state,
-                })
-            }
+        let summary = match execution_result {
+            Ok(summary) => summary,
             Err(e) => {
                 state.fail(e.to_string());
-                Ok(RunAgentOutput {
+                return Ok(RunAgentOutput {
                     summary: format!("Agent failed during execution: {}", e),
                     success: false,
                     state,
-                })
+                });
+            }
+        };
+
+        // Phase 5: Final Review (optional)
+        if input.config.require_final_review {
+            progress.on_phase_change(&AgentPhase::FinalReview);
+            state.set_phase(AgentPhase::FinalReview);
+
+            let final_review = self
+                .final_review(&input, &state, &summary, progress)
+                .await?;
+
+            if !final_review.approved {
+                state.add_thought(Thought::observation(format!(
+                    "Final review raised concerns: {}",
+                    final_review.feedback.as_deref().unwrap_or("No details")
+                )));
+            } else {
+                state.add_thought(Thought::conclusion("Final review passed"));
             }
         }
+
+        state.complete();
+        Ok(RunAgentOutput {
+            summary,
+            success: true,
+            state,
+        })
     }
 
     /// Gather context about the project
@@ -302,6 +396,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
     async fn execute_tasks(
         &self,
         session: &dyn LlmSession,
+        input: &RunAgentInput,
         state: &mut AgentState,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<String, RunAgentError> {
@@ -336,7 +431,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
 
             // Execute the task
             let task_result = self
-                .execute_single_task(session, state, &task_id, &previous_results, progress)
+                .execute_single_task(session, input, state, &task_id, &previous_results, progress)
                 .await;
 
             // Update task status
@@ -379,6 +474,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
     async fn execute_single_task(
         &self,
         session: &dyn LlmSession,
+        input: &RunAgentInput,
         state: &AgentState,
         task_id: &TaskId,
         previous_results: &str,
@@ -398,6 +494,26 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
             let mut tool_call = ToolCall::new(tool_name);
             for (key, value) in &task.tool_args {
                 tool_call = tool_call.with_arg(key, value.clone());
+            }
+
+            // Check if this is a high-risk tool that needs review
+            let needs_review = task.requires_review || self.is_high_risk_tool(tool_name);
+
+            if needs_review && !input.config.quorum_models.is_empty() {
+                let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
+                    "tool": tool_name,
+                    "args": task.tool_args,
+                })).unwrap_or_default();
+
+                let review = self
+                    .review_action(input, state, task, &tool_call_json, progress)
+                    .await?;
+
+                if !review.approved {
+                    return Err(RunAgentError::ActionRejected(
+                        review.feedback.unwrap_or_else(|| "Action rejected by quorum".to_string())
+                    ));
+                }
             }
 
             progress.on_tool_call(tool_name, &format!("{:?}", task.tool_args));
@@ -438,6 +554,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         let mut outputs = Vec::new();
 
         for call in tool_calls {
+            // Check if this is a high-risk tool that needs review
+            let needs_review = self.is_high_risk_tool(&call.tool_name);
+
+            if needs_review && !input.config.quorum_models.is_empty() {
+                let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
+                    "tool": call.tool_name,
+                    "args": call.arguments,
+                })).unwrap_or_default();
+
+                let review = self
+                    .review_action(input, state, task, &tool_call_json, progress)
+                    .await?;
+
+                if !review.approved {
+                    warn!("Tool call {} rejected by quorum", call.tool_name);
+                    continue; // Skip this tool call
+                }
+            }
+
             progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
 
             let result = self.tool_executor.execute(&call).await;
@@ -460,6 +595,283 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
 
         Ok(outputs.join("\n---\n"))
     }
+
+    /// Check if a tool is high-risk (requires quorum review)
+    fn is_high_risk_tool(&self, tool_name: &str) -> bool {
+        if let Some(definition) = self.tool_executor.get_tool(tool_name) {
+            definition.is_high_risk()
+        } else {
+            // Unknown tools are considered high-risk by default
+            true
+        }
+    }
+
+    // ==================== Quorum Review Methods ====================
+
+    /// Review the plan using quorum (multiple models vote)
+    async fn review_plan(
+        &self,
+        input: &RunAgentInput,
+        state: &AgentState,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<QuorumReviewResult, RunAgentError> {
+        let plan = state.plan.as_ref().ok_or_else(|| {
+            RunAgentError::PlanningFailed("No plan to review".to_string())
+        })?;
+
+        let models = &input.config.quorum_models;
+        if models.is_empty() {
+            // No quorum models configured, auto-approve
+            info!("No quorum models configured, auto-approving plan");
+            return Ok(QuorumReviewResult {
+                approved: true,
+                votes: vec![],
+                feedback: None,
+            });
+        }
+
+        info!("Starting plan review with {} models", models.len());
+        progress.on_quorum_start("plan_review", models.len());
+
+        let prompt = AgentPromptTemplate::plan_review(&input.request, plan, &state.context);
+
+        // Query all quorum models in parallel
+        let mut join_set = JoinSet::new();
+
+        for model in models {
+            let gateway = Arc::clone(&self.gateway);
+            let model = model.clone();
+            let prompt = prompt.clone();
+
+            join_set.spawn(async move {
+                let result = Self::query_model_for_review(&gateway, &model, &prompt).await;
+                (model, result)
+            });
+        }
+
+        // Collect votes
+        let mut votes = Vec::new();
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((model, Ok(response))) => {
+                    let (approved, feedback) = parse_review_response(&response);
+                    info!("Model {} voted: {}", model, if approved { "APPROVE" } else { "REJECT" });
+                    progress.on_quorum_model_complete(&model, approved);
+                    votes.push((model.to_string(), approved, feedback));
+                }
+                Ok((model, Err(e))) => {
+                    warn!("Model {} failed to review: {}", model, e);
+                    progress.on_quorum_model_complete(&model, false);
+                    // Treat failure as abstain (don't count)
+                }
+                Err(e) => {
+                    warn!("Task join error: {}", e);
+                }
+            }
+        }
+
+        if votes.is_empty() {
+            return Err(RunAgentError::QuorumFailed);
+        }
+
+        let result = QuorumReviewResult::from_votes(votes);
+        progress.on_quorum_complete("plan_review", result.approved, result.feedback.as_deref());
+
+        Ok(result)
+    }
+
+    /// Review a high-risk action using quorum
+    async fn review_action(
+        &self,
+        input: &RunAgentInput,
+        state: &AgentState,
+        task: &Task,
+        tool_call_json: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<QuorumReviewResult, RunAgentError> {
+        let models = &input.config.quorum_models;
+        if models.is_empty() {
+            // No quorum models configured, auto-approve
+            return Ok(QuorumReviewResult {
+                approved: true,
+                votes: vec![],
+                feedback: None,
+            });
+        }
+
+        info!("Starting action review for task: {}", task.description);
+        progress.on_quorum_start("action_review", models.len());
+
+        let prompt = AgentPromptTemplate::action_review(task, tool_call_json, &state.context);
+
+        // Query all quorum models in parallel
+        let mut join_set = JoinSet::new();
+
+        for model in models {
+            let gateway = Arc::clone(&self.gateway);
+            let model = model.clone();
+            let prompt = prompt.clone();
+
+            join_set.spawn(async move {
+                let result = Self::query_model_for_review(&gateway, &model, &prompt).await;
+                (model, result)
+            });
+        }
+
+        // Collect votes
+        let mut votes = Vec::new();
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((model, Ok(response))) => {
+                    let (approved, feedback) = parse_review_response(&response);
+                    info!("Model {} voted: {}", model, if approved { "APPROVE" } else { "REJECT" });
+                    progress.on_quorum_model_complete(&model, approved);
+                    votes.push((model.to_string(), approved, feedback));
+                }
+                Ok((model, Err(e))) => {
+                    warn!("Model {} failed to review: {}", model, e);
+                    progress.on_quorum_model_complete(&model, false);
+                }
+                Err(e) => {
+                    warn!("Task join error: {}", e);
+                }
+            }
+        }
+
+        if votes.is_empty() {
+            return Err(RunAgentError::QuorumFailed);
+        }
+
+        let result = QuorumReviewResult::from_votes(votes);
+        progress.on_quorum_complete("action_review", result.approved, result.feedback.as_deref());
+
+        Ok(result)
+    }
+
+    /// Final review of agent results using quorum (optional)
+    async fn final_review(
+        &self,
+        input: &RunAgentInput,
+        state: &AgentState,
+        results_summary: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<QuorumReviewResult, RunAgentError> {
+        let plan = state.plan.as_ref().ok_or_else(|| {
+            RunAgentError::TaskExecutionFailed("No plan for final review".to_string())
+        })?;
+
+        let models = &input.config.quorum_models;
+        if models.is_empty() {
+            return Ok(QuorumReviewResult {
+                approved: true,
+                votes: vec![],
+                feedback: None,
+            });
+        }
+
+        info!("Starting final review with {} models", models.len());
+        progress.on_quorum_start("final_review", models.len());
+
+        let prompt = AgentPromptTemplate::final_review(&input.request, plan, results_summary);
+
+        // Query all quorum models in parallel
+        let mut join_set = JoinSet::new();
+
+        for model in models {
+            let gateway = Arc::clone(&self.gateway);
+            let model = model.clone();
+            let prompt = prompt.clone();
+
+            join_set.spawn(async move {
+                let result = Self::query_model_for_review(&gateway, &model, &prompt).await;
+                (model, result)
+            });
+        }
+
+        // Collect results
+        let mut votes = Vec::new();
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((model, Ok(response))) => {
+                    // For final review, we look for SUCCESS/PARTIAL/FAILURE
+                    let (approved, feedback) = parse_final_review_response(&response);
+                    info!("Model {} assessment: {}", model, if approved { "SUCCESS" } else { "ISSUES" });
+                    progress.on_quorum_model_complete(&model, approved);
+                    votes.push((model.to_string(), approved, feedback));
+                }
+                Ok((model, Err(e))) => {
+                    warn!("Model {} failed to review: {}", model, e);
+                    progress.on_quorum_model_complete(&model, false);
+                }
+                Err(e) => {
+                    warn!("Task join error: {}", e);
+                }
+            }
+        }
+
+        if votes.is_empty() {
+            return Err(RunAgentError::QuorumFailed);
+        }
+
+        let result = QuorumReviewResult::from_votes(votes);
+        progress.on_quorum_complete("final_review", result.approved, result.feedback.as_deref());
+
+        Ok(result)
+    }
+
+    /// Query a single model for review
+    async fn query_model_for_review(
+        gateway: &G,
+        model: &Model,
+        prompt: &str,
+    ) -> Result<String, GatewayError> {
+        let system_prompt = "You are a code reviewer evaluating plans and actions. \
+            Provide your assessment with a clear APPROVE or REJECT/REVISE recommendation.";
+
+        let session = gateway
+            .create_session_with_system_prompt(model, system_prompt)
+            .await?;
+
+        session.send(prompt).await
+    }
+}
+
+/// Parse a review response to extract approval status and feedback
+fn parse_review_response(response: &str) -> (bool, String) {
+    let response_upper = response.to_uppercase();
+
+    // Check for explicit approval/rejection keywords
+    let approved = response_upper.contains("APPROVE")
+        && !response_upper.contains("NOT APPROVE")
+        && !response_upper.contains("DON'T APPROVE")
+        && !response_upper.contains("CANNOT APPROVE");
+
+    let rejected = response_upper.contains("REJECT")
+        || response_upper.contains("REVISE")
+        || response_upper.contains("NOT APPROVE")
+        || response_upper.contains("CANNOT APPROVE");
+
+    // If explicitly rejected, return false
+    // If explicitly approved and not rejected, return true
+    // Otherwise, default to false (conservative)
+    let is_approved = approved && !rejected;
+
+    (is_approved, response.to_string())
+}
+
+/// Parse a final review response
+fn parse_final_review_response(response: &str) -> (bool, String) {
+    let response_upper = response.to_uppercase();
+
+    // Look for SUCCESS/PARTIAL/FAILURE
+    let success = response_upper.contains("SUCCESS")
+        && !response_upper.contains("PARTIAL")
+        && !response_upper.contains("FAILURE");
+
+    (success, response.to_string())
 }
 
 /// Parse tool calls from model response
