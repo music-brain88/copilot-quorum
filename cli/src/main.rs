@@ -6,10 +6,10 @@
 use anyhow::{bail, Result};
 use clap::Parser;
 use quorum_application::{BehaviorConfig, RunQuorumInput, RunQuorumUseCase};
-use quorum_domain::Model;
-use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig, FileOutputFormat};
+use quorum_domain::{Model, OutputFormat};
+use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig};
 use quorum_presentation::{
-    ChatRepl, Cli, ConsoleFormatter, OutputConfig, OutputFormat, ProgressReporter, ReplConfig,
+    ChatRepl, Cli, ConsoleFormatter, OutputConfig, ProgressReporter, ReplConfig,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -22,14 +22,12 @@ fn build_configs(cli: &Cli, file: &FileConfig) -> (BehaviorConfig, OutputConfig,
     let behavior = BehaviorConfig::from_timeout_seconds(file.behavior.timeout_seconds);
 
     // Presentation layer configs
+    // CLI uses CliOutputFormat (for clap), convert to domain OutputFormat
     let output_format = cli
         .output
-        .unwrap_or_else(|| {
-            file.output
-                .format
-                .map(convert_output_format)
-                .unwrap_or(OutputFormat::Synthesis)
-        });
+        .map(OutputFormat::from)
+        .or(file.output.format)
+        .unwrap_or_default();
 
     let output = OutputConfig::new(output_format, file.output.color);
 
@@ -39,15 +37,6 @@ fn build_configs(cli: &Cli, file: &FileConfig) -> (BehaviorConfig, OutputConfig,
     );
 
     (behavior, output, repl)
-}
-
-/// Convert infrastructure OutputFormat to presentation OutputFormat
-fn convert_output_format(format: FileOutputFormat) -> OutputFormat {
-    match format {
-        FileOutputFormat::Full => OutputFormat::Full,
-        FileOutputFormat::Synthesis => OutputFormat::Synthesis,
-        FileOutputFormat::Json => OutputFormat::Json,
-    }
 }
 
 #[tokio::main]

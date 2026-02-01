@@ -1,17 +1,31 @@
 //! CLI command definitions
 
 use clap::{Parser, ValueEnum};
+use quorum_domain::OutputFormat;
 use std::path::PathBuf;
 
-/// Output format for Quorum results
+/// CLI-specific output format (newtype for clap ValueEnum)
+///
+/// This wrapper exists because Rust's orphan rules prevent implementing
+/// an external trait (ValueEnum) for an external type (domain::OutputFormat).
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum OutputFormat {
+pub enum CliOutputFormat {
     /// Full formatted output with all phases
     Full,
     /// Only the final synthesis
     Synthesis,
     /// JSON output
     Json,
+}
+
+impl From<CliOutputFormat> for OutputFormat {
+    fn from(format: CliOutputFormat) -> Self {
+        match format {
+            CliOutputFormat::Full => OutputFormat::Full,
+            CliOutputFormat::Synthesis => OutputFormat::Synthesis,
+            CliOutputFormat::Json => OutputFormat::Json,
+        }
+    }
 }
 
 /// CLI arguments for copilot-quorum
@@ -58,7 +72,7 @@ pub struct Cli {
 
     /// Output format (default: synthesis, or from config file)
     #[arg(short, long, value_enum)]
-    pub output: Option<OutputFormat>,
+    pub output: Option<CliOutputFormat>,
 
     /// Verbosity level (-v = info, -vv = debug, -vvv = trace)
     #[arg(short, long, action = clap::ArgAction::Count)]

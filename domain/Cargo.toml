@@ -16,3 +16,6 @@ thiserror = { workspace = true }
 
 # Async traits
 async-trait = "0.1"
+
+[dev-dependencies]
+serde_json = { workspace = true }

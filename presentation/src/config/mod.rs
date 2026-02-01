@@ -3,7 +3,7 @@
 //! Configuration for output formatting and REPL behavior.
 //! Constructed from primitives in the CLI layer.
 
-use crate::cli::commands::OutputFormat;
+use quorum_domain::OutputFormat;
 
 /// Output configuration for the presentation layer
 #[derive(Debug, Clone)]

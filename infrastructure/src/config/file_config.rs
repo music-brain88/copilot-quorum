@@ -1,28 +1,14 @@
 //! Raw TOML configuration data types
 //!
 //! These structs represent the exact structure of the TOML config file.
-//! They are deserialized directly and then converted to domain/application types.
+//! They are deserialized directly and use domain types where appropriate.
 
+use quorum_domain::OutputFormat;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Output format for Quorum results (config file version)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FileOutputFormat {
-    /// Full formatted output with all phases
-    Full,
-    /// Only the final synthesis
-    Synthesis,
-    /// JSON output
-    Json,
-}
-
-impl Default for FileOutputFormat {
-    fn default() -> Self {
-        Self::Synthesis
-    }
-}
+// Re-export OutputFormat from domain for convenience
+pub use quorum_domain::OutputFormat as FileOutputFormat;
 
 /// Configuration validation errors
 #[derive(Debug, Error)]
@@ -70,8 +56,8 @@ impl Default for FileBehaviorConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileOutputConfig {
-    /// Output format
-    pub format: Option<FileOutputFormat>,
+    /// Output format (uses domain type)
+    pub format: Option<OutputFormat>,
     /// Enable colored terminal output
     pub color: bool,
 }
@@ -176,7 +162,7 @@ history_file = "~/.local/share/quorum/history.txt"
         );
         assert!(!config.behavior.enable_review);
         assert_eq!(config.behavior.timeout_seconds, Some(120));
-        assert_eq!(config.output.format, Some(FileOutputFormat::Full));
+        assert_eq!(config.output.format, Some(OutputFormat::Full));
         assert!(!config.output.color);
         assert!(!config.repl.show_progress);
     }
@@ -259,6 +245,6 @@ moderator = "  "
 format = "json"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.output.format, Some(FileOutputFormat::Json));
+        assert_eq!(config.output.format, Some(OutputFormat::Json));
     }
 }

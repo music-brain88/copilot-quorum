@@ -3,12 +3,14 @@
 //! This crate contains the core business logic, entities, and value objects.
 //! It has no dependencies on infrastructure or presentation concerns.
 
+pub mod config;
 pub mod core;
 pub mod orchestration;
 pub mod prompt;
 pub mod session;
 
 // Re-export commonly used types
+pub use config::OutputFormat;
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
     entities::{Phase, QuorumRun},
