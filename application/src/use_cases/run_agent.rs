@@ -614,12 +614,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
 
             // Execute with retry for validation errors
             let result = self
-                .execute_tool_with_retry(
-                    session,
-                    &call,
-                    input.config.max_tool_retries,
-                    progress,
-                )
+                .execute_tool_with_retry(session, &call, input.config.max_tool_retries, progress)
                 .await;
 
             if result.is_success() {
@@ -661,7 +656,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         let mut attempts = 0;
 
         loop {
-            progress.on_tool_call(&current_call.tool_name, &format!("{:?}", current_call.arguments));
+            progress.on_tool_call(
+                &current_call.tool_name,
+                &format!("{:?}", current_call.arguments),
+            );
 
             let result = self.tool_executor.execute(&current_call).await;
 

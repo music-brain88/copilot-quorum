@@ -588,8 +588,11 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert("path".to_string(), serde_json::json!("README.md"));
 
-        let prompt =
-            AgentPromptTemplate::tool_retry("read_file", "Missing required argument: encoding", &args);
+        let prompt = AgentPromptTemplate::tool_retry(
+            "read_file",
+            "Missing required argument: encoding",
+            &args,
+        );
 
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("Missing required argument: encoding"));
