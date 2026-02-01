@@ -10,6 +10,7 @@ description = "Domain layer for copilot-quorum - Core business logic and entitie
 [dependencies]
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -18,4 +19,3 @@ thiserror = { workspace = true }
 async-trait = "0.1"
 
 [dev-dependencies]
-serde_json = { workspace = true }

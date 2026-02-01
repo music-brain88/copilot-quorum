@@ -89,6 +89,13 @@ impl Model {
     }
 }
 
+impl Default for Model {
+    /// Returns the default model (GPT-5.2-Codex)
+    fn default() -> Self {
+        Model::Gpt52Codex
+    }
+}
+
 impl std::fmt::Display for Model {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
@@ -146,5 +153,11 @@ mod tests {
         assert!(Model::Gpt52.is_gpt());
         assert!(Model::Gemini3Pro.is_gemini());
         assert!(!Model::ClaudeSonnet45.is_gpt());
+    }
+
+    #[test]
+    fn test_model_default() {
+        let model = Model::default();
+        assert_eq!(model, Model::Gpt52Codex);
     }
 }

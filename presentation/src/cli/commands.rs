@@ -44,6 +44,13 @@ The process has three phases:
 2. Peer Review: Each model reviews the other responses
 3. Synthesis: A moderator model synthesizes everything into a final conclusion
 
+Agent Mode (--agent):
+  Autonomous task execution with quorum-based safety reviews.
+  The agent will:
+  1. Gather context about your project
+  2. Create a plan (reviewed by quorum)
+  3. Execute tasks (high-risk operations reviewed by quorum)
+
 Configuration files are loaded from (in priority order):
 1. --config <path>     Explicit config file
 2. ./quorum.toml       Project-level config
@@ -53,16 +60,27 @@ Example:
   copilot-quorum "What's the best way to handle errors in Rust?"
   copilot-quorum -m gpt-5.2-codex -m claude-sonnet-4.5 "Compare async/await patterns"
   copilot-quorum --chat -m claude-haiku-4.5
+  copilot-quorum --agent "Fix the bug in login.rs"
+  copilot-quorum --agent --agent-interactive
 "#)]
 pub struct Cli {
-    /// The question to ask the council (not required in chat mode)
+    /// The question to ask the council (not required in chat/agent mode)
     pub question: Option<String>,
 
     /// Start interactive chat mode
     #[arg(short, long)]
     pub chat: bool,
 
+    /// Start agent mode (autonomous task execution)
+    #[arg(short, long)]
+    pub agent: bool,
+
+    /// Start interactive agent REPL
+    #[arg(long)]
+    pub agent_interactive: bool,
+
     /// Models to include in the council (can be specified multiple times)
+    /// In agent mode: first model is primary, rest are quorum reviewers
     #[arg(short, long, value_name = "MODEL")]
     pub model: Vec<String>,
 
@@ -73,6 +91,14 @@ pub struct Cli {
     /// Skip the peer review phase
     #[arg(long)]
     pub no_review: bool,
+
+    /// Enable final review in agent mode
+    #[arg(long)]
+    pub final_review: bool,
+
+    /// Working directory for agent mode
+    #[arg(short, long, value_name = "PATH")]
+    pub working_dir: Option<PathBuf>,
 
     /// Output format (default: synthesis, or from config file)
     #[arg(short, long, value_enum)]
