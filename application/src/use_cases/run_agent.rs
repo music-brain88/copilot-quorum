@@ -208,54 +208,85 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
             }
         }
 
-        // Phase 2: Planning
-        progress.on_phase_change(&AgentPhase::Planning);
-        state.set_phase(AgentPhase::Planning);
+        // Phase 2-3: Planning + Review Loop
+        let mut plan_feedback: Option<String> = None;
 
-        let plan = match self
-            .create_plan(session.as_ref(), &input.request, &state.context, progress)
-            .await
-        {
-            Ok(plan) => {
-                state.add_thought(Thought::planning(format!(
-                    "Created plan with {} tasks: {}",
-                    plan.tasks.len(),
-                    plan.objective
-                )));
-                plan
+        loop {
+            // Phase 2: Planning
+            progress.on_phase_change(&AgentPhase::Planning);
+            state.set_phase(AgentPhase::Planning);
+
+            let plan = match self
+                .create_plan(
+                    session.as_ref(),
+                    &input.request,
+                    &state.context,
+                    plan_feedback.as_deref(),
+                    progress,
+                )
+                .await
+            {
+                Ok(plan) => {
+                    state.add_thought(Thought::planning(format!(
+                        "Created plan with {} tasks: {}",
+                        plan.tasks.len(),
+                        plan.objective
+                    )));
+                    plan
+                }
+                Err(e) => {
+                    state.fail(format!("Planning failed: {}", e));
+                    return Ok(RunAgentOutput {
+                        summary: format!("Agent failed during planning: {}", e),
+                        success: false,
+                        state,
+                    });
+                }
+            };
+
+            state.set_plan(plan);
+
+            // Phase 3: Plan Review (Quorum) - REQUIRED
+            progress.on_phase_change(&AgentPhase::PlanReview);
+            state.set_phase(AgentPhase::PlanReview);
+
+            let plan_review = self.review_plan(&input, &state, progress).await?;
+
+            if plan_review.approved {
+                state.approve_plan();
+                state.add_thought(Thought::observation("Plan approved by quorum"));
+                break; // Exit loop and proceed to Phase 4
             }
-            Err(e) => {
-                state.fail(format!("Planning failed: {}", e));
-                return Ok(RunAgentOutput {
-                    summary: format!("Agent failed during planning: {}", e),
-                    success: false,
-                    state,
-                });
-            }
-        };
 
-        state.set_plan(plan);
-
-        // Phase 3: Plan Review (Quorum) - REQUIRED
-        progress.on_phase_change(&AgentPhase::PlanReview);
-        state.set_phase(AgentPhase::PlanReview);
-
-        let plan_review = self.review_plan(&input, &state, progress).await?;
-
-        if plan_review.approved {
-            state.approve_plan();
-            state.add_thought(Thought::observation("Plan approved by quorum"));
-        } else {
+            // Plan was rejected - check if we can retry
             let feedback = plan_review
                 .feedback
                 .unwrap_or_else(|| "No specific feedback".to_string());
             state.reject_plan(&feedback);
-            state.fail(format!("Plan rejected: {}", feedback));
-            return Ok(RunAgentOutput {
-                summary: format!("Plan rejected by quorum: {}", feedback),
-                success: false,
-                state,
-            });
+
+            // Check iteration limit before retrying
+            if !state.increment_iteration() {
+                state.fail("Max plan retries exceeded");
+                return Ok(RunAgentOutput {
+                    summary: format!(
+                        "Plan rejected after {} attempts. Last feedback: {}",
+                        state.iteration_count, feedback
+                    ),
+                    success: false,
+                    state,
+                });
+            }
+
+            // Store feedback for next iteration and retry
+            plan_feedback = Some(feedback.clone());
+            state.add_thought(Thought::reflection(format!(
+                "Plan rejected, retrying with feedback: {}",
+                truncate(&feedback, 100)
+            )));
+            info!(
+                "Plan rejected (attempt {}), retrying...",
+                state.iteration_count
+            );
         }
 
         // Phase 4: Task Execution
@@ -376,9 +407,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         session: &dyn LlmSession,
         request: &str,
         context: &AgentContext,
+        previous_feedback: Option<&str>,
         _progress: &dyn AgentProgressNotifier,
     ) -> Result<Plan, RunAgentError> {
-        let prompt = AgentPromptTemplate::planning(request, context);
+        let prompt =
+            AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
 
         let response = session
             .send(&prompt)

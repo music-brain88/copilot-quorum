@@ -111,7 +111,34 @@ Output your findings in a structured format."#,
 
     /// Prompt for planning phase
     pub fn planning(request: &str, context: &AgentContext) -> String {
+        Self::planning_with_feedback(request, context, None)
+    }
+
+    /// Prompt for planning phase with optional feedback from previous rejection
+    pub fn planning_with_feedback(
+        request: &str,
+        context: &AgentContext,
+        previous_feedback: Option<&str>,
+    ) -> String {
         let context_info = context.to_prompt_context();
+
+        let feedback_section = previous_feedback
+            .map(|fb| {
+                format!(
+                    r#"
+
+## Previous Plan Feedback
+
+Your previous plan was rejected by the review committee. Please address the following concerns:
+
+{fb}
+
+---
+
+"#
+                )
+            })
+            .unwrap_or_default();
 
         format!(
             r#"## Task
@@ -124,7 +151,7 @@ Create a detailed plan to accomplish the user's request.
 
 ## User Request
 
-{request}
+{request}{feedback_section}
 
 ## Instructions
 
@@ -157,7 +184,8 @@ Format your plan as:
 
 Be thorough but focused. Don't include unnecessary steps."#,
             context_info = context_info,
-            request = request
+            request = request,
+            feedback_section = feedback_section
         )
     }
 
@@ -426,6 +454,31 @@ mod tests {
         assert!(prompt.contains("rust"));
         assert!(prompt.contains("objective"));
         assert!(prompt.contains("tasks"));
+    }
+
+    #[test]
+    fn test_planning_with_feedback_prompt() {
+        let context = AgentContext::new()
+            .with_project_root("/project")
+            .with_project_type("rust");
+
+        // Without feedback - should be same as planning()
+        let prompt_no_feedback =
+            AgentPromptTemplate::planning_with_feedback("Add a feature", &context, None);
+        assert!(prompt_no_feedback.contains("Add a feature"));
+        assert!(!prompt_no_feedback.contains("Previous Plan Feedback"));
+
+        // With feedback - should include feedback section
+        let prompt_with_feedback = AgentPromptTemplate::planning_with_feedback(
+            "Add a feature",
+            &context,
+            Some("The plan is too risky. Please add more validation steps."),
+        );
+        assert!(prompt_with_feedback.contains("Add a feature"));
+        assert!(prompt_with_feedback.contains("Previous Plan Feedback"));
+        assert!(prompt_with_feedback.contains("rejected by the review committee"));
+        assert!(prompt_with_feedback.contains("too risky"));
+        assert!(prompt_with_feedback.contains("validation steps"));
     }
 
     #[test]
