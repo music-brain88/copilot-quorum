@@ -7,12 +7,12 @@
 
 # Council settings - which models participate in discussions
 [council]
-# Models to include in the council (default: gpt-5.2-codex, claude-sonnet-4.5, gemini-3-pro)
-models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro"]
+# Models to include in the council (default: gpt-5.2-codex, claude-sonnet-4.5, gemini-3-pro-preview)
+models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
 
 # Model to use as moderator for final synthesis (optional)
 # If not specified, the first model in the list is used
-moderator = "claude-sonnet-4.5"
+moderator = "claude-opus-4.5"
 
 # Behavior settings - how the council operates
 [behavior]
