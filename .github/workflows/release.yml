@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-release-
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create archive directory
+        run: |
+          mkdir -p archive/copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}
+
+      - name: Copy files to archive
+        run: |
+          cp target/${{ matrix.target }}/release/copilot-quorum archive/copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}/
+          cp LICENSE-MIT archive/copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}/ || true
+          cp LICENSE-APACHE archive/copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}/ || true
+          cp README.md archive/copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}/ || true
+
+      - name: Create tarball
+        run: |
+          cd archive
+          tar -czvf copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}.tar.gz copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: archive/copilot-quorum-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
