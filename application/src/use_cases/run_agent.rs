@@ -1038,12 +1038,18 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
     Some(plan)
 }
 
-/// Truncate a string to a maximum length
-fn truncate(s: &str, max_len: usize) -> &str {
+/// Truncate a string to a maximum length (char-aware for UTF-8)
+fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s
+        s.to_string()
     } else {
-        &s[..max_len]
+        // Find a valid char boundary at or before (max_len - 3)
+        let target = max_len.saturating_sub(3);
+        let mut end = target.min(s.len());
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 
