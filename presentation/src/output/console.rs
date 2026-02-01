@@ -41,9 +41,9 @@ impl ConsoleFormatter {
                 ));
             } else {
                 output.push_str(&format!(
-                    "\n{}\n{}\n",
+                    "\n{}\nError: {}\n",
                     format!("── {} ──", response.model).red().bold(),
-                    format!("Error: {}", response.error.as_deref().unwrap_or("Unknown"))
+                    response.error.as_deref().unwrap_or("Unknown")
                 ));
             }
         }
