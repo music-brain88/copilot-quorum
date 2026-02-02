@@ -298,6 +298,27 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         Ok(())
     }
 
+    /// Send a prompt to LLM with cancellation support
+    async fn send_with_cancellation(
+        &self,
+        session: &dyn LlmSession,
+        prompt: &str,
+    ) -> Result<String, RunAgentError> {
+        if let Some(ref token) = self.cancellation_token {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => {
+                    Err(RunAgentError::Cancelled)
+                }
+                result = session.send(prompt) => {
+                    result.map_err(RunAgentError::GatewayError)
+                }
+            }
+        } else {
+            session.send(prompt).await.map_err(RunAgentError::GatewayError)
+        }
+    }
+
     /// Execute the agent without progress reporting
     pub async fn execute(&self, input: RunAgentInput) -> Result<RunAgentOutput, RunAgentError> {
         self.execute_with_progress(input, &NoAgentProgress).await
@@ -632,10 +653,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Ask the model to gather context using tools
         let prompt = AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
 
-        let response = session
-            .send(&prompt)
-            .await
-            .map_err(|e| RunAgentError::ContextGatheringFailed(e.to_string()))?;
+        let response = match self.send_with_cancellation(session, &prompt).await {
+            Ok(response) => response,
+            Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
+            Err(e) => return Err(RunAgentError::ContextGatheringFailed(e.to_string())),
+        };
 
         // Parse tool calls from response and execute them
         let tool_calls = parse_tool_calls(&response);
@@ -692,10 +714,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let prompt =
             AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
 
-        let response = session
-            .send(&prompt)
-            .await
-            .map_err(|e| RunAgentError::PlanningFailed(e.to_string()))?;
+        let response = match self.send_with_cancellation(session, &prompt).await {
+            Ok(response) => response,
+            Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
+            Err(e) => return Err(RunAgentError::PlanningFailed(e.to_string())),
+        };
 
         // Parse the plan from the response
         parse_plan(&response).ok_or_else(|| {
@@ -907,10 +930,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Otherwise, ask the model to execute the task
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
 
-        let response = session
-            .send(&prompt)
-            .await
-            .map_err(|e| RunAgentError::TaskExecutionFailed(e.to_string()))?;
+        let response = match self.send_with_cancellation(session, &prompt).await {
+            Ok(response) => response,
+            Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
+            Err(e) => return Err(RunAgentError::TaskExecutionFailed(e.to_string())),
+        };
 
         // Parse and execute any tool calls in the response
         let tool_calls = parse_tool_calls(&response);
@@ -1049,8 +1073,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 &current_call.arguments,
             );
 
-            let response = match session.send(&retry_prompt).await {
+            let response = match self.send_with_cancellation(session, &retry_prompt).await {
                 Ok(response) => response,
+                Err(RunAgentError::Cancelled) => {
+                    // Return the previous result if cancelled
+                    return result;
+                }
                 Err(e) => {
                     warn!("Failed to get retry response from LLM: {}", e);
                     return result;
