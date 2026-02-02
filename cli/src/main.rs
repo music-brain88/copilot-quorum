@@ -169,11 +169,8 @@ async fn main() -> Result<()> {
         .with_verbose(cli.verbose > 0)
         .with_cancellation(cancellation_token.clone());
 
-        // Set moderator if explicitly configured
-        if let Some(ref moderator_name) = config.council.moderator {
-            let moderator: Model = moderator_name.parse().unwrap();
-            repl = repl.with_moderator(moderator);
-        }
+        // Set moderator from config
+        repl = repl.with_moderator(config.council.moderator.clone());
 
         if let Some(dir) = working_dir {
             repl = repl.with_working_dir(dir);

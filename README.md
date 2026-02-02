@@ -24,6 +24,17 @@
 
 ## How It Works / 仕組み
 
+### Model Roles / モデルの役割
+
+| Role | Description |
+|------|-------------|
+| **Quorum Models** | 議論に参加するモデル。Phase 1で質問に回答し、Phase 2で相互レビューを行う |
+| **Moderator** | 議長役。Phase 3で全員の回答とレビューを統合して最終結論を出す |
+
+Agent モードでは、Primary Model（エージェントの主モデル）がタスク実行・プラン作成を担当し、危険な操作やプランのレビュー時に Quorum Models が合議 → Moderator がまとめる、という流れになります。
+
+### Phases / フェーズ
+
 ```
 +-- Phase 1: Initial Query --+
 | 全モデルに並列で質問        |

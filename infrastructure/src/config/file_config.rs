@@ -3,7 +3,7 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
-use quorum_domain::{HilMode, OutputFormat};
+use quorum_domain::{HilMode, Model, OutputFormat};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,9 +18,6 @@ pub enum ConfigValidationError {
 
     #[error("model name cannot be empty")]
     EmptyModelName,
-
-    #[error("moderator name cannot be empty")]
-    EmptyModeratorName,
 }
 
 /// Raw council configuration from TOML
@@ -29,8 +26,9 @@ pub enum ConfigValidationError {
 pub struct FileCouncilConfig {
     /// Model names as strings
     pub models: Vec<String>,
-    /// Moderator model name
-    pub moderator: Option<String>,
+    /// Moderator model for synthesis
+    #[serde(default)]
+    pub moderator: Model,
 }
 
 /// Raw behavior configuration from TOML
@@ -169,13 +167,6 @@ impl FileConfig {
             }
         }
 
-        // Check for empty moderator name
-        if let Some(ref moderator) = self.council.moderator
-            && moderator.trim().is_empty()
-        {
-            return Err(ConfigValidationError::EmptyModeratorName);
-        }
-
         Ok(())
     }
 }
@@ -206,10 +197,7 @@ history_file = "~/.local/share/quorum/history.txt"
 
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.council.models.len(), 2);
-        assert_eq!(
-            config.council.moderator,
-            Some("claude-sonnet-4.5".to_string())
-        );
+        assert_eq!(config.council.moderator, Model::ClaudeSonnet45);
         assert!(!config.behavior.enable_review);
         assert_eq!(config.behavior.timeout_seconds, Some(120));
         assert_eq!(config.output.format, Some(OutputFormat::Full));
@@ -226,7 +214,7 @@ models = ["gpt-5.2-codex"]
 
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.council.models.len(), 1);
-        assert!(config.council.moderator.is_none());
+        assert_eq!(config.council.moderator, Model::default());
         // Defaults should apply
         assert!(config.behavior.enable_review);
         assert!(config.output.color);
@@ -237,7 +225,7 @@ models = ["gpt-5.2-codex"]
     fn test_default_config() {
         let config = FileConfig::default();
         assert!(config.council.models.is_empty());
-        assert!(config.council.moderator.is_none());
+        assert_eq!(config.council.moderator, Model::default());
         assert!(config.behavior.enable_review);
         assert!(config.output.color);
         assert!(config.repl.show_progress);
@@ -272,19 +260,6 @@ models = ["gpt-5.2-codex", ""]
         assert!(matches!(
             config.validate(),
             Err(ConfigValidationError::EmptyModelName)
-        ));
-    }
-
-    #[test]
-    fn test_validate_empty_moderator() {
-        let toml_str = r#"
-[council]
-moderator = "  "
-"#;
-        let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigValidationError::EmptyModeratorName)
         ));
     }
 
