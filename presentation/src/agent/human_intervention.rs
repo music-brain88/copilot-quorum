@@ -227,4 +227,3 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
         }
     }
 }
-
