@@ -161,11 +161,10 @@ impl ProjectContext {
             }
 
             // Set project type
-            if let Some(pt) = file.project_type() {
-                if ctx.project_type.is_none() {
+            if let Some(pt) = file.project_type()
+                && ctx.project_type.is_none() {
                     ctx.project_type = Some(pt.to_string());
                 }
-            }
 
             // Aggregate documentation
             if file.file_type == KnownContextFile::DocsMarkdown {

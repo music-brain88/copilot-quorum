@@ -194,11 +194,10 @@ impl StdioTransport {
                     continue;
                 }
 
-                if let Some(len_str) = trimmed.strip_prefix("Content-Length:") {
-                    if let Ok(len) = len_str.trim().parse::<usize>() {
+                if let Some(len_str) = trimmed.strip_prefix("Content-Length:")
+                    && let Ok(len) = len_str.trim().parse::<usize>() {
                         break len;
                     }
-                }
             };
 
             // Skip empty line after headers
@@ -219,20 +218,15 @@ impl StdioTransport {
             trace!("Received message: {}", body_str);
 
             // Try to parse and look for session.event with session.start
-            if let Ok(notification) = serde_json::from_slice::<JsonRpcNotification>(&body) {
-                if notification.method == "session.event" {
-                    if let Some(params) = notification.params {
-                        if let Ok(event_params) =
+            if let Ok(notification) = serde_json::from_slice::<JsonRpcNotification>(&body)
+                && notification.method == "session.event"
+                    && let Some(params) = notification.params
+                        && let Ok(event_params) =
                             serde_json::from_value::<SessionEventParams>(params)
-                        {
-                            if event_params.event.event_type == "session.start" {
+                            && event_params.event.event_type == "session.start" {
                                 debug!("Got session.start with id: {}", event_params.session_id);
                                 return Ok(event_params.session_id);
                             }
-                        }
-                    }
-                }
-            }
             // If not session.start, continue waiting
         }
     }
@@ -261,11 +255,10 @@ impl StdioTransport {
                     continue;
                 }
 
-                if let Some(len_str) = trimmed.strip_prefix("Content-Length:") {
-                    if let Ok(len) = len_str.trim().parse::<usize>() {
+                if let Some(len_str) = trimmed.strip_prefix("Content-Length:")
+                    && let Ok(len) = len_str.trim().parse::<usize>() {
                         break len;
                     }
-                }
             };
 
             // Skip empty line after headers
@@ -314,35 +307,29 @@ impl StdioTransport {
             if notification.method == "session.event" {
                 if let Some(params) = notification.params {
                     // Extract event type from params.event.type
-                    if let Some(event) = params.get("event") {
-                        if let Some(event_type) = event.get("type").and_then(|t| t.as_str()) {
+                    if let Some(event) = params.get("event")
+                        && let Some(event_type) = event.get("type").and_then(|t| t.as_str()) {
                             match event_type {
                                 "assistant.message.delta" => {
                                     // Extract content from event.data.content
-                                    if let Some(data) = event.get("data") {
-                                        if let Some(content) =
+                                    if let Some(data) = event.get("data")
+                                        && let Some(content) =
                                             data.get("content").and_then(|c| c.as_str())
-                                        {
-                                            if !content.is_empty() {
+                                            && !content.is_empty() {
                                                 on_chunk(content);
                                                 full_content.push_str(content);
                                             }
-                                        }
-                                    }
                                 }
                                 "assistant.message" => {
                                     // Final message, extract content
-                                    if let Some(data) = event.get("data") {
-                                        if let Some(content) =
+                                    if let Some(data) = event.get("data")
+                                        && let Some(content) =
                                             data.get("content").and_then(|c| c.as_str())
-                                        {
-                                            if !content.is_empty() && full_content.is_empty() {
+                                            && !content.is_empty() && full_content.is_empty() {
                                                 // Only use if we haven't gotten deltas
                                                 on_chunk(content);
                                                 full_content.push_str(content);
                                             }
-                                        }
-                                    }
                                 }
                                 "session.idle" => {
                                     debug!("Session idle, streaming complete");
@@ -353,7 +340,6 @@ impl StdioTransport {
                                 }
                             }
                         }
-                    }
                 }
             } else {
                 debug!("Ignoring notification method: {}", notification.method);
@@ -402,11 +388,10 @@ impl StdioTransport {
                     continue;
                 }
 
-                if let Some(len_str) = trimmed.strip_prefix("Content-Length:") {
-                    if let Ok(len) = len_str.trim().parse::<usize>() {
+                if let Some(len_str) = trimmed.strip_prefix("Content-Length:")
+                    && let Ok(len) = len_str.trim().parse::<usize>() {
                         break len;
                     }
-                }
             };
 
             // Skip empty line after headers
@@ -462,35 +447,29 @@ impl StdioTransport {
             if notification.method == "session.event" {
                 if let Some(params) = notification.params {
                     // Extract event type from params.event.type
-                    if let Some(event) = params.get("event") {
-                        if let Some(event_type) = event.get("type").and_then(|t| t.as_str()) {
+                    if let Some(event) = params.get("event")
+                        && let Some(event_type) = event.get("type").and_then(|t| t.as_str()) {
                             match event_type {
                                 "assistant.message.delta" => {
                                     // Extract content from event.data.content
-                                    if let Some(data) = event.get("data") {
-                                        if let Some(content) =
+                                    if let Some(data) = event.get("data")
+                                        && let Some(content) =
                                             data.get("content").and_then(|c| c.as_str())
-                                        {
-                                            if !content.is_empty() {
+                                            && !content.is_empty() {
                                                 on_chunk(content);
                                                 full_content.push_str(content);
                                             }
-                                        }
-                                    }
                                 }
                                 "assistant.message" => {
                                     // Final message, extract content
-                                    if let Some(data) = event.get("data") {
-                                        if let Some(content) =
+                                    if let Some(data) = event.get("data")
+                                        && let Some(content) =
                                             data.get("content").and_then(|c| c.as_str())
-                                        {
-                                            if !content.is_empty() && full_content.is_empty() {
+                                            && !content.is_empty() && full_content.is_empty() {
                                                 // Only use if we haven't gotten deltas
                                                 on_chunk(content);
                                                 full_content.push_str(content);
                                             }
-                                        }
-                                    }
                                 }
                                 "session.idle" => {
                                     debug!("Session idle, streaming complete");
@@ -501,7 +480,6 @@ impl StdioTransport {
                                 }
                             }
                         }
-                    }
                 }
             } else {
                 debug!("Ignoring notification method: {}", notification.method);

@@ -276,8 +276,8 @@ impl AgentProgressNotifier for AgentProgressReporter {
             }
         }
 
-        if !approved {
-            if let Some(fb) = feedback {
+        if !approved
+            && let Some(fb) = feedback {
                 println!();
                 println!("    {} Feedback:", "ℹ".yellow());
                 // Show all feedback lines (up to 20) for better visibility
@@ -293,7 +293,6 @@ impl AgentProgressNotifier for AgentProgressReporter {
                     );
                 }
             }
-        }
     }
 
     fn on_quorum_complete_with_votes(
@@ -350,8 +349,8 @@ impl AgentProgressNotifier for AgentProgressReporter {
         }
 
         // Show feedback for rejections
-        if !approved {
-            if let Some(fb) = feedback {
+        if !approved
+            && let Some(fb) = feedback {
                 println!();
                 println!("    {} Feedback:", "ℹ".yellow());
                 for line in fb.lines().take(20) {
@@ -366,7 +365,6 @@ impl AgentProgressNotifier for AgentProgressReporter {
                     );
                 }
             }
-        }
     }
 
     fn on_plan_revision(&self, revision: usize, feedback: &str) {

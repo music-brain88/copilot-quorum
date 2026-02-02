@@ -643,8 +643,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!();
 
                 // Show Quorum Journey if there was any review history
-                if let Some(plan) = &output.state.plan {
-                    if !plan.review_history.is_empty() {
+                if let Some(plan) = &output.state.plan
+                    && !plan.review_history.is_empty() {
                         println!("  {} Quorum Journey:", "🗳️".bold());
                         for round in &plan.review_history {
                             let status_icon = if round.approved { "✓" } else { "✗" };
@@ -688,7 +688,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         }
                         println!();
                     }
-                }
 
                 // Show task details with status
                 if let Some(plan) = &output.state.plan {
@@ -712,13 +711,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         );
 
                         // Show failure reason if task failed
-                        if task.status == quorum_domain::TaskStatus::Failed {
-                            if let Some(result) = &task.result {
-                                if let Some(error) = &result.error {
+                        if task.status == quorum_domain::TaskStatus::Failed
+                            && let Some(result) = &task.result
+                                && let Some(error) = &result.error {
                                     println!("       {} {}", "└─".dimmed(), error.red());
                                 }
-                            }
-                        }
                     }
                 } else {
                     // Fallback to old summary if no plan

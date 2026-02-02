@@ -170,11 +170,10 @@ impl FileConfig {
         }
 
         // Check for empty moderator name
-        if let Some(ref moderator) = self.council.moderator {
-            if moderator.trim().is_empty() {
+        if let Some(ref moderator) = self.council.moderator
+            && moderator.trim().is_empty() {
                 return Err(ConfigValidationError::EmptyModeratorName);
             }
-        }
 
         Ok(())
     }

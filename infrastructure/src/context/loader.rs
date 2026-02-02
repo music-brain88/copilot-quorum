@@ -201,10 +201,10 @@ impl LocalContextLoader {
         // Walk the docs directory recursively
         if let Ok(entries) = walkdir(docs_dir) {
             for entry in entries {
-                if let Some(ext) = entry.extension() {
-                    if ext == "md" {
-                        if let Ok(content) = fs::read_to_string(&entry) {
-                            if !content.trim().is_empty() {
+                if let Some(ext) = entry.extension()
+                    && ext == "md"
+                        && let Ok(content) = fs::read_to_string(&entry)
+                            && !content.trim().is_empty() {
                                 if !all_content.is_empty() {
                                     all_content.push_str("\n\n---\n\n");
                                 }
@@ -216,9 +216,6 @@ impl LocalContextLoader {
                                 ));
                                 loaded_count += 1;
                             }
-                        }
-                    }
-                }
             }
         }
 

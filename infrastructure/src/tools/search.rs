@@ -220,11 +220,10 @@ pub fn execute_grep_search(call: &ToolCall) -> ToolResult {
         }
 
         // Check file size
-        if let Ok(metadata) = fs::metadata(&file_path) {
-            if metadata.len() > MAX_GREP_FILE_SIZE {
+        if let Ok(metadata) = fs::metadata(&file_path)
+            && metadata.len() > MAX_GREP_FILE_SIZE {
                 continue;
             }
-        }
 
         // Read and search file
         if let Ok(content) = fs::read_to_string(&file_path) {
