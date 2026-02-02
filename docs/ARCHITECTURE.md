@@ -589,6 +589,40 @@ User Request
 | Low | `read_file`, `glob_search`, `grep_search` | 直接実行（レビューなし） |
 | High | `write_file`, `run_command` | 合議レビュー後に実行 |
 
+### Progress Notification Pattern / 進捗通知パターン
+
+エージェントシステムは「アクションとUI通知の分離」パターンを採用しています。
+これはVuex/Fluxのような単方向データフローに似た設計です。
+
+#### 原則
+
+| 層 | 責任 | やらないこと |
+|---|---|---|
+| **低レベル関数** (`review_plan`, `review_action`, `final_review`) | ビジネスロジック実行、結果を返す | UI通知 |
+| **メインループ** (`execute_with_progress`) | 結果に基づきUI通知を発火 | - |
+| **ProgressNotifier** (Presentation層) | UIの更新、フィードバック表示 | ビジネスロジック |
+
+#### データフロー
+
+```
+UseCase (Application層)
+│
+├── review_plan() ──→ QuorumReviewResult
+│                          │
+│                          ▼
+├── execute_with_progress() ─→ progress.on_quorum_complete_with_votes()
+│                                   │
+│                                   ▼
+└── ProgressNotifier (Presentation層) ──→ UI表示
+```
+
+#### なぜこの設計か
+
+1. **責任の分離**: ビジネスロジックがUI詳細を知らない
+2. **テスト容易性**: 低レベル関数はUI依存なしでテスト可能
+3. **柔軟性**: 異なるUI (CLI, TUI, Web) に同じロジックを再利用
+4. **バグ防止**: UI通知の重複呼び出しを構造的に防ぐ
+
 ---
 
 ## Error Handling / エラーハンドリング
