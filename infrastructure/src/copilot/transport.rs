@@ -348,7 +348,7 @@ impl StdioTransport {
                                     debug!("Session idle, streaming complete");
                                     return Ok(full_content);
                                 }
-                                                other => {
+                                other => {
                                     trace!("Ignoring event type: {}", other);
                                 }
                             }

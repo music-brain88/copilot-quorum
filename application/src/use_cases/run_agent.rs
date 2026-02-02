@@ -1661,11 +1661,7 @@ Here's my plan:
         ];
 
         for error in errors {
-            assert!(
-                !error.is_cancelled(),
-                "{:?} should not be cancelled",
-                error
-            );
+            assert!(!error.is_cancelled(), "{:?} should not be cancelled", error);
         }
     }
 }
