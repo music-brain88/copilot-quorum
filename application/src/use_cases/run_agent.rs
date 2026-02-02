@@ -19,6 +19,7 @@ use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 /// Errors that can occur during Agent execution
@@ -50,6 +51,16 @@ pub enum RunAgentError {
 
     #[error("Gateway error: {0}")]
     GatewayError(#[from] GatewayError),
+
+    #[error("Operation cancelled")]
+    Cancelled,
+}
+
+impl RunAgentError {
+    /// Check if this error represents a cancellation
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, RunAgentError::Cancelled)
+    }
 }
 
 /// Input for the RunAgent use case
@@ -222,6 +233,7 @@ pub struct RunAgentUseCase<
     gateway: Arc<G>,
     tool_executor: Arc<T>,
     context_loader: Option<Arc<C>>,
+    cancellation_token: Option<CancellationToken>,
 }
 
 /// No-op context loader for backwards compatibility
@@ -249,6 +261,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
             gateway,
             tool_executor,
             context_loader: None,
+            cancellation_token: None,
         }
     }
 }
@@ -265,7 +278,24 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             gateway,
             tool_executor,
             context_loader: Some(context_loader),
+            cancellation_token: None,
         }
+    }
+
+    /// Set a cancellation token for graceful interruption
+    pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
+        self.cancellation_token = Some(token);
+        self
+    }
+
+    /// Check if cancellation has been requested
+    fn check_cancelled(&self) -> Result<(), RunAgentError> {
+        if let Some(ref token) = self.cancellation_token {
+            if token.is_cancelled() {
+                return Err(RunAgentError::Cancelled);
+            }
+        }
+        Ok(())
     }
 
     /// Execute the agent without progress reporting
@@ -279,6 +309,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         input: RunAgentInput,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<RunAgentOutput, RunAgentError> {
+        // Check for cancellation before starting
+        self.check_cancelled()?;
+
         info!("Starting agent for request: {}", input.request);
 
         // Initialize agent state
@@ -318,6 +351,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let mut plan_feedback: Option<String> = None;
 
         loop {
+            // Check for cancellation at the start of each loop iteration
+            self.check_cancelled()?;
+
             // Phase 2: Planning
             progress.on_phase_change(&AgentPhase::Planning);
             state.set_phase(AgentPhase::Planning);
@@ -679,6 +715,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let mut previous_results = String::new();
 
         loop {
+            // Check for cancellation at the start of each task
+            self.check_cancelled()?;
+
             // Check iteration limit
             if !state.increment_iteration() {
                 return Err(RunAgentError::MaxIterationsExceeded);
@@ -1088,10 +1127,28 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             });
         }
 
-        // Collect votes
+        // Collect votes with cancellation support
         let mut votes = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
+        loop {
+            // Check for cancellation using select! if token exists
+            let result = if let Some(ref token) = self.cancellation_token {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        join_set.abort_all();
+                        return Err(RunAgentError::Cancelled);
+                    }
+                    result = join_set.join_next() => result,
+                }
+            } else {
+                join_set.join_next().await
+            };
+
+            let Some(result) = result else {
+                break; // All tasks complete
+            };
+
             match result {
                 Ok((model, Ok(response))) => {
                     let (approved, feedback) = parse_review_response(&response);
@@ -1162,10 +1219,28 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             });
         }
 
-        // Collect votes
+        // Collect votes with cancellation support
         let mut votes = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
+        loop {
+            // Check for cancellation using select! if token exists
+            let result = if let Some(ref token) = self.cancellation_token {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        join_set.abort_all();
+                        return Err(RunAgentError::Cancelled);
+                    }
+                    result = join_set.join_next() => result,
+                }
+            } else {
+                join_set.join_next().await
+            };
+
+            let Some(result) = result else {
+                break; // All tasks complete
+            };
+
             match result {
                 Ok((model, Ok(response))) => {
                     let (approved, feedback) = parse_review_response(&response);
@@ -1237,10 +1312,28 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             });
         }
 
-        // Collect results
+        // Collect results with cancellation support
         let mut votes = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
+        loop {
+            // Check for cancellation using select! if token exists
+            let result = if let Some(ref token) = self.cancellation_token {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        join_set.abort_all();
+                        return Err(RunAgentError::Cancelled);
+                    }
+                    result = join_set.join_next() => result,
+                }
+            } else {
+                join_set.join_next().await
+            };
+
+            let Some(result) = result else {
+                break; // All tasks complete
+            };
+
             match result {
                 Ok((model, Ok(response))) => {
                     // For final review, we look for SUCCESS/PARTIAL/FAILURE
@@ -1549,5 +1642,26 @@ Here's my plan:
         let response = "Just some text without any tool calls.";
         let calls = parse_tool_calls(response);
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn test_run_agent_error_cancelled() {
+        let error = RunAgentError::Cancelled;
+        assert_eq!(error.to_string(), "Operation cancelled");
+        assert!(error.is_cancelled());
+    }
+
+    #[test]
+    fn test_run_agent_error_is_cancelled_false_for_other_errors() {
+        let errors = vec![
+            RunAgentError::InvalidConfig("test".to_string()),
+            RunAgentError::PlanningFailed("test".to_string()),
+            RunAgentError::MaxIterationsExceeded,
+            RunAgentError::QuorumFailed,
+        ];
+
+        for error in errors {
+            assert!(!error.is_cancelled(), "{:?} should not be cancelled", error);
+        }
     }
 }

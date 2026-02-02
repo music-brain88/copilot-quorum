@@ -13,6 +13,7 @@ quorum-domain = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }
