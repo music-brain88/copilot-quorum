@@ -6,11 +6,13 @@ use crate::progress::reporter::ProgressReporter;
 use crate::ConsoleFormatter;
 use colored::Colorize;
 use quorum_application::{
-    LlmGateway, RunAgentInput, RunAgentUseCase, RunQuorumInput, RunQuorumUseCase, ToolExecutorPort,
+    ContextLoaderPort, InitContextInput, InitContextUseCase, LlmGateway, RunAgentInput,
+    RunAgentUseCase, RunQuorumInput, RunQuorumUseCase, ToolExecutorPort,
 };
 use quorum_domain::{AgentConfig, Model, OutputFormat};
 use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
+use std::path::Path;
 use std::sync::Arc;
 
 /// Entry in conversation history
@@ -23,9 +25,10 @@ struct HistoryEntry {
 }
 
 /// Interactive REPL for agent mode
-pub struct AgentRepl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> {
+pub struct AgentRepl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> {
     gateway: Arc<G>,
-    use_case: RunAgentUseCase<G, T>,
+    use_case: RunAgentUseCase<G, T, C>,
+    context_loader: Arc<C>,
     config: AgentConfig,
     quorum_models: Vec<Model>,
     verbose: bool,
@@ -34,12 +37,22 @@ pub struct AgentRepl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> {
     conversation_history: Vec<HistoryEntry>,
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
-    /// Create a new AgentRepl
-    pub fn new(gateway: Arc<G>, tool_executor: Arc<T>, primary_model: Model) -> Self {
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> AgentRepl<G, T, C> {
+    /// Create a new AgentRepl with context loader
+    pub fn new(
+        gateway: Arc<G>,
+        tool_executor: Arc<T>,
+        context_loader: Arc<C>,
+        primary_model: Model,
+    ) -> Self {
         Self {
             gateway: gateway.clone(),
-            use_case: RunAgentUseCase::new(gateway, tool_executor),
+            use_case: RunAgentUseCase::with_context_loader(
+                gateway,
+                tool_executor,
+                context_loader.clone(),
+            ),
+            context_loader,
             config: AgentConfig::new(primary_model),
             quorum_models: Model::default_models(),
             verbose: false,
@@ -182,6 +195,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
         println!("Commands:");
         println!("  {}    - Show this help", "/help".cyan());
         println!("  {} - Consult quorum on a question", "/council".cyan());
+        println!(
+            "  {}    - Initialize project context (quorum)",
+            "/init".cyan()
+        );
         println!("  {}  - Show current configuration", "/config".cyan());
         println!("  {}   - Clear conversation history", "/clear".cyan());
         println!("  {}    - Exit agent mode", "/quit".cyan());
@@ -204,6 +221,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
                 println!("{}", "Commands:".bold());
                 println!("  /help, /h, /?        - Show this help");
                 println!("  /council <question>  - Consult quorum (multiple models)");
+                println!("  /init [--force]      - Initialize project context (quorum)");
                 println!("  /config              - Show current configuration");
                 println!("  /clear               - Clear conversation history");
                 println!("  /verbose             - Toggle verbose mode");
@@ -218,9 +236,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
                 println!("  Use /council to consult multiple models on a question.");
                 println!("  The conversation history provides context to the quorum.");
                 println!();
+                println!("{}", "/init:".bold());
+                println!("  Generates .quorum/context.md using multiple models.");
+                println!("  Use --force to overwrite existing context file.");
+                println!();
                 println!("{}", "Examples:".bold());
                 println!("  - \"Fix the bug in login.rs\"");
                 println!("  - \"/council What do you think about this design?\"");
+                println!("  - \"/init --force\"");
                 println!("  - \"Add unit tests for the User struct\"");
                 println!();
                 CommandResult::Continue
@@ -276,6 +299,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
             "/clear" => {
                 self.conversation_history.clear();
                 println!("{}", "Conversation history cleared.".green());
+                CommandResult::Continue
+            }
+            "/init" => {
+                self.run_init_context(args).await;
                 CommandResult::Continue
             }
             "/verbose" => {
@@ -363,6 +390,98 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> AgentRepl<G, T> {
             }
             Err(e) => {
                 println!("{} {}", "❌".red(), "Council failed".red().bold());
+                println!();
+                println!("{} {}", "Error:".red().bold(), e);
+            }
+        }
+
+        println!();
+    }
+
+    /// Run context initialization using quorum
+    async fn run_init_context(&self, args: &str) {
+        let force = args.contains("--force") || args.contains("-f");
+
+        let working_dir = self
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()));
+
+        // Check if context file already exists
+        if !force && self.context_loader.context_file_exists(Path::new(&working_dir)) {
+            println!();
+            println!(
+                "{} Context file already exists at {}",
+                "⚠️".yellow(),
+                ".quorum/context.md".cyan()
+            );
+            println!("Use {} to regenerate.", "/init --force".cyan());
+            println!();
+            return;
+        }
+
+        println!();
+        println!(
+            "{} {}",
+            "━".repeat(50).dimmed(),
+            "Context Initialization".bold().magenta()
+        );
+        println!();
+        println!("Analyzing project with {} models...", self.quorum_models.len());
+        println!();
+
+        // Create the init context input
+        let mut input = InitContextInput::new(&working_dir, self.quorum_models.clone());
+
+        if let Some(moderator) = self.quorum_models.first() {
+            input = input.with_moderator(moderator.clone());
+        }
+
+        if force {
+            input = input.with_force(true);
+        }
+
+        // Run the initialization
+        let use_case = InitContextUseCase::new(self.gateway.clone(), self.context_loader.clone());
+        let result = use_case.execute(input).await;
+
+        println!();
+        println!("{}", "━".repeat(60).dimmed());
+
+        match result {
+            Ok(output) => {
+                println!();
+                println!(
+                    "{} {} {}",
+                    "✅".green(),
+                    "Created:".green().bold(),
+                    output.path.cyan()
+                );
+                println!();
+                println!("{}", "Contributing models:".bold());
+                for model in &output.contributing_models {
+                    println!("  - {}", model);
+                }
+                println!();
+                println!("{}", "Preview:".bold());
+                println!("{}", "─".repeat(40).dimmed());
+                // Show first 20 lines
+                let preview: String = output
+                    .content
+                    .lines()
+                    .take(20)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                println!("{}", preview);
+                if output.content.lines().count() > 20 {
+                    println!("{}", "...".dimmed());
+                }
+            }
+            Err(e) => {
+                println!();
+                println!("{} {}", "❌".red(), "Context initialization failed".red().bold());
                 println!();
                 println!("{} {}", "Error:".red().bold(), e);
             }

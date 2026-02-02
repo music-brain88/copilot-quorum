@@ -8,12 +8,14 @@
 //!    - Action Review - Quorum reviews high-risk operations
 //! 5. Final Review - Quorum reviews results (optional)
 
+use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::{
-    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, Model, Plan, Task,
-    TaskId, Thought, ToolCall,
+    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, Model, Plan,
+    ProjectContext, Task, TaskId, Thought, ToolCall,
 };
+use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -149,16 +151,45 @@ impl QuorumReviewResult {
 }
 
 /// Use case for running an autonomous agent
-pub struct RunAgentUseCase<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> {
+pub struct RunAgentUseCase<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static = NoContextLoader> {
     gateway: Arc<G>,
     tool_executor: Arc<T>,
+    context_loader: Option<Arc<C>>,
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, T> {
+/// No-op context loader for backwards compatibility
+pub struct NoContextLoader;
+
+impl ContextLoaderPort for NoContextLoader {
+    fn load_known_files(&self, _project_root: &Path) -> Vec<quorum_domain::LoadedContextFile> {
+        Vec::new()
+    }
+
+    fn context_file_exists(&self, _project_root: &Path) -> bool {
+        false
+    }
+
+    fn write_context_file(&self, _project_root: &Path, _content: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, T, NoContextLoader> {
     pub fn new(gateway: Arc<G>, tool_executor: Arc<T>) -> Self {
         Self {
             gateway,
             tool_executor,
+            context_loader: None,
+        }
+    }
+}
+
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> RunAgentUseCase<G, T, C> {
+    pub fn with_context_loader(gateway: Arc<G>, tool_executor: Arc<T>, context_loader: Arc<C>) -> Self {
+        Self {
+            gateway,
+            tool_executor,
+            context_loader: Some(context_loader),
         }
     }
 
@@ -336,8 +367,106 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
         })
     }
 
-    /// Gather context about the project
+    /// Gather context about the project using 3-stage fallback strategy
+    ///
+    /// Stage 1: Load known files directly (no LLM needed)
+    /// Stage 2: If insufficient, run exploration agent
+    /// Stage 3: Proceed with minimal context if exploration fails
     async fn gather_context(
+        &self,
+        session: &dyn LlmSession,
+        request: &str,
+        config: &AgentConfig,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<AgentContext, RunAgentError> {
+        let mut context = AgentContext::new();
+
+        if let Some(working_dir) = &config.working_dir {
+            context = context.with_project_root(working_dir);
+        }
+
+        // ========== Stage 1: Load known files directly (no LLM needed) ==========
+        if let Some(ref context_loader) = self.context_loader {
+            if let Some(ref working_dir) = config.working_dir {
+                let project_root = Path::new(working_dir);
+                let files = context_loader.load_known_files(project_root);
+                let project_ctx = context_loader.build_project_context(files);
+
+                if project_ctx.has_sufficient_context() {
+                    info!(
+                        "Stage 1: Using existing context from: {}",
+                        project_ctx.source_description()
+                    );
+                    return Ok(self.context_from_project_ctx(project_ctx, config));
+                }
+
+                // Even if not sufficient, preserve any partial context
+                if !project_ctx.is_empty() {
+                    info!("Stage 1: Found partial context, proceeding to exploration");
+                    context = self.merge_project_context(context, &project_ctx);
+                }
+            }
+        }
+
+        // ========== Stage 2: Run exploration agent ==========
+        info!("Stage 2: Running exploration agent for additional context");
+
+        match self
+            .run_exploration_agent(session, request, config, progress)
+            .await
+        {
+            Ok(enriched_ctx) => {
+                info!("Stage 2: Exploration agent succeeded");
+                return Ok(enriched_ctx);
+            }
+            Err(e) => {
+                warn!("Stage 2: Exploration agent failed: {}", e);
+                // Continue to Stage 3
+            }
+        }
+
+        // ========== Stage 3: Proceed with minimal context ==========
+        warn!("Stage 3: Proceeding with minimal context");
+        Ok(context)
+    }
+
+    /// Convert ProjectContext to AgentContext
+    fn context_from_project_ctx(&self, project_ctx: ProjectContext, config: &AgentConfig) -> AgentContext {
+        let mut context = AgentContext::new();
+
+        if let Some(ref working_dir) = config.working_dir {
+            context = context.with_project_root(working_dir);
+        }
+
+        if let Some(ref project_type) = project_ctx.project_type {
+            context = context.with_project_type(project_type);
+        }
+
+        // Build structure summary from project context
+        let summary = project_ctx.to_summary();
+        if !summary.is_empty() && summary != "No context available." {
+            context.set_structure_summary(&summary);
+        }
+
+        context
+    }
+
+    /// Merge ProjectContext into existing AgentContext
+    fn merge_project_context(&self, mut context: AgentContext, project_ctx: &ProjectContext) -> AgentContext {
+        if let Some(ref project_type) = project_ctx.project_type {
+            context = context.with_project_type(project_type);
+        }
+
+        let summary = project_ctx.to_summary();
+        if !summary.is_empty() && summary != "No context available." {
+            context.set_structure_summary(&summary);
+        }
+
+        context
+    }
+
+    /// Run the exploration agent to gather context (original behavior)
+    async fn run_exploration_agent(
         &self,
         session: &dyn LlmSession,
         request: &str,

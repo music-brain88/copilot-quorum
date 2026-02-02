@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod context;
 pub mod core;
 pub mod orchestration;
 pub mod prompt;
@@ -30,3 +31,4 @@ pub use tool::{
     traits::{DefaultToolValidator, ToolValidator},
     value_objects::{ToolError, ToolResult, ToolResultMetadata},
 };
+pub use context::{KnownContextFile, LoadedContextFile, ProjectContext};

@@ -4,6 +4,7 @@
 //! in the application layer, including configuration file loading.
 
 pub mod config;
+pub mod context;
 pub mod copilot;
 pub mod tools;
 
@@ -19,3 +20,4 @@ pub use copilot::{
     transport::StdioTransport,
 };
 pub use tools::{default_tool_spec, read_only_tool_spec, LocalToolExecutor};
+pub use context::LocalContextLoader;
