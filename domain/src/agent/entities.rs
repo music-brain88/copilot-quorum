@@ -78,7 +78,6 @@ impl HilMode {
             HilMode::AutoApprove => "auto_approve",
         }
     }
-
 }
 
 impl std::str::FromStr for HilMode {
@@ -792,9 +791,18 @@ mod tests {
         assert_eq!(HilMode::AutoReject.as_str(), "auto_reject");
         assert_eq!(HilMode::AutoApprove.as_str(), "auto_approve");
 
-        assert_eq!("interactive".parse::<HilMode>().ok(), Some(HilMode::Interactive));
-        assert_eq!("auto_reject".parse::<HilMode>().ok(), Some(HilMode::AutoReject));
-        assert_eq!("autoapprove".parse::<HilMode>().ok(), Some(HilMode::AutoApprove));
+        assert_eq!(
+            "interactive".parse::<HilMode>().ok(),
+            Some(HilMode::Interactive)
+        );
+        assert_eq!(
+            "auto_reject".parse::<HilMode>().ok(),
+            Some(HilMode::AutoReject)
+        );
+        assert_eq!(
+            "autoapprove".parse::<HilMode>().ok(),
+            Some(HilMode::AutoApprove)
+        );
         assert!("invalid".parse::<HilMode>().is_err());
     }
 
