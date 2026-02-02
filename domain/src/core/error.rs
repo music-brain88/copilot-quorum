@@ -19,4 +19,33 @@ pub enum DomainError {
 
     #[error("Orchestration error: {0}")]
     OrchestrationError(String),
+
+    #[error("Operation cancelled")]
+    Cancelled,
+}
+
+impl DomainError {
+    /// Check if this error represents a cancellation
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, DomainError::Cancelled)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cancelled_error_display() {
+        let error = DomainError::Cancelled;
+        assert_eq!(error.to_string(), "Operation cancelled");
+    }
+
+    #[test]
+    fn test_is_cancelled_check() {
+        assert!(DomainError::Cancelled.is_cancelled());
+        assert!(!DomainError::NoModels.is_cancelled());
+        assert!(!DomainError::AllModelsFailed.is_cancelled());
+        assert!(!DomainError::InvalidQuestion("test".to_string()).is_cancelled());
+    }
 }

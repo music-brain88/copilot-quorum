@@ -18,6 +18,7 @@ repository = "https://github.com/music-brain88/copilot-quorum"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }
+tokio-util = "0.7"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

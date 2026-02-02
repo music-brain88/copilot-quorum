@@ -12,6 +12,7 @@ use quorum_infrastructure::{
 };
 use quorum_presentation::{AgentProgressReporter, AgentRepl, Cli, OutputConfig, ReplConfig};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -78,6 +79,23 @@ async fn main() -> Result<()> {
         .init();
 
     info!("Starting Copilot Quorum");
+
+    // Create cancellation token for graceful shutdown
+    let cancellation_token = CancellationToken::new();
+
+    // Set up Ctrl+C signal handler
+    let shutdown_token = cancellation_token.clone();
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                eprintln!("\nInterrupted. Shutting down gracefully...");
+                shutdown_token.cancel();
+            }
+            Err(e) => {
+                eprintln!("Failed to listen for Ctrl+C signal: {}", e);
+            }
+        }
+    });
 
     // Build layer-specific configs from FileConfig + CLI
     let (_behavior, _output_config, repl_config) = build_configs(&cli, &config);
@@ -146,7 +164,8 @@ async fn main() -> Result<()> {
             primary_model,
         )
         .with_quorum_models(effective_quorum_models)
-        .with_verbose(cli.verbose > 0);
+        .with_verbose(cli.verbose > 0)
+        .with_cancellation(cancellation_token.clone());
 
         // Set moderator if explicitly configured
         if let Some(ref moderator_name) = config.council.moderator {
@@ -209,26 +228,37 @@ async fn main() -> Result<()> {
         println!();
     }
 
-    // Create and run agent
-    let use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader);
+    // Create and run agent with cancellation support
+    let use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
+        .with_cancellation(cancellation_token.clone());
     let input = RunAgentInput::new(request, agent_config);
 
     let result = if repl_config.show_progress {
         let progress = AgentProgressReporter::with_options(cli.verbose > 0, cli.show_votes);
-        use_case.execute_with_progress(input, &progress).await?
+        use_case.execute_with_progress(input, &progress).await
     } else {
-        use_case.execute(input).await?
+        use_case.execute(input).await
     };
 
-    // Output results
-    println!();
-    if result.success {
-        println!("Agent completed successfully!");
-    } else {
-        println!("Agent completed with issues.");
+    // Handle result, including cancellation
+    match result {
+        Ok(output) => {
+            println!();
+            if output.success {
+                println!("Agent completed successfully!");
+            } else {
+                println!("Agent completed with issues.");
+            }
+            println!();
+            println!("Summary:\n{}", output.summary);
+        }
+        Err(e) if e.is_cancelled() => {
+            println!("\nOperation cancelled.");
+        }
+        Err(e) => {
+            return Err(e.into());
+        }
     }
-    println!();
-    println!("Summary:\n{}", result.summary);
 
     Ok(())
 }

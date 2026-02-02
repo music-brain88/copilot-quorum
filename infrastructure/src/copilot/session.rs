@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession};
 use quorum_domain::Model;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 /// An active conversation session with a specific Copilot model.
@@ -96,6 +97,61 @@ impl CopilotSession {
 
         // Read streaming notifications until session.idle
         let content = self.transport.read_streaming(on_chunk).await?;
+
+        Ok(content)
+    }
+
+    /// Sends a prompt with cancellation support
+    pub async fn ask_with_cancellation(
+        &self,
+        content: &str,
+        cancellation: CancellationToken,
+    ) -> Result<String> {
+        self.ask_streaming_with_cancellation(content, |_| {}, cancellation)
+            .await
+    }
+
+    /// Sends a prompt and streams the response with cancellation support
+    pub async fn ask_streaming_with_cancellation<F>(
+        &self,
+        content: &str,
+        on_chunk: F,
+        cancellation: CancellationToken,
+    ) -> Result<String>
+    where
+        F: FnMut(&str),
+    {
+        // Check for cancellation before starting
+        if cancellation.is_cancelled() {
+            return Err(CopilotError::Cancelled);
+        }
+
+        debug!("Sending to session {}: {}", self.session_id, content);
+
+        let params = SendParams {
+            session_id: self.session_id.clone(),
+            prompt: content.to_string(),
+        };
+
+        let request = JsonRpcRequest::new("session.send", Some(serde_json::to_value(&params)?));
+
+        // Send the request
+        let response = self.transport.request(&request).await?;
+
+        if let Some(error) = response.error {
+            return Err(CopilotError::RpcError {
+                code: error.code,
+                message: error.message,
+            });
+        }
+
+        debug!("session.send response: {:?}", response.result);
+
+        // Read streaming notifications until session.idle with cancellation support
+        let content = self
+            .transport
+            .read_streaming_with_cancellation(on_chunk, cancellation)
+            .await?;
 
         Ok(content)
     }

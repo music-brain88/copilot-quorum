@@ -14,6 +14,7 @@ use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
 use std::path::Path;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Entry in conversation history
 #[derive(Debug, Clone)]
@@ -41,6 +42,8 @@ pub struct AgentRepl<
     working_dir: Option<String>,
     /// Conversation history for /council context
     conversation_history: Vec<HistoryEntry>,
+    /// Cancellation token for graceful shutdown
+    cancellation_token: Option<CancellationToken>,
 }
 
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
@@ -67,6 +70,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             verbose: false,
             working_dir: None,
             conversation_history: Vec::new(),
+            cancellation_token: None,
         }
     }
 
@@ -102,6 +106,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if enable {
             self.config = self.config.with_final_review();
         }
+        self
+    }
+
+    /// Set cancellation token for graceful shutdown
+    pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
+        self.cancellation_token = Some(token.clone());
+        self.use_case = self.use_case.with_cancellation(token);
         self
     }
 
@@ -668,9 +679,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             }
             Err(e) => {
-                println!("{} {}", "❌".red(), "Agent failed".red().bold());
-                println!();
-                println!("{} {}", "Error:".red().bold(), e);
+                // Check if this was a cancellation
+                if e.is_cancelled() {
+                    println!();
+                    println!(
+                        "{} {}",
+                        "⚠️".yellow(),
+                        "Operation cancelled".yellow().bold()
+                    );
+                } else {
+                    println!("{} {}", "❌".red(), "Agent failed".red().bold());
+                    println!();
+                    println!("{} {}", "Error:".red().bold(), e);
+                }
             }
         }
 
