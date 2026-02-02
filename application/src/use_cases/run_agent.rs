@@ -485,7 +485,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             state.reject_plan(&feedback);
 
             // Check plan revision limit for human intervention
-            let revision_count = state.plan.as_ref().map(|p| p.revision_count()).unwrap_or(0);
+            // Note: We use state.plan_revision_count instead of plan.revision_count()
+            // because the Plan is recreated on each revision attempt, losing history.
+            let revision_count = state.plan_revision_count;
 
             if revision_count >= input.config.max_plan_revisions {
                 // Human intervention required
