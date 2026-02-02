@@ -315,7 +315,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             }
         } else {
-            session.send(prompt).await.map_err(RunAgentError::GatewayError)
+            session
+                .send(prompt)
+                .await
+                .map_err(RunAgentError::GatewayError)
         }
     }
 
