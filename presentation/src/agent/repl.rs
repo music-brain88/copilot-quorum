@@ -9,7 +9,7 @@ use quorum_application::{
     ContextLoaderPort, InitContextInput, InitContextUseCase, LlmGateway, RunAgentInput,
     RunAgentUseCase, RunQuorumInput, RunQuorumUseCase, ToolExecutorPort,
 };
-use quorum_domain::{AgentConfig, Model, OutputFormat};
+use quorum_domain::{AgentConfig, Model, OrchestrationMode, OutputFormat};
 use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
 use std::path::Path;
@@ -42,6 +42,8 @@ pub struct AgentRepl<
     working_dir: Option<String>,
     /// Conversation history for /council context
     conversation_history: Vec<HistoryEntry>,
+    /// Current orchestration mode
+    current_mode: OrchestrationMode,
     /// Cancellation token for graceful shutdown
     cancellation_token: Option<CancellationToken>,
 }
@@ -70,6 +72,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             verbose: false,
             working_dir: None,
             conversation_history: Vec::new(),
+            current_mode: OrchestrationMode::Agent,
             cancellation_token: None,
         }
     }
@@ -134,7 +137,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self.print_welcome();
 
         loop {
-            let readline = rl.readline("agent> ");
+            let prompt = match self.current_mode {
+                OrchestrationMode::Agent => format!("{} ", "agent>".green()),
+                OrchestrationMode::Quorum => format!("{} ", "quorum>".blue()),
+                OrchestrationMode::Fast => format!("{} ", "fast>".yellow()),
+                OrchestrationMode::Debate => format!("{} ", "debate>".purple()),
+                OrchestrationMode::Plan => format!("{} ", "plan>".cyan()),
+            };
+
+            let readline = rl.readline(&prompt);
 
             match readline {
                 Ok(line) => {
@@ -222,6 +233,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if let Some(ref dir) = self.working_dir {
             println!("{} {}", "Working Dir:".bold(), dir);
         }
+        println!("{} {}", "Mode:".bold(), self.current_mode);
         println!();
         println!("{}", "The agent will:".dimmed());
         println!("{}", "  1. Gather context about your project".dimmed());
@@ -230,6 +242,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         println!();
         println!("Commands:");
         println!("  {}    - Show this help", "/help".cyan());
+        println!("  {}    - Change orchestration mode", "/mode".cyan());
         println!("  {} - Consult quorum on a question", "/council".cyan());
         println!(
             "  {}    - Initialize project context (quorum)",
@@ -256,6 +269,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!();
                 println!("{}", "Commands:".bold());
                 println!("  /help, /h, /?        - Show this help");
+                println!("  /mode <mode>         - Change orchestration mode (agent, quorum, fast, debate, plan)");
                 println!("  /council <question>  - Consult quorum (multiple models)");
                 println!("  /init [--force]      - Initialize project context (quorum)");
                 println!("  /config              - Show current configuration");
@@ -282,6 +296,23 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!("  - \"/init --force\"");
                 println!("  - \"Add unit tests for the User struct\"");
                 println!();
+                CommandResult::Continue
+            }
+            "/mode" => {
+                if args.is_empty() {
+                    println!("{} Usage: /mode <mode>", "Error:".red().bold());
+                    println!("Available modes: agent, quorum, fast, debate, plan");
+                    println!("Current mode: {}", self.current_mode);
+                    return CommandResult::Continue;
+                }
+
+                if let Some(mode) = OrchestrationMode::from_str(args) {
+                    self.current_mode = mode;
+                    println!("Mode changed to: {} ({})", mode, mode.description().dimmed());
+                } else {
+                    println!("{} Unknown mode: {}", "Error:".red().bold(), args);
+                    println!("Available modes: agent, quorum, fast, debate, plan");
+                }
                 CommandResult::Continue
             }
             "/council" => {
@@ -320,6 +351,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     }
                 );
                 println!("  Max Iterations:   {}", self.config.max_iterations);
+                println!("  Max Plan Revisions: {}", self.config.max_plan_revisions);
+                println!("  HiL Mode:         {}", self.config.hil_mode);
                 println!(
                     "  Working Dir:      {}",
                     self.working_dir.as_deref().unwrap_or("(current)")
@@ -537,6 +570,28 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     async fn process_request(&mut self, request: &str) {
+        // Route based on mode
+        match self.current_mode {
+            OrchestrationMode::Quorum => {
+                self.run_council(request).await;
+                return;
+            }
+            OrchestrationMode::Fast | OrchestrationMode::Debate | OrchestrationMode::Plan => {
+                println!();
+                println!(
+                    "{} Mode '{}' is not yet implemented.",
+                    "⚠️".yellow(),
+                    self.current_mode
+                );
+                println!("Please switch back to 'agent' or 'quorum' using /mode.");
+                println!();
+                return;
+            }
+            OrchestrationMode::Agent => {
+                // Fall through to existing agent logic
+            }
+        }
+
         println!();
         println!(
             "{} {}",

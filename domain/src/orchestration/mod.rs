@@ -4,5 +4,6 @@
 //! multi-model discussions.
 
 pub mod entities;
+pub mod mode;
 pub mod strategy;
 pub mod value_objects;

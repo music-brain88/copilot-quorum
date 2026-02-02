@@ -236,6 +236,125 @@ pub trait AgentProgressNotifier: Send + Sync {
 
 ---
 
+## Human-in-the-Loop (HiL) / 人間介入
+
+### Overview / 概要
+
+Quorumが合意に至らない場合、エージェントは無限にリトライする代わりに、
+ユーザーに判断を委ねることができます。これにより：
+
+When quorum cannot reach consensus, the agent can delegate the decision to
+the user instead of retrying indefinitely. This provides:
+
+- **安全性** - 無限ループを防止
+- **制御** - ユーザーが最終判断を下せる
+- **透明性** - 合議結果を確認して介入可能
+
+### Flow / フロー
+
+```
+Planning → Review REJECTED → Revision 1
+                ↓
+         Review REJECTED → Revision 2
+                ↓
+         Review REJECTED → Revision 3
+                ↓
+         max_plan_revisions 到達
+                ↓
+    ┌─── HiL Mode ───┐
+    │                │
+    ▼                ▼
+Interactive      Auto*
+    │                │
+    ▼                ▼
+User Prompt    自動決定
+/approve          │
+/reject           │
+/edit             │
+    │             │
+    ▼             ▼
+Continue or Abort
+```
+
+### HilMode Options / HilModeオプション
+
+| Mode | Description |
+|------|-------------|
+| `Interactive` | ユーザーにプロンプトを表示して判断を求める（デフォルト） |
+| `AutoReject` | 自動的に中止する |
+| `AutoApprove` | 自動的に最後の計画を承認する（危険！） |
+
+### Interactive Mode UI / インタラクティブモードUI
+
+```
+═══════════════════════════════════════════════════════════════
+  ⚠️  Plan Requires Human Intervention
+═══════════════════════════════════════════════════════════════
+
+Revision limit (3) exceeded. Quorum could not reach consensus.
+
+Request:
+  Update the README file
+
+Plan Objective:
+  Add installation instructions to README
+
+Tasks:
+  1. Read README.md
+  2. Append installation section
+
+Review History:
+  Rev 1: REJECTED [○●○]
+    └─ gpt-5.2-codex: Missing error handling
+  Rev 2: REJECTED [●○○]
+    └─ gemini-3-pro-preview: Unclear objective
+  Rev 3: REJECTED [○○●]
+    └─ claude-sonnet-4.5: Inconsistent approach
+
+Commands:
+  /approve  - Execute this plan as-is
+  /reject   - Abort the agent
+  /edit     - Edit plan manually (coming soon)
+
+agent-hil>
+```
+
+### Implementation / 実装
+
+#### HumanInterventionPort (application/ports)
+
+```rust
+#[async_trait]
+pub trait HumanInterventionPort: Send + Sync {
+    async fn request_intervention(
+        &self,
+        request: &str,
+        plan: &Plan,
+        review_history: &[ReviewRound],
+    ) -> Result<HumanDecision, HumanInterventionError>;
+}
+```
+
+#### HumanDecision (domain/agent)
+
+```rust
+pub enum HumanDecision {
+    Approve,        // Execute the current plan
+    Reject,         // Abort the agent
+    Edit(Plan),     // Use an edited plan (future)
+}
+```
+
+#### Built-in Implementations / 組み込み実装
+
+| Implementation | Description |
+|----------------|-------------|
+| `InteractiveHumanIntervention` | CLI対話UI（presentation層） |
+| `AutoRejectIntervention` | 常にRejectを返す（application層） |
+| `AutoApproveIntervention` | 常にApproveを返す（application層） |
+
+---
+
 ## Configuration / 設定
 
 ### AgentConfig
@@ -265,6 +384,14 @@ pub struct AgentConfig {
     /// Working directory for tools
     /// ツール実行の作業ディレクトリ
     pub working_dir: Option<String>,
+
+    /// Maximum plan revisions before human intervention
+    /// 人間介入までの最大計画修正回数
+    pub max_plan_revisions: usize,
+
+    /// Human-in-the-loop mode
+    /// 人間介入モード
+    pub hil_mode: HilMode,
 }
 ```
 
@@ -278,7 +405,23 @@ AgentConfig {
     require_final_review: false,
     max_iterations: 50,
     working_dir: None,
+    max_plan_revisions: 3,
+    hil_mode: HilMode::Interactive,
 }
+```
+
+### TOML Configuration / TOML設定
+
+```toml
+[agent]
+# Maximum plan revisions before human intervention (default: 3)
+max_plan_revisions = 3
+
+# Human-in-the-loop mode (default: interactive)
+# - interactive: Prompt user for decision
+# - auto_reject: Automatically abort
+# - auto_approve: Automatically approve (use with caution!)
+hil_mode = "interactive"
 ```
 
 ---
@@ -336,16 +479,12 @@ fn execute_internal(&self, call: &ToolCall) -> ToolResult {
 
 ## Future Enhancements / 今後の拡張予定
 
-### Phase 4: Presentation & UX
-
-- `ThoughtStream` - 思考過程のリアルタイム表示
-- `AgentProgressReporter` - 進捗バーとステータス表示
-- `AgentRepl` - `/agent` モード対応のREPL
-- CLI `--agent` フラグ
-
 ### Potential Extensions / 将来的な拡張案
 
-1. **Tool Chains** - 複数ツールの連携パターン
-2. **Memory** - 過去の実行結果の記憶
-3. **Rollback** - 変更の自動ロールバック機能
-4. **Sandbox** - 隔離環境でのプレビュー実行
+1. **GitHub Discussions Integration** - HiL時にDiscussionへ自動投稿
+2. **Plan Editing** - `/edit`コマンドで計画を手動編集
+3. **Tool Chains** - 複数ツールの連携パターン
+4. **Memory** - 過去の実行結果の記憶
+5. **Rollback** - 変更の自動ロールバック機能
+6. **Sandbox** - 隔離環境でのプレビュー実行
+7. **Web Search Tool** - 外部情報の検索

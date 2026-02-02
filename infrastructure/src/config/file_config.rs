@@ -3,7 +3,7 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
-use quorum_domain::OutputFormat;
+use quorum_domain::{HilMode, OutputFormat};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -90,6 +90,62 @@ impl Default for FileReplConfig {
     }
 }
 
+/// Raw agent configuration from TOML
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileAgentConfig {
+    /// Maximum plan revisions before human intervention
+    pub max_plan_revisions: usize,
+    /// Human-in-the-loop mode (interactive, auto_reject, auto_approve)
+    pub hil_mode: String,
+}
+
+impl Default for FileAgentConfig {
+    fn default() -> Self {
+        Self {
+            max_plan_revisions: 3,
+            hil_mode: "interactive".to_string(),
+        }
+    }
+}
+
+impl FileAgentConfig {
+    /// Parse hil_mode string into HilMode enum
+    pub fn parse_hil_mode(&self) -> HilMode {
+        HilMode::from_str(&self.hil_mode).unwrap_or_default()
+    }
+}
+
+/// Raw GitHub integration configuration from TOML
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileGitHubConfig {
+    /// Enable GitHub Discussions integration
+    pub enabled: bool,
+    /// Repository (owner/name) - auto-detected if not set
+    pub repo: Option<String>,
+    /// Discussion category for escalations
+    pub category: Option<String>,
+}
+
+impl Default for FileGitHubConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            repo: None,
+            category: None,
+        }
+    }
+}
+
+/// Raw integrations configuration from TOML
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileIntegrationsConfig {
+    /// GitHub integration settings
+    pub github: FileGitHubConfig,
+}
+
 /// Complete file configuration (raw TOML structure)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -102,6 +158,10 @@ pub struct FileConfig {
     pub output: FileOutputConfig,
     /// REPL settings
     pub repl: FileReplConfig,
+    /// Agent settings
+    pub agent: FileAgentConfig,
+    /// Integration settings
+    pub integrations: FileIntegrationsConfig,
 }
 
 impl FileConfig {

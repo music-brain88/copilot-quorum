@@ -15,7 +15,8 @@ pub mod tool;
 // Re-export commonly used types
 pub use agent::{
     entities::{
-        AgentConfig, AgentPhase, AgentState, ModelVote, Plan, ReviewRound, Task, TaskStatus,
+        AgentConfig, AgentPhase, AgentState, HilMode, HumanDecision, ModelVote, Plan, ReviewRound,
+        Task, TaskStatus,
     },
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
@@ -24,6 +25,7 @@ pub use context::{KnownContextFile, LoadedContextFile, ProjectContext};
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
     entities::{Phase, QuorumRun},
+    mode::OrchestrationMode,
     strategy::OrchestrationStrategy,
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };

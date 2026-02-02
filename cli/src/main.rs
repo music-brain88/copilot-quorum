@@ -10,7 +10,9 @@ use quorum_domain::{AgentConfig, Model, OutputFormat};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
 };
-use quorum_presentation::{AgentProgressReporter, AgentRepl, Cli, OutputConfig, ReplConfig};
+use quorum_presentation::{
+    AgentProgressReporter, AgentRepl, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig,
+};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -204,6 +206,11 @@ async fn main() -> Result<()> {
         agent_config = agent_config.with_skip_plan_review();
     }
 
+    // Apply HiL settings from config
+    agent_config = agent_config
+        .with_max_plan_revisions(config.agent.max_plan_revisions)
+        .with_hil_mode(config.agent.parse_hil_mode());
+
     // Print header
     if repl_config.show_progress {
         println!();
@@ -228,9 +235,13 @@ async fn main() -> Result<()> {
         println!();
     }
 
+    // Create human intervention handler for interactive mode
+    let human_intervention = Arc::new(InteractiveHumanIntervention::new());
+
     // Create and run agent with cancellation support
     let use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
-        .with_cancellation(cancellation_token.clone());
+        .with_cancellation(cancellation_token.clone())
+        .with_human_intervention(human_intervention);
     let input = RunAgentInput::new(request, agent_config);
 
     let result = if repl_config.show_progress {

@@ -9,11 +9,13 @@
 //! 5. Final Review - Quorum reviews results (optional)
 
 use crate::ports::context_loader::ContextLoaderPort;
+use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::{
-    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, Model, ModelVote, Plan,
-    ProjectContext, ReviewRound, Task, TaskId, Thought, ToolCall,
+    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, HilMode,
+    HumanDecision, Model, ModelVote, Plan, ProjectContext, ReviewRound, Task, TaskId, Thought,
+    ToolCall,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -45,6 +47,12 @@ pub enum RunAgentError {
 
     #[error("Max iterations exceeded")]
     MaxIterationsExceeded,
+
+    #[error("Plan revision limit exceeded, human rejected")]
+    HumanRejected,
+
+    #[error("Human intervention failed: {0}")]
+    HumanInterventionFailed(String),
 
     #[error("All quorum models failed")]
     QuorumFailed,
@@ -175,6 +183,16 @@ pub trait AgentProgressNotifier: Send + Sync {
         _feedback: Option<&str>,
     ) {
     }
+
+    /// Called when human intervention is required due to plan revision limit
+    fn on_human_intervention_required(
+        &self,
+        _request: &str,
+        _plan: &Plan,
+        _review_history: &[ReviewRound],
+        _max_revisions: usize,
+    ) {
+    }
 }
 
 /// No-op implementation for when progress isn't needed
@@ -234,6 +252,7 @@ pub struct RunAgentUseCase<
     tool_executor: Arc<T>,
     context_loader: Option<Arc<C>>,
     cancellation_token: Option<CancellationToken>,
+    human_intervention: Option<Arc<dyn HumanInterventionPort>>,
 }
 
 /// No-op context loader for backwards compatibility
@@ -262,6 +281,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
             tool_executor,
             context_loader: None,
             cancellation_token: None,
+            human_intervention: None,
         }
     }
 }
@@ -279,7 +299,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             tool_executor,
             context_loader: Some(context_loader),
             cancellation_token: None,
+            human_intervention: None,
         }
+    }
+
+    /// Set a human intervention handler for when plan revision limit is exceeded
+    pub fn with_human_intervention(
+        mut self,
+        intervention: Arc<dyn HumanInterventionPort>,
+    ) -> Self {
+        self.human_intervention = Some(intervention);
+        self
     }
 
     /// Set a cancellation token for graceful interruption
@@ -457,6 +487,42 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 .feedback
                 .unwrap_or_else(|| "No specific feedback".to_string());
             state.reject_plan(&feedback);
+
+            // Check plan revision limit for human intervention
+            let revision_count = state
+                .plan
+                .as_ref()
+                .map(|p| p.revision_count())
+                .unwrap_or(0);
+
+            if revision_count >= input.config.max_plan_revisions {
+                // Human intervention required
+                let decision = self
+                    .handle_human_intervention(&input, &state, progress)
+                    .await?;
+
+                match decision {
+                    HumanDecision::Approve => {
+                        info!("Human approved plan despite quorum rejection");
+                        state.approve_plan();
+                        state.add_thought(Thought::observation(
+                            "Plan approved by human intervention",
+                        ));
+                        break; // Exit loop and proceed to Phase 4
+                    }
+                    HumanDecision::Reject => {
+                        state.fail("Plan rejected by human");
+                        return Err(RunAgentError::HumanRejected);
+                    }
+                    HumanDecision::Edit(new_plan) => {
+                        info!("Human provided edited plan");
+                        state.plan = Some(new_plan);
+                        state.add_thought(Thought::observation("Plan edited by human"));
+                        // Continue to re-review the edited plan
+                        continue;
+                    }
+                }
+            }
 
             // Check iteration limit before retrying
             if !state.increment_iteration() {
@@ -985,6 +1051,57 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         Ok(outputs.join("\n---\n"))
+    }
+
+    /// Handle human intervention when plan revision limit is exceeded
+    async fn handle_human_intervention(
+        &self,
+        input: &RunAgentInput,
+        state: &AgentState,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<HumanDecision, RunAgentError> {
+        let plan = state
+            .plan
+            .as_ref()
+            .ok_or_else(|| RunAgentError::PlanningFailed("No plan available".to_string()))?;
+
+        let review_history = &plan.review_history;
+
+        // Notify that human intervention is required
+        progress.on_human_intervention_required(
+            &input.request,
+            plan,
+            review_history,
+            input.config.max_plan_revisions,
+        );
+
+        // Determine decision based on HiL mode
+        match input.config.hil_mode {
+            HilMode::AutoReject => {
+                info!("Auto-rejecting due to HilMode::AutoReject");
+                Ok(HumanDecision::Reject)
+            }
+            HilMode::AutoApprove => {
+                warn!("Auto-approving due to HilMode::AutoApprove - use with caution!");
+                Ok(HumanDecision::Approve)
+            }
+            HilMode::Interactive => {
+                // Use the human intervention port if available
+                if let Some(ref intervention) = self.human_intervention {
+                    intervention
+                        .request_intervention(&input.request, plan, review_history)
+                        .await
+                        .map_err(|e| match e {
+                            HumanInterventionError::Cancelled => RunAgentError::Cancelled,
+                            _ => RunAgentError::HumanInterventionFailed(e.to_string()),
+                        })
+                } else {
+                    // No intervention handler, fall back to auto_reject
+                    warn!("No human intervention handler configured, auto-rejecting");
+                    Ok(HumanDecision::Reject)
+                }
+            }
+        }
     }
 
     /// Check if a tool is high-risk (requires quorum review)
