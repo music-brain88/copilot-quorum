@@ -6,5 +6,7 @@
 pub mod entities;
 pub mod value_objects;
 
-pub use entities::{AgentConfig, AgentState, Plan, Task, TaskStatus};
+pub use entities::{
+    AgentConfig, AgentPhase, AgentState, ModelVote, Plan, ReviewRound, Task, TaskStatus,
+};
 pub use value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};

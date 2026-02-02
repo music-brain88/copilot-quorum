@@ -2,7 +2,7 @@
 
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use quorum_application::AgentProgressNotifier;
+use quorum_application::{AgentProgressNotifier, ErrorCategory};
 use quorum_domain::{AgentPhase, Model, Task, Thought};
 use std::sync::Mutex;
 
@@ -13,6 +13,7 @@ pub struct AgentProgressReporter {
     task_bar: Mutex<Option<ProgressBar>>,
     quorum_bar: Mutex<Option<ProgressBar>>,
     verbose: bool,
+    show_votes: bool,
 }
 
 impl AgentProgressReporter {
@@ -24,6 +25,7 @@ impl AgentProgressReporter {
             task_bar: Mutex::new(None),
             quorum_bar: Mutex::new(None),
             verbose: false,
+            show_votes: false,
         }
     }
 
@@ -35,6 +37,19 @@ impl AgentProgressReporter {
             task_bar: Mutex::new(None),
             quorum_bar: Mutex::new(None),
             verbose: true,
+            show_votes: false,
+        }
+    }
+
+    /// Create with custom options
+    pub fn with_options(verbose: bool, show_votes: bool) -> Self {
+        Self {
+            multi: MultiProgress::new(),
+            phase_bar: Mutex::new(None),
+            task_bar: Mutex::new(None),
+            quorum_bar: Mutex::new(None),
+            verbose,
+            show_votes,
         }
     }
 
@@ -206,6 +221,31 @@ impl AgentProgressNotifier for AgentProgressReporter {
         }
     }
 
+    fn on_tool_error(&self, tool_name: &str, category: ErrorCategory, message: &str) {
+        let emoji = category.emoji();
+        let desc = category.description();
+
+        // Always show errors, not just in verbose mode
+        println!(
+            "      {} {} {}: {}",
+            emoji,
+            tool_name.red(),
+            desc.red(),
+            truncate(message, 60).dimmed()
+        );
+    }
+
+    fn on_tool_retry(&self, tool_name: &str, attempt: usize, max_retries: usize, error: &str) {
+        println!(
+            "      {} {} {} ({}/{})",
+            "🔄".yellow(),
+            tool_name.yellow(),
+            format!("Retrying: {}", truncate(error, 40)).dimmed(),
+            attempt,
+            max_retries
+        );
+    }
+
     fn on_quorum_start(&self, phase: &str, model_count: usize) {
         let pb = self.multi.add(ProgressBar::new(model_count as u64));
         pb.set_style(Self::quorum_style());
@@ -254,6 +294,107 @@ impl AgentProgressNotifier for AgentProgressReporter {
                 }
             }
         }
+    }
+
+    fn on_quorum_complete_with_votes(
+        &self,
+        phase: &str,
+        approved: bool,
+        votes: &[(String, bool, String)],
+        feedback: Option<&str>,
+    ) {
+        if let Some(pb) = self.quorum_bar.lock().unwrap().take() {
+            // Build vote summary like [●●○]
+            let vote_summary: String = votes
+                .iter()
+                .map(|(_, approved, _)| if *approved { '●' } else { '○' })
+                .collect();
+            let approve_count = votes.iter().filter(|(_, a, _)| *a).count();
+            let total = votes.len();
+            let unanimous = approve_count == total || approve_count == 0;
+
+            let status = if approved {
+                "APPROVED".green().bold()
+            } else {
+                "REJECTED".red().bold()
+            };
+
+            let consensus = if unanimous {
+                "(unanimous)".dimmed()
+            } else {
+                "(majority)".dimmed()
+            };
+
+            pb.finish_with_message(format!(
+                "{} {} [{}] {}/{} {}",
+                phase, status, vote_summary, approve_count, total, consensus
+            ));
+        }
+
+        // Show individual votes in verbose or show_votes mode
+        if self.verbose || self.show_votes {
+            println!();
+            for (model, approved, reasoning) in votes {
+                let vote_icon = if *approved {
+                    "✓".green()
+                } else {
+                    "✗".red()
+                };
+                println!("      {} {}", vote_icon, model);
+                // Show reasoning snippet in show_votes mode
+                if self.show_votes && !reasoning.is_empty() {
+                    let snippet = truncate(reasoning, 80);
+                    println!("        {} {}", "└─".dimmed(), snippet.dimmed());
+                }
+            }
+        }
+
+        // Show feedback for rejections
+        if !approved {
+            if let Some(fb) = feedback {
+                println!();
+                println!("    {} Feedback:", "ℹ".yellow());
+                for line in fb.lines().take(20) {
+                    println!("      {}", line.yellow());
+                }
+                let total_lines = fb.lines().count();
+                if total_lines > 20 {
+                    println!(
+                        "      {} ...and {} more lines",
+                        "".dimmed(),
+                        total_lines - 20
+                    );
+                }
+            }
+        }
+    }
+
+    fn on_plan_revision(&self, revision: usize, feedback: &str) {
+        println!();
+        println!(
+            "    {} Plan rejected, starting revision #{}",
+            "🔄".yellow(),
+            revision
+        );
+        println!(
+            "      {} {}",
+            "Feedback:".dimmed(),
+            truncate(feedback, 60).yellow()
+        );
+    }
+
+    fn on_action_retry(&self, task: &Task, attempt: usize, feedback: &str) {
+        println!(
+            "    {} Action retry #{} for task: {}",
+            "🔄".yellow(),
+            attempt,
+            truncate(&task.description, 40)
+        );
+        println!(
+            "      {} {}",
+            "Feedback:".dimmed(),
+            truncate(feedback, 60).yellow()
+        );
     }
 }
 
@@ -309,6 +450,28 @@ impl AgentProgressNotifier for SimpleAgentProgress {
         }
     }
 
+    fn on_tool_error(&self, tool_name: &str, category: ErrorCategory, message: &str) {
+        let emoji = category.emoji();
+        let desc = category.description();
+        println!(
+            "    {} {} {}: {}",
+            emoji,
+            tool_name,
+            desc,
+            truncate(message, 60)
+        );
+    }
+
+    fn on_tool_retry(&self, tool_name: &str, attempt: usize, max_retries: usize, error: &str) {
+        println!(
+            "    🔄 {} Retrying ({}/{}): {}",
+            tool_name,
+            attempt,
+            max_retries,
+            truncate(error, 40)
+        );
+    }
+
     fn on_quorum_start(&self, phase: &str, model_count: usize) {
         println!("  🗳️  {} ({} models)", phase, model_count);
     }
@@ -339,6 +502,57 @@ impl AgentProgressNotifier for SimpleAgentProgress {
                 }
             }
         }
+    }
+
+    fn on_quorum_complete_with_votes(
+        &self,
+        phase: &str,
+        approved: bool,
+        votes: &[(String, bool, String)],
+        feedback: Option<&str>,
+    ) {
+        let vote_summary: String = votes
+            .iter()
+            .map(|(_, approved, _)| if *approved { '●' } else { '○' })
+            .collect();
+        let approve_count = votes.iter().filter(|(_, a, _)| *a).count();
+        let total = votes.len();
+
+        if approved {
+            println!(
+                "  ✓ {} APPROVED [{}] {}/{}",
+                phase, vote_summary, approve_count, total
+            );
+        } else {
+            println!(
+                "  ✗ {} REJECTED [{}] {}/{}",
+                phase, vote_summary, approve_count, total
+            );
+            if let Some(fb) = feedback {
+                println!("    Feedback:");
+                for line in fb.lines().take(20) {
+                    println!("      {}", line);
+                }
+                let total_lines = fb.lines().count();
+                if total_lines > 20 {
+                    println!("      ...and {} more lines", total_lines - 20);
+                }
+            }
+        }
+    }
+
+    fn on_plan_revision(&self, revision: usize, feedback: &str) {
+        println!("  🔄 Plan revision #{}", revision);
+        println!("    Feedback: {}", truncate(feedback, 60));
+    }
+
+    fn on_action_retry(&self, task: &Task, attempt: usize, feedback: &str) {
+        println!(
+            "  🔄 Action retry #{} for: {}",
+            attempt,
+            truncate(&task.description, 40)
+        );
+        println!("    Feedback: {}", truncate(feedback, 60));
     }
 }
 

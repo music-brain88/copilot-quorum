@@ -188,6 +188,87 @@ impl Task {
     }
 }
 
+/// A single model's vote in a quorum review
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelVote {
+    /// Model identifier
+    pub model: String,
+    /// Whether this model approved
+    pub approved: bool,
+    /// Reasoning/feedback from this model
+    pub reasoning: String,
+}
+
+impl ModelVote {
+    pub fn new(model: impl Into<String>, approved: bool, reasoning: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            approved,
+            reasoning: reasoning.into(),
+        }
+    }
+
+    /// Create an approval vote
+    pub fn approve(model: impl Into<String>, reasoning: impl Into<String>) -> Self {
+        Self::new(model, true, reasoning)
+    }
+
+    /// Create a rejection vote
+    pub fn reject(model: impl Into<String>, reasoning: impl Into<String>) -> Self {
+        Self::new(model, false, reasoning)
+    }
+}
+
+/// A record of a single review round in quorum voting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewRound {
+    /// Round number (1-indexed)
+    pub round: usize,
+    /// Whether this round resulted in approval
+    pub approved: bool,
+    /// Individual model votes
+    pub votes: Vec<ModelVote>,
+    /// Timestamp of this review
+    pub timestamp: u64,
+}
+
+impl ReviewRound {
+    pub fn new(round: usize, approved: bool, votes: Vec<ModelVote>) -> Self {
+        Self {
+            round,
+            approved,
+            votes,
+            timestamp: current_timestamp(),
+        }
+    }
+
+    /// Count of approving votes
+    pub fn approve_count(&self) -> usize {
+        self.votes.iter().filter(|v| v.approved).count()
+    }
+
+    /// Count of rejecting votes
+    pub fn reject_count(&self) -> usize {
+        self.votes.iter().filter(|v| !v.approved).count()
+    }
+
+    /// Whether this was a unanimous decision
+    pub fn is_unanimous(&self) -> bool {
+        let approve_count = self.approve_count();
+        approve_count == self.votes.len() || approve_count == 0
+    }
+
+    /// Generate a visual vote summary (e.g., "[●●○]")
+    pub fn vote_summary(&self) -> String {
+        let mut summary = String::from("[");
+        for vote in &self.votes {
+            summary.push(if vote.approved { '●' } else { '○' });
+        }
+        summary.push(']');
+        summary
+    }
+}
+
 /// A plan consisting of multiple tasks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
@@ -201,6 +282,8 @@ pub struct Plan {
     pub approved: bool,
     /// Feedback from plan review (if any)
     pub review_feedback: Option<String>,
+    /// History of review rounds
+    pub review_history: Vec<ReviewRound>,
 }
 
 impl Plan {
@@ -211,7 +294,18 @@ impl Plan {
             tasks: Vec::new(),
             approved: false,
             review_feedback: None,
+            review_history: Vec::new(),
         }
+    }
+
+    /// Add a review round to the history
+    pub fn add_review_round(&mut self, round: ReviewRound) {
+        self.review_history.push(round);
+    }
+
+    /// Get the number of revision attempts (rejected rounds)
+    pub fn revision_count(&self) -> usize {
+        self.review_history.iter().filter(|r| !r.approved).count()
     }
 
     pub fn with_task(mut self, task: Task) -> Self {
@@ -437,6 +531,16 @@ impl AgentState {
     pub fn is_finished(&self) -> bool {
         matches!(self.phase, AgentPhase::Completed | AgentPhase::Failed)
     }
+}
+
+/// Get current timestamp in milliseconds
+fn current_timestamp() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]

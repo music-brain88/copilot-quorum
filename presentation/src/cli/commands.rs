@@ -83,6 +83,10 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
+    /// Show detailed quorum vote information
+    #[arg(long)]
+    pub show_votes: bool,
+
     /// Suppress progress indicators
     #[arg(short, long)]
     pub quiet: bool,

@@ -536,31 +536,73 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     summary: output.summary.clone(),
                 });
 
+                // Print execution summary header
+                println!();
+                println!("{}", "═══════════════════════════════════════════".cyan());
+                println!("{}", "  Agent Execution Summary".bold().cyan());
+                println!("{}", "═══════════════════════════════════════════".cyan());
+                println!();
+
+                // Status
                 if output.success {
-                    println!(
-                        "{} {}",
-                        "✅".green(),
-                        "Agent completed successfully".green().bold()
-                    );
+                    println!("  {} {}", "Status:".bold(), "SUCCESS".green().bold());
                 } else {
-                    println!(
-                        "{} {}",
-                        "⚠️".yellow(),
-                        "Agent completed with issues".yellow().bold()
-                    );
+                    println!("  {} {}", "Status:".bold(), "FAILED".red().bold());
                 }
                 println!();
+
+                // Show Quorum Journey if there was any review history
+                if let Some(plan) = &output.state.plan {
+                    if !plan.review_history.is_empty() {
+                        println!("  {} Quorum Journey:", "🗳️".bold());
+                        for round in &plan.review_history {
+                            let status_icon = if round.approved { "✓" } else { "✗" };
+                            let status_color: fn(&str) -> colored::ColoredString = if round.approved
+                            {
+                                |s| s.green()
+                            } else {
+                                |s| s.red()
+                            };
+
+                            // Build vote details like [claude: ✓, gpt: ✗, gemini: ✓]
+                            let vote_details: Vec<String> = round
+                                .votes
+                                .iter()
+                                .map(|v| {
+                                    let icon = if v.approved { "✓" } else { "✗" };
+                                    format!("{}: {}", truncate_model_name(&v.model), icon)
+                                })
+                                .collect();
+
+                            println!(
+                                "    {} Rev {}: {} [{}]",
+                                status_color(status_icon),
+                                round.round,
+                                status_color(if round.approved {
+                                    "Approved"
+                                } else {
+                                    "Rejected"
+                                }),
+                                vote_details.join(", ")
+                            );
+                        }
+
+                        let revision_count = plan.revision_count();
+                        if revision_count > 0 {
+                            println!(
+                                "    {} Approved after {} revision(s)",
+                                "📝".dimmed(),
+                                revision_count
+                            );
+                        }
+                        println!();
+                    }
+                }
 
                 // Show task details with status
                 if let Some(plan) = &output.state.plan {
                     let (completed, total) = plan.progress();
-                    println!(
-                        "{} Completed {}/{} tasks.",
-                        "Summary:".bold(),
-                        completed,
-                        total
-                    );
-                    println!();
+                    println!("  {} {}/{} completed", "📋 Tasks:".bold(), completed, total);
 
                     for (i, task) in plan.tasks.iter().enumerate() {
                         let (icon, status_color): (&str, fn(&str) -> colored::ColoredString) =
@@ -572,7 +614,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             };
 
                         println!(
-                            "  {} Task {}: {}",
+                            "    {} Task {}: {}",
                             icon,
                             i + 1,
                             status_color(&task.description)
@@ -582,7 +624,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         if task.status == quorum_domain::TaskStatus::Failed {
                             if let Some(result) = &task.result {
                                 if let Some(error) = &result.error {
-                                    println!("     {} {}", "└─".dimmed(), error.red());
+                                    println!("       {} {}", "└─".dimmed(), error.red());
                                 }
                             }
                         }
@@ -592,6 +634,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     println!("{}", "Summary:".bold());
                     println!("{}", ConsoleFormatter::indent(&output.summary, "  "));
                 }
+
+                println!();
+                println!("{}", "═══════════════════════════════════════════".cyan());
 
                 // Show thought summary in verbose mode
                 if self.verbose && !output.state.thoughts.is_empty() {
@@ -618,4 +663,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 enum CommandResult {
     Continue,
     Exit,
+}
+
+/// Truncate model name for compact display (e.g., "claude-sonnet-4.5" -> "claude")
+fn truncate_model_name(model: &str) -> &str {
+    // Take the first part before any dash/underscore
+    model.split(['-', '_']).next().unwrap_or(model)
 }

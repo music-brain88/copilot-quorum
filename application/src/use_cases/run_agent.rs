@@ -12,8 +12,8 @@ use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::{
-    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, Model, Plan,
-    ProjectContext, Task, TaskId, Thought, ToolCall,
+    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, Model, ModelVote, Plan,
+    ProjectContext, ReviewRound, Task, TaskId, Thought, ToolCall,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -88,6 +88,46 @@ pub struct RunAgentOutput {
     pub success: bool,
 }
 
+/// Error category for display purposes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Tool doesn't exist (e.g., multi_tool_use.parallel)
+    UnknownTool,
+    /// Tool arguments are invalid
+    ValidationError,
+    /// Tool execution failed
+    ExecutionError,
+}
+
+impl ErrorCategory {
+    /// Get emoji for this error category
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            ErrorCategory::UnknownTool => "🔧",
+            ErrorCategory::ValidationError => "⚠️",
+            ErrorCategory::ExecutionError => "❌",
+        }
+    }
+
+    /// Get description for this error category
+    pub fn description(&self) -> &'static str {
+        match self {
+            ErrorCategory::UnknownTool => "Unknown tool requested",
+            ErrorCategory::ValidationError => "Invalid arguments",
+            ErrorCategory::ExecutionError => "Execution failed",
+        }
+    }
+
+    /// Determine category from error code
+    pub fn from_error_code(code: &str) -> Self {
+        match code {
+            "NOT_FOUND" => ErrorCategory::UnknownTool,
+            "INVALID_ARGUMENT" => ErrorCategory::ValidationError,
+            _ => ErrorCategory::ExecutionError,
+        }
+    }
+}
+
 /// Progress notifier specific to agent execution
 pub trait AgentProgressNotifier: Send + Sync {
     fn on_phase_change(&self, _phase: &AgentPhase) {}
@@ -97,10 +137,33 @@ pub trait AgentProgressNotifier: Send + Sync {
     fn on_tool_call(&self, _tool_name: &str, _args: &str) {}
     fn on_tool_result(&self, _tool_name: &str, _success: bool) {}
 
+    /// Called when a tool execution fails with details about the error
+    fn on_tool_error(&self, _tool_name: &str, _category: ErrorCategory, _message: &str) {}
+
+    /// Called when retrying a tool call after an error
+    fn on_tool_retry(&self, _tool_name: &str, _attempt: usize, _max_retries: usize, _error: &str) {}
+
+    // Plan revision callbacks
+    /// Called when a plan revision is triggered after rejection
+    fn on_plan_revision(&self, _revision: usize, _feedback: &str) {}
+
+    /// Called when an action is being retried after rejection
+    fn on_action_retry(&self, _task: &Task, _attempt: usize, _feedback: &str) {}
+
     // Quorum-related callbacks
     fn on_quorum_start(&self, _phase: &str, _model_count: usize) {}
     fn on_quorum_model_complete(&self, _model: &Model, _approved: bool) {}
     fn on_quorum_complete(&self, _phase: &str, _approved: bool, _feedback: Option<&str>) {}
+
+    /// Called when quorum voting completes with detailed vote information
+    fn on_quorum_complete_with_votes(
+        &self,
+        _phase: &str,
+        _approved: bool,
+        _votes: &[(String, bool, String)],
+        _feedback: Option<&str>,
+    ) {
+    }
 }
 
 /// No-op implementation for when progress isn't needed
@@ -295,6 +358,34 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             let plan_review = self.review_plan(&input, &state, progress).await?;
 
+            // Create review round for history
+            let review_round = {
+                let votes: Vec<ModelVote> = plan_review
+                    .votes
+                    .iter()
+                    .map(|(model, approved, feedback)| ModelVote::new(model, *approved, feedback))
+                    .collect();
+                let round_num = state
+                    .plan
+                    .as_ref()
+                    .map(|p| p.review_history.len() + 1)
+                    .unwrap_or(1);
+                ReviewRound::new(round_num, plan_review.approved, votes)
+            };
+
+            // Add review round to plan history
+            if let Some(plan) = &mut state.plan {
+                plan.add_review_round(review_round.clone());
+            }
+
+            // Notify with detailed vote information
+            progress.on_quorum_complete_with_votes(
+                "plan_review",
+                plan_review.approved,
+                &plan_review.votes,
+                plan_review.feedback.as_deref(),
+            );
+
             if plan_review.approved {
                 state.approve_plan();
                 state.add_thought(Thought::observation("Plan approved by quorum"));
@@ -319,6 +410,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     state,
                 });
             }
+
+            // Notify about plan revision
+            progress.on_plan_revision(state.iteration_count, &feedback);
 
             // Store feedback for next iteration and retry
             plan_feedback = Some(feedback.clone());
@@ -610,10 +704,59 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             }
 
-            // Execute the task
-            let task_result = self
-                .execute_single_task(session, input, state, &task_id, &previous_results, progress)
-                .await;
+            // Execute the task with action retry support
+            let max_action_retries = 2;
+            let mut action_attempts = 0;
+            let mut action_feedback: Option<String> = None;
+
+            let task_result = loop {
+                // Build context including any rejection feedback
+                let context_with_feedback = if let Some(ref feedback) = action_feedback {
+                    format!(
+                        "{}\n\n---\n[Previous action was rejected]\nFeedback: {}\nPlease try a different approach.",
+                        previous_results,
+                        feedback
+                    )
+                } else {
+                    previous_results.clone()
+                };
+
+                match self
+                    .execute_single_task(
+                        session,
+                        input,
+                        state,
+                        &task_id,
+                        &context_with_feedback,
+                        progress,
+                    )
+                    .await
+                {
+                    Err(RunAgentError::ActionRejected(feedback)) => {
+                        action_attempts += 1;
+                        if action_attempts >= max_action_retries {
+                            break Err(RunAgentError::ActionRejected(format!(
+                                "Action rejected after {} attempts. Last feedback: {}",
+                                action_attempts, feedback
+                            )));
+                        }
+
+                        // Get task for notification
+                        if let Some(plan) = state.plan.as_ref() {
+                            if let Some(task) = plan.tasks.iter().find(|t| t.id == task_id) {
+                                progress.on_action_retry(task, action_attempts, &feedback);
+                            }
+                        }
+
+                        info!(
+                            "Action rejected (attempt {}), retrying with feedback...",
+                            action_attempts
+                        );
+                        action_feedback = Some(feedback);
+                    }
+                    other => break other,
+                }
+            };
 
             // Update task status
             let (success, output) = match task_result {
@@ -788,12 +931,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
-    /// Execute a tool with retry on validation errors
+    /// Execute a tool with retry on retryable errors
     ///
-    /// If the tool execution fails with INVALID_ARGUMENT, this method will:
-    /// 1. Send the error back to the LLM with the tool_retry prompt
-    /// 2. Parse the corrected tool call from the response
-    /// 3. Retry execution up to max_tool_retries times
+    /// If the tool execution fails with a retryable error (INVALID_ARGUMENT, NOT_FOUND),
+    /// this method will:
+    /// 1. Notify progress of the retry attempt
+    /// 2. Send the error back to the LLM with the tool_retry prompt
+    /// 3. Parse the corrected tool call from the response
+    /// 4. Retry execution up to max_tool_retries times
     async fn execute_tool_with_retry(
         &self,
         session: &dyn LlmSession,
@@ -814,10 +959,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             progress.on_tool_result(&current_call.tool_name, result.is_success());
 
-            // If successful or not a validation error, return immediately
-            if result.is_success() || !is_validation_error(&result) {
+            // If successful or not a retryable error, return immediately
+            if result.is_success() || !is_retryable_error(&result) {
+                // Report non-retryable errors
+                if !result.is_success() {
+                    if let Some(err) = result.error() {
+                        let category = ErrorCategory::from_error_code(&err.code);
+                        progress.on_tool_error(&current_call.tool_name, category, &err.message);
+                    }
+                }
                 return result;
             }
+
+            // Get error info for retry
+            let (error_code, error_message) = result
+                .error()
+                .map(|e| (e.code.clone(), e.message.clone()))
+                .unwrap_or_else(|| ("UNKNOWN".to_string(), "Unknown error".to_string()));
+
+            let category = ErrorCategory::from_error_code(&error_code);
 
             // Check if we've exceeded retry limit
             attempts += 1;
@@ -826,17 +986,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     "Tool {} failed after {} retry attempts",
                     current_call.tool_name, attempts
                 );
+                progress.on_tool_error(&current_call.tool_name, category, &error_message);
                 return result;
             }
 
-            // Get error message for the retry prompt
-            let error_message = result
-                .error()
-                .map(|e| e.message.clone())
-                .unwrap_or_else(|| "Unknown validation error".to_string());
+            // Notify about retry attempt
+            progress.on_tool_retry(
+                &current_call.tool_name,
+                attempts,
+                max_retries,
+                &error_message,
+            );
 
             info!(
-                "Tool {} validation error (attempt {}): {}. Requesting corrected call from LLM.",
+                "Tool {} error (attempt {}): {}. Requesting corrected call from LLM.",
                 current_call.tool_name, attempts, error_message
             );
 
@@ -1127,11 +1290,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 }
 
-/// Check if a ToolResult error is a validation error that can be retried
-fn is_validation_error(result: &quorum_domain::ToolResult) -> bool {
+/// Check if a ToolResult error is retryable
+///
+/// Retryable errors include:
+/// - INVALID_ARGUMENT: The tool was called with invalid arguments
+/// - NOT_FOUND: The requested tool doesn't exist (e.g., multi_tool_use.parallel)
+fn is_retryable_error(result: &quorum_domain::ToolResult) -> bool {
     result
         .error()
-        .map(|e| e.code == "INVALID_ARGUMENT")
+        .map(|e| matches!(e.code.as_str(), "INVALID_ARGUMENT" | "NOT_FOUND"))
         .unwrap_or(false)
 }
 
