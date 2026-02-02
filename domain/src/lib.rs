@@ -18,6 +18,7 @@ pub use agent::{
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
 pub use config::OutputFormat;
+pub use context::{KnownContextFile, LoadedContextFile, ProjectContext};
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
     entities::{Phase, QuorumRun},
@@ -31,4 +32,3 @@ pub use tool::{
     traits::{DefaultToolValidator, ToolValidator},
     value_objects::{ToolError, ToolResult, ToolResultMetadata},
 };
-pub use context::{KnownContextFile, LoadedContextFile, ProjectContext};

@@ -291,7 +291,11 @@ impl LoadedContextFile {
     ///     "[package]\nname = \"my-crate\"",
     /// );
     /// ```
-    pub fn new(file_type: KnownContextFile, path: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn new(
+        file_type: KnownContextFile,
+        path: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         Self {
             file_type,
             path: path.into(),
@@ -354,7 +358,9 @@ mod tests {
 
     #[test]
     fn test_known_context_file_priority() {
-        assert!(KnownContextFile::QuorumContext.priority() < KnownContextFile::ClaudeMdLocal.priority());
+        assert!(
+            KnownContextFile::QuorumContext.priority() < KnownContextFile::ClaudeMdLocal.priority()
+        );
         assert!(KnownContextFile::ClaudeMdLocal.priority() < KnownContextFile::ReadmeMd.priority());
     }
 
@@ -370,7 +376,10 @@ mod tests {
     fn test_project_type() {
         assert_eq!(KnownContextFile::CargoToml.project_type(), Some("rust"));
         assert_eq!(KnownContextFile::PackageJson.project_type(), Some("nodejs"));
-        assert_eq!(KnownContextFile::PyprojectToml.project_type(), Some("python"));
+        assert_eq!(
+            KnownContextFile::PyprojectToml.project_type(),
+            Some("python")
+        );
         assert_eq!(KnownContextFile::ReadmeMd.project_type(), None);
     }
 

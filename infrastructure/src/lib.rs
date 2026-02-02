@@ -13,6 +13,7 @@ pub use config::{
     ConfigLoader, ConfigValidationError, FileConfig, FileCouncilConfig, FileOutputConfig,
     FileOutputFormat, FileReplConfig,
 };
+pub use context::LocalContextLoader;
 pub use copilot::{
     error::{CopilotError, Result},
     gateway::CopilotLlmGateway,
@@ -20,4 +21,3 @@ pub use copilot::{
     transport::StdioTransport,
 };
 pub use tools::{default_tool_spec, read_only_tool_spec, LocalToolExecutor};
-pub use context::LocalContextLoader;

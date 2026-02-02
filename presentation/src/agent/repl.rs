@@ -25,7 +25,11 @@ struct HistoryEntry {
 }
 
 /// Interactive REPL for agent mode
-pub struct AgentRepl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> {
+pub struct AgentRepl<
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+> {
     gateway: Arc<G>,
     use_case: RunAgentUseCase<G, T, C>,
     context_loader: Arc<C>,
@@ -37,7 +41,9 @@ pub struct AgentRepl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: 
     conversation_history: Vec<HistoryEntry>,
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> AgentRepl<G, T, C> {
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
+    AgentRepl<G, T, C>
+{
     /// Create a new AgentRepl with context loader
     pub fn new(
         gateway: Arc<G>,
@@ -402,15 +408,18 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     async fn run_init_context(&self, args: &str) {
         let force = args.contains("--force") || args.contains("-f");
 
-        let working_dir = self
-            .working_dir
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir()
+        let working_dir = self.working_dir.clone().unwrap_or_else(|| {
+            std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string()));
+                .unwrap_or_else(|_| ".".to_string())
+        });
 
         // Check if context file already exists
-        if !force && self.context_loader.context_file_exists(Path::new(&working_dir)) {
+        if !force
+            && self
+                .context_loader
+                .context_file_exists(Path::new(&working_dir))
+        {
             println!();
             println!(
                 "{} Context file already exists at {}",
@@ -429,7 +438,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             "Context Initialization".bold().magenta()
         );
         println!();
-        println!("Analyzing project with {} models...", self.quorum_models.len());
+        println!(
+            "Analyzing project with {} models...",
+            self.quorum_models.len()
+        );
         println!();
 
         // Create the init context input
@@ -481,7 +493,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
             Err(e) => {
                 println!();
-                println!("{} {}", "❌".red(), "Context initialization failed".red().bold());
+                println!(
+                    "{} {}",
+                    "❌".red(),
+                    "Context initialization failed".red().bold()
+                );
                 println!();
                 println!("{} {}", "Error:".red().bold(), e);
             }

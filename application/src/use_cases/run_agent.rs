@@ -151,7 +151,11 @@ impl QuorumReviewResult {
 }
 
 /// Use case for running an autonomous agent
-pub struct RunAgentUseCase<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static = NoContextLoader> {
+pub struct RunAgentUseCase<
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static = NoContextLoader,
+> {
     gateway: Arc<G>,
     tool_executor: Arc<T>,
     context_loader: Option<Arc<C>>,
@@ -174,7 +178,9 @@ impl ContextLoaderPort for NoContextLoader {
     }
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, T, NoContextLoader> {
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
+    RunAgentUseCase<G, T, NoContextLoader>
+{
     pub fn new(gateway: Arc<G>, tool_executor: Arc<T>) -> Self {
         Self {
             gateway,
@@ -184,8 +190,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAgentUseCase<G, 
     }
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> RunAgentUseCase<G, T, C> {
-    pub fn with_context_loader(gateway: Arc<G>, tool_executor: Arc<T>, context_loader: Arc<C>) -> Self {
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
+    RunAgentUseCase<G, T, C>
+{
+    pub fn with_context_loader(
+        gateway: Arc<G>,
+        tool_executor: Arc<T>,
+        context_loader: Arc<C>,
+    ) -> Self {
         Self {
             gateway,
             tool_executor,
@@ -431,7 +443,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Convert ProjectContext to AgentContext
-    fn context_from_project_ctx(&self, project_ctx: ProjectContext, config: &AgentConfig) -> AgentContext {
+    fn context_from_project_ctx(
+        &self,
+        project_ctx: ProjectContext,
+        config: &AgentConfig,
+    ) -> AgentContext {
         let mut context = AgentContext::new();
 
         if let Some(ref working_dir) = config.working_dir {
@@ -452,7 +468,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Merge ProjectContext into existing AgentContext
-    fn merge_project_context(&self, mut context: AgentContext, project_ctx: &ProjectContext) -> AgentContext {
+    fn merge_project_context(
+        &self,
+        mut context: AgentContext,
+        project_ctx: &ProjectContext,
+    ) -> AgentContext {
         if let Some(ref project_type) = project_ctx.project_type {
             context = context.with_project_type(project_type);
         }

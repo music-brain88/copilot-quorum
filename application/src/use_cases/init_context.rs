@@ -303,8 +303,12 @@ impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase
     /// # Errors
     ///
     /// See [`InitContextError`] for possible error conditions.
-    pub async fn execute(&self, input: InitContextInput) -> Result<InitContextOutput, InitContextError> {
-        self.execute_with_progress(input, &NoInitContextProgress).await
+    pub async fn execute(
+        &self,
+        input: InitContextInput,
+    ) -> Result<InitContextOutput, InitContextError> {
+        self.execute_with_progress(input, &NoInitContextProgress)
+            .await
     }
 
     /// Executes the context initialization with progress notifications.
@@ -363,7 +367,10 @@ impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase
             .join("\n\n");
 
         // Query all models in parallel for analysis
-        info!("Starting project analysis with {} models", input.models.len());
+        info!(
+            "Starting project analysis with {} models",
+            input.models.len()
+        );
         progress.on_analysis_start(input.models.len());
 
         let analysis_prompt = AgentPromptTemplate::context_analysis(&project_files_text);
@@ -407,7 +414,11 @@ impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase
 
         // Synthesize the analyses using the moderator
         progress.on_synthesis_start();
-        info!("Synthesizing {} analyses with moderator {}", analyses.len(), input.moderator);
+        info!(
+            "Synthesizing {} analyses with moderator {}",
+            analyses.len(),
+            input.moderator
+        );
 
         let date = chrono_lite_date();
         let synthesis_prompt = AgentPromptTemplate::context_synthesis(&analyses, &date);
@@ -424,7 +435,8 @@ impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase
             .map_err(|e| InitContextError::SynthesisFailed(e.to_string()))?;
 
         // Write the context file
-        self.context_loader.write_context_file(project_root, &content)?;
+        self.context_loader
+            .write_context_file(project_root, &content)?;
 
         let path = self
             .context_loader
@@ -452,11 +464,7 @@ impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase
     /// # Returns
     ///
     /// The model's analysis response, or an error.
-    async fn query_model(
-        gateway: &G,
-        model: &Model,
-        prompt: &str,
-    ) -> Result<String, GatewayError> {
+    async fn query_model(gateway: &G, model: &Model, prompt: &str) -> Result<String, GatewayError> {
         let session = gateway.create_session(model).await?;
         session.send(prompt).await
     }
