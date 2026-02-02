@@ -396,6 +396,24 @@ impl AgentProgressNotifier for AgentProgressReporter {
             truncate(feedback, 60).yellow()
         );
     }
+
+    fn on_human_intervention_required(
+        &self,
+        _request: &str,
+        _plan: &quorum_domain::Plan,
+        _review_history: &[quorum_domain::ReviewRound],
+        max_revisions: usize,
+    ) {
+        // Finish current spinner before showing intervention prompt
+        self.finish_current_phase();
+
+        println!();
+        println!(
+            "    {} Plan revision limit ({}) exceeded - human intervention required",
+            "⚠️".yellow(),
+            max_revisions
+        );
+    }
 }
 
 /// Simple text-based progress (no spinners)

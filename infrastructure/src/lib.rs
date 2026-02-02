@@ -10,8 +10,8 @@ pub mod tools;
 
 // Re-export commonly used types
 pub use config::{
-    ConfigLoader, ConfigValidationError, FileConfig, FileCouncilConfig, FileOutputConfig,
-    FileOutputFormat, FileReplConfig,
+    ConfigLoader, ConfigValidationError, FileAgentConfig, FileConfig, FileCouncilConfig,
+    FileGitHubConfig, FileIntegrationsConfig, FileOutputConfig, FileOutputFormat, FileReplConfig,
 };
 pub use context::LocalContextLoader;
 pub use copilot::{

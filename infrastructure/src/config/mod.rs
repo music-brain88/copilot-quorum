@@ -13,7 +13,7 @@ mod file_config;
 mod loader;
 
 pub use file_config::{
-    ConfigValidationError, FileConfig, FileCouncilConfig, FileOutputConfig, FileOutputFormat,
-    FileReplConfig,
+    ConfigValidationError, FileAgentConfig, FileConfig, FileCouncilConfig, FileGitHubConfig,
+    FileIntegrationsConfig, FileOutputConfig, FileOutputFormat, FileReplConfig,
 };
 pub use loader::ConfigLoader;
