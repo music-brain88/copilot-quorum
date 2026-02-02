@@ -83,7 +83,7 @@ pub fn execute_read_file(call: &ToolCall) -> ToolResult {
             return ToolResult::failure(
                 READ_FILE,
                 ToolError::execution_failed(format!("Failed to get file metadata: {}", e)),
-            )
+            );
         }
     };
 
@@ -164,33 +164,28 @@ pub fn execute_write_file(call: &ToolCall) -> ToolResult {
 
     // Create parent directories if requested
     let create_dirs = call.get_bool("create_dirs").unwrap_or(false);
-    if create_dirs {
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    return ToolResult::failure(
-                        WRITE_FILE,
-                        ToolError::execution_failed(format!(
-                            "Failed to create parent directories: {}",
-                            e
-                        )),
-                    );
-                }
-            }
-        }
+    if create_dirs
+        && let Some(parent) = path.parent()
+        && !parent.exists()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return ToolResult::failure(
+            WRITE_FILE,
+            ToolError::execution_failed(format!("Failed to create parent directories: {}", e)),
+        );
     }
 
     // Check if parent directory exists
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            return ToolResult::failure(
-                WRITE_FILE,
-                ToolError::not_found(format!(
-                    "Parent directory does not exist: {}",
-                    parent.display()
-                )),
-            );
-        }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
+        return ToolResult::failure(
+            WRITE_FILE,
+            ToolError::not_found(format!(
+                "Parent directory does not exist: {}",
+                parent.display()
+            )),
+        );
     }
 
     // Write the file

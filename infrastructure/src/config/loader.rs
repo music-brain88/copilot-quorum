@@ -2,8 +2,8 @@
 
 use super::file_config::FileConfig;
 use figment::{
-    providers::{Format, Serialized, Toml},
     Figment,
+    providers::{Format, Serialized, Toml},
 };
 use std::path::PathBuf;
 
@@ -23,10 +23,10 @@ impl ConfigLoader {
         let mut figment = Figment::new().merge(Serialized::defaults(FileConfig::default()));
 
         // Add global config (XDG or fallback)
-        if let Some(global_path) = Self::global_config_path() {
-            if global_path.exists() {
-                figment = figment.merge(Toml::file(&global_path).nested());
-            }
+        if let Some(global_path) = Self::global_config_path()
+            && global_path.exists()
+        {
+            figment = figment.merge(Toml::file(&global_path).nested());
         }
 
         // Add project-level config files (check both names)

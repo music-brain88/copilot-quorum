@@ -19,7 +19,7 @@ pub use progress::reporter::{ProgressReporter, SimpleProgress};
 pub use agent::human_intervention::InteractiveHumanIntervention;
 pub use agent::progress::{AgentProgressReporter, SimpleAgentProgress};
 pub use agent::repl::AgentRepl;
-pub use agent::thought::{format_thoughts, summarize_thoughts, ThoughtStream};
+pub use agent::thought::{ThoughtStream, format_thoughts, summarize_thoughts};
 
 // Re-export OutputFormat from domain layer
 pub use quorum_domain::OutputFormat;

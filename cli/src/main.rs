@@ -3,7 +3,7 @@
 //! This is the main binary that wires together all layers using
 //! dependency injection. Config conversion logic is centralized here.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::Parser;
 use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase};
 use quorum_domain::{AgentConfig, Model, OutputFormat};
