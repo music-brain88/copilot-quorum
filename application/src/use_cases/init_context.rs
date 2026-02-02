@@ -1,5 +1,7 @@
 //! Initialize context use case
 //!
+//! Uses [`quorum_domain::core::string::truncate`] for UTF-8 safe truncation.
+//!
 //! This module provides the [`InitContextUseCase`] for generating a project
 //! context file using quorum-based analysis. Multiple AI models analyze the
 //! project in parallel, and a moderator synthesizes their analyses into a
@@ -47,6 +49,7 @@
 
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway};
+use quorum_domain::core::string::truncate;
 use quorum_domain::{AgentPromptTemplate, Model};
 use std::path::Path;
 use std::sync::Arc;
@@ -489,22 +492,6 @@ fn chrono_lite_date() -> String {
     let day = remaining_days % 30 + 1;
 
     format!("{}-{:02}-{:02}", 1970 + years, months + 1, day)
-}
-
-/// Truncates a string to a maximum length, preserving UTF-8 boundaries.
-///
-/// If the string exceeds `max_len`, it is truncated and "..." is appended.
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        let target = max_len.saturating_sub(3);
-        let mut end = target.min(s.len());
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
-    }
 }
 
 #[cfg(test)]
