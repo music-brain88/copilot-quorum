@@ -22,18 +22,22 @@ impl fmt::Display for OrchestrationMode {
     }
 }
 
-impl OrchestrationMode {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for OrchestrationMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "agent" | "a" => Some(OrchestrationMode::Agent),
-            "quorum" | "q" => Some(OrchestrationMode::Quorum),
-            "fast" | "f" => Some(OrchestrationMode::Fast),
-            "debate" | "d" => Some(OrchestrationMode::Debate),
-            "plan" | "p" => Some(OrchestrationMode::Plan),
-            _ => None,
+            "agent" | "a" => Ok(OrchestrationMode::Agent),
+            "quorum" | "q" => Ok(OrchestrationMode::Quorum),
+            "fast" | "f" => Ok(OrchestrationMode::Fast),
+            "debate" | "d" => Ok(OrchestrationMode::Debate),
+            "plan" | "p" => Ok(OrchestrationMode::Plan),
+            _ => Err(format!("Invalid OrchestrationMode: {}", s)),
         }
     }
+}
 
+impl OrchestrationMode {
     pub fn description(&self) -> &'static str {
         match self {
             OrchestrationMode::Agent => "Autonomous task execution (Plan -> Review -> Execute)",
@@ -58,17 +62,17 @@ mod tests {
     #[test]
     fn test_from_str() {
         assert_eq!(
-            OrchestrationMode::from_str("agent"),
+            "agent".parse::<OrchestrationMode>().ok(),
             Some(OrchestrationMode::Agent)
         );
         assert_eq!(
-            OrchestrationMode::from_str("a"),
+            "a".parse::<OrchestrationMode>().ok(),
             Some(OrchestrationMode::Agent)
         );
         assert_eq!(
-            OrchestrationMode::from_str("Quorum"),
+            "Quorum".parse::<OrchestrationMode>().ok(),
             Some(OrchestrationMode::Quorum)
         );
-        assert_eq!(OrchestrationMode::from_str("unknown"), None);
+        assert!("unknown".parse::<OrchestrationMode>().is_err());
     }
 }

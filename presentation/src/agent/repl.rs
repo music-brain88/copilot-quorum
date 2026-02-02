@@ -306,7 +306,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     return CommandResult::Continue;
                 }
 
-                if let Some(mode) = OrchestrationMode::from_str(args) {
+                if let Ok(mode) = args.parse::<OrchestrationMode>() {
                     self.current_mode = mode;
                     println!(
                         "Mode changed to: {} ({})",

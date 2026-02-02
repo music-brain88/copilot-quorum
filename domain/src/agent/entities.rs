@@ -41,7 +41,7 @@ use std::collections::HashMap;
 /// ```
 /// use quorum_domain::HilMode;
 ///
-/// let mode = HilMode::from_str("interactive").unwrap();
+/// let mode: HilMode = "interactive".parse().unwrap();
 /// assert_eq!(mode, HilMode::Interactive);
 /// assert_eq!(mode.as_str(), "interactive");
 /// ```
@@ -79,18 +79,23 @@ impl HilMode {
         }
     }
 
+}
+
+impl std::str::FromStr for HilMode {
+    type Err = String;
+
     /// Parses a string into a HilMode.
     ///
     /// Accepts lowercase variants with or without underscores:
     /// - "interactive"
     /// - "auto_reject" or "autoreject"
     /// - "auto_approve" or "autoapprove"
-    pub fn from_str(s: &str) -> Option<Self> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "interactive" => Some(HilMode::Interactive),
-            "auto_reject" | "autoreject" => Some(HilMode::AutoReject),
-            "auto_approve" | "autoapprove" => Some(HilMode::AutoApprove),
-            _ => None,
+            "interactive" => Ok(HilMode::Interactive),
+            "auto_reject" | "autoreject" => Ok(HilMode::AutoReject),
+            "auto_approve" | "autoapprove" => Ok(HilMode::AutoApprove),
+            _ => Err(format!("Invalid HilMode: {}", s)),
         }
     }
 }
@@ -787,10 +792,10 @@ mod tests {
         assert_eq!(HilMode::AutoReject.as_str(), "auto_reject");
         assert_eq!(HilMode::AutoApprove.as_str(), "auto_approve");
 
-        assert_eq!(HilMode::from_str("interactive"), Some(HilMode::Interactive));
-        assert_eq!(HilMode::from_str("auto_reject"), Some(HilMode::AutoReject));
-        assert_eq!(HilMode::from_str("autoapprove"), Some(HilMode::AutoApprove));
-        assert_eq!(HilMode::from_str("invalid"), None);
+        assert_eq!("interactive".parse::<HilMode>().ok(), Some(HilMode::Interactive));
+        assert_eq!("auto_reject".parse::<HilMode>().ok(), Some(HilMode::AutoReject));
+        assert_eq!("autoapprove".parse::<HilMode>().ok(), Some(HilMode::AutoApprove));
+        assert!("invalid".parse::<HilMode>().is_err());
     }
 
     #[test]

@@ -112,12 +112,12 @@ impl Default for FileAgentConfig {
 impl FileAgentConfig {
     /// Parse hil_mode string into HilMode enum
     pub fn parse_hil_mode(&self) -> HilMode {
-        HilMode::from_str(&self.hil_mode).unwrap_or_default()
+        self.hil_mode.parse().unwrap_or_default()
     }
 }
 
 /// Raw GitHub integration configuration from TOML
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileGitHubConfig {
     /// Enable GitHub Discussions integration
@@ -126,16 +126,6 @@ pub struct FileGitHubConfig {
     pub repo: Option<String>,
     /// Discussion category for escalations
     pub category: Option<String>,
-}
-
-impl Default for FileGitHubConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            repo: None,
-            category: None,
-        }
-    }
 }
 
 /// Raw integrations configuration from TOML
