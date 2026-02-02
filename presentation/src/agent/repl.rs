@@ -644,50 +644,50 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
                 // Show Quorum Journey if there was any review history
                 if let Some(plan) = &output.state.plan
-                    && !plan.review_history.is_empty() {
-                        println!("  {} Quorum Journey:", "🗳️".bold());
-                        for round in &plan.review_history {
-                            let status_icon = if round.approved { "✓" } else { "✗" };
-                            let status_color: fn(&str) -> colored::ColoredString = if round.approved
-                            {
-                                |s| s.green()
+                    && !plan.review_history.is_empty()
+                {
+                    println!("  {} Quorum Journey:", "🗳️".bold());
+                    for round in &plan.review_history {
+                        let status_icon = if round.approved { "✓" } else { "✗" };
+                        let status_color: fn(&str) -> colored::ColoredString = if round.approved {
+                            |s| s.green()
+                        } else {
+                            |s| s.red()
+                        };
+
+                        // Build vote details like [claude: ✓, gpt: ✗, gemini: ✓]
+                        let vote_details: Vec<String> = round
+                            .votes
+                            .iter()
+                            .map(|v| {
+                                let icon = if v.approved { "✓" } else { "✗" };
+                                format!("{}: {}", truncate_model_name(&v.model), icon)
+                            })
+                            .collect();
+
+                        println!(
+                            "    {} Rev {}: {} [{}]",
+                            status_color(status_icon),
+                            round.round,
+                            status_color(if round.approved {
+                                "Approved"
                             } else {
-                                |s| s.red()
-                            };
-
-                            // Build vote details like [claude: ✓, gpt: ✗, gemini: ✓]
-                            let vote_details: Vec<String> = round
-                                .votes
-                                .iter()
-                                .map(|v| {
-                                    let icon = if v.approved { "✓" } else { "✗" };
-                                    format!("{}: {}", truncate_model_name(&v.model), icon)
-                                })
-                                .collect();
-
-                            println!(
-                                "    {} Rev {}: {} [{}]",
-                                status_color(status_icon),
-                                round.round,
-                                status_color(if round.approved {
-                                    "Approved"
-                                } else {
-                                    "Rejected"
-                                }),
-                                vote_details.join(", ")
-                            );
-                        }
-
-                        let revision_count = plan.revision_count();
-                        if revision_count > 0 {
-                            println!(
-                                "    {} Approved after {} revision(s)",
-                                "📝".dimmed(),
-                                revision_count
-                            );
-                        }
-                        println!();
+                                "Rejected"
+                            }),
+                            vote_details.join(", ")
+                        );
                     }
+
+                    let revision_count = plan.revision_count();
+                    if revision_count > 0 {
+                        println!(
+                            "    {} Approved after {} revision(s)",
+                            "📝".dimmed(),
+                            revision_count
+                        );
+                    }
+                    println!();
+                }
 
                 // Show task details with status
                 if let Some(plan) = &output.state.plan {
@@ -713,9 +713,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         // Show failure reason if task failed
                         if task.status == quorum_domain::TaskStatus::Failed
                             && let Some(result) = &task.result
-                                && let Some(error) = &result.error {
-                                    println!("       {} {}", "└─".dimmed(), error.red());
-                                }
+                            && let Some(error) = &result.error
+                        {
+                            println!("       {} {}", "└─".dimmed(), error.red());
+                        }
                     }
                 } else {
                     // Fallback to old summary if no plan

@@ -166,28 +166,27 @@ pub fn execute_write_file(call: &ToolCall) -> ToolResult {
     let create_dirs = call.get_bool("create_dirs").unwrap_or(false);
     if create_dirs
         && let Some(parent) = path.parent()
-            && !parent.exists()
-                && let Err(e) = fs::create_dir_all(parent) {
-                    return ToolResult::failure(
-                        WRITE_FILE,
-                        ToolError::execution_failed(format!(
-                            "Failed to create parent directories: {}",
-                            e
-                        )),
-                    );
-                }
+        && !parent.exists()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return ToolResult::failure(
+            WRITE_FILE,
+            ToolError::execution_failed(format!("Failed to create parent directories: {}", e)),
+        );
+    }
 
     // Check if parent directory exists
     if let Some(parent) = path.parent()
-        && !parent.exists() {
-            return ToolResult::failure(
-                WRITE_FILE,
-                ToolError::not_found(format!(
-                    "Parent directory does not exist: {}",
-                    parent.display()
-                )),
-            );
-        }
+        && !parent.exists()
+    {
+        return ToolResult::failure(
+            WRITE_FILE,
+            ToolError::not_found(format!(
+                "Parent directory does not exist: {}",
+                parent.display()
+            )),
+        );
+    }
 
     // Write the file
     let bytes = content.len();

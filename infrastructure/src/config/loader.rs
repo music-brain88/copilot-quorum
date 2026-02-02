@@ -24,9 +24,10 @@ impl ConfigLoader {
 
         // Add global config (XDG or fallback)
         if let Some(global_path) = Self::global_config_path()
-            && global_path.exists() {
-                figment = figment.merge(Toml::file(&global_path).nested());
-            }
+            && global_path.exists()
+        {
+            figment = figment.merge(Toml::file(&global_path).nested());
+        }
 
         // Add project-level config files (check both names)
         for filename in &["quorum.toml", ".quorum.toml"] {

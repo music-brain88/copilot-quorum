@@ -203,19 +203,16 @@ impl LocalContextLoader {
             for entry in entries {
                 if let Some(ext) = entry.extension()
                     && ext == "md"
-                        && let Ok(content) = fs::read_to_string(&entry)
-                            && !content.trim().is_empty() {
-                                if !all_content.is_empty() {
-                                    all_content.push_str("\n\n---\n\n");
-                                }
-                                let relative = entry.strip_prefix(project_root).unwrap_or(&entry);
-                                all_content.push_str(&format!(
-                                    "## {}\n\n{}",
-                                    relative.display(),
-                                    content
-                                ));
-                                loaded_count += 1;
-                            }
+                    && let Ok(content) = fs::read_to_string(&entry)
+                    && !content.trim().is_empty()
+                {
+                    if !all_content.is_empty() {
+                        all_content.push_str("\n\n---\n\n");
+                    }
+                    let relative = entry.strip_prefix(project_root).unwrap_or(&entry);
+                    all_content.push_str(&format!("## {}\n\n{}", relative.display(), content));
+                    loaded_count += 1;
+                }
             }
         }
 
