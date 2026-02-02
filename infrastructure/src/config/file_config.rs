@@ -21,7 +21,7 @@ pub enum ConfigValidationError {
 }
 
 /// Raw council configuration from TOML
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileCouncilConfig {
     /// Model names as strings
@@ -29,15 +29,6 @@ pub struct FileCouncilConfig {
     /// Moderator model for synthesis
     #[serde(default)]
     pub moderator: Model,
-}
-
-impl Default for FileCouncilConfig {
-    fn default() -> Self {
-        Self {
-            models: Vec::new(),
-            moderator: Model::default(),
-        }
-    }
 }
 
 /// Raw behavior configuration from TOML
