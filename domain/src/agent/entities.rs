@@ -1,9 +1,140 @@
-//! Agent domain entities
+//! Agent domain entities.
+//!
+//! This module contains the core entities for the autonomous agent system:
+//!
+//! - [`AgentState`] - Tracks the complete state of an agent execution
+//! - [`AgentConfig`] - Configuration for agent behavior including HiL settings
+//! - [`Plan`] - A plan consisting of tasks to execute
+//! - [`Task`] - A single unit of work within a plan
+//! - [`HilMode`] - Human-in-the-loop mode for handling plan revision limits
+//! - [`HumanDecision`] - User's decision when intervention is required
+//!
+//! # Human-in-the-Loop (HiL)
+//!
+//! When quorum cannot reach consensus after `max_plan_revisions` attempts,
+//! the agent behavior is determined by [`HilMode`]:
+//!
+//! - `Interactive` - Prompt user via `HumanInterventionPort` (application layer)
+//! - `AutoReject` - Automatically abort the agent
+//! - `AutoApprove` - Automatically approve (use with caution!)
 
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
 use crate::core::model::Model;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Human-in-the-loop mode for handling plan revision limits.
+///
+/// When quorum review repeatedly rejects a plan (exceeding `max_plan_revisions`),
+/// this mode determines what action to take.
+///
+/// # Configuration
+///
+/// Set via `quorum.toml`:
+/// ```toml
+/// [agent]
+/// hil_mode = "interactive"  # or "auto_reject", "auto_approve"
+/// ```
+///
+/// # Examples
+///
+/// ```
+/// use quorum_domain::HilMode;
+///
+/// let mode: HilMode = "interactive".parse().unwrap();
+/// assert_eq!(mode, HilMode::Interactive);
+/// assert_eq!(mode.as_str(), "interactive");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum HilMode {
+    /// Prompt user for decision (default).
+    ///
+    /// When plan revision limit is exceeded, the agent will call
+    /// `HumanInterventionPort::request_intervention()` to get user input.
+    /// The user can choose to approve, reject, or edit the plan.
+    #[default]
+    Interactive,
+
+    /// Automatically reject/abort if revision limit exceeded.
+    ///
+    /// This is the safest non-interactive mode. The agent will return
+    /// `RunAgentError::HumanRejected` when the limit is reached.
+    AutoReject,
+
+    /// Automatically approve last plan (risky - use with caution!).
+    ///
+    /// **Warning**: This bypasses quorum consensus and may execute
+    /// a plan that multiple models rejected. Only use in controlled
+    /// environments or when you're confident the rejections are false positives.
+    AutoApprove,
+}
+
+impl HilMode {
+    /// Returns the string representation of this mode.
+    pub fn as_str(&self) -> &str {
+        match self {
+            HilMode::Interactive => "interactive",
+            HilMode::AutoReject => "auto_reject",
+            HilMode::AutoApprove => "auto_approve",
+        }
+    }
+}
+
+impl std::str::FromStr for HilMode {
+    type Err = String;
+
+    /// Parses a string into a HilMode.
+    ///
+    /// Accepts lowercase variants with or without underscores:
+    /// - "interactive"
+    /// - "auto_reject" or "autoreject"
+    /// - "auto_approve" or "autoapprove"
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "interactive" => Ok(HilMode::Interactive),
+            "auto_reject" | "autoreject" => Ok(HilMode::AutoReject),
+            "auto_approve" | "autoapprove" => Ok(HilMode::AutoApprove),
+            _ => Err(format!("Invalid HilMode: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for HilMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Human decision when plan revision limit is exceeded.
+///
+/// This enum represents the possible actions a user can take when
+/// the agent requires human intervention due to repeated plan rejections.
+///
+/// # See Also
+///
+/// - `HumanInterventionPort` (in application layer)
+/// - [`HilMode::Interactive`]
+#[derive(Debug, Clone)]
+pub enum HumanDecision {
+    /// Approve the current plan and execute.
+    ///
+    /// The agent will proceed with executing the plan despite
+    /// quorum rejection. Use when you believe the rejections
+    /// are false positives.
+    Approve,
+
+    /// Reject and abort the agent.
+    ///
+    /// The agent will return `RunAgentError::HumanRejected`.
+    /// Use when the plan is fundamentally flawed.
+    Reject,
+
+    /// Edit the plan manually (provides new plan).
+    ///
+    /// **Note**: This variant is reserved for future implementation.
+    /// Currently, the UI will prompt users to use `/approve` or `/reject`.
+    Edit(Plan),
+}
 
 /// Phase of agent execution
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -372,6 +503,10 @@ pub struct AgentConfig {
     pub working_dir: Option<String>,
     /// Maximum number of retries for tool validation errors
     pub max_tool_retries: usize,
+    /// Maximum number of plan revisions before human intervention
+    pub max_plan_revisions: usize,
+    /// Human-in-the-loop mode for handling revision limits
+    pub hil_mode: HilMode,
 }
 
 impl Default for AgentConfig {
@@ -384,6 +519,8 @@ impl Default for AgentConfig {
             max_iterations: 50,
             working_dir: None,
             max_tool_retries: 2,
+            max_plan_revisions: 3,
+            hil_mode: HilMode::Interactive,
         }
     }
 }
@@ -425,6 +562,18 @@ impl AgentConfig {
     /// Set maximum tool retries for validation errors
     pub fn with_max_tool_retries(mut self, max: usize) -> Self {
         self.max_tool_retries = max;
+        self
+    }
+
+    /// Set maximum plan revisions before human intervention
+    pub fn with_max_plan_revisions(mut self, max: usize) -> Self {
+        self.max_plan_revisions = max;
+        self
+    }
+
+    /// Set human-in-the-loop mode
+    pub fn with_hil_mode(mut self, mode: HilMode) -> Self {
+        self.hil_mode = mode;
         self
     }
 }
@@ -634,5 +783,61 @@ mod tests {
         assert!(state.increment_iteration()); // 2
         assert!(state.increment_iteration()); // 3
         assert!(!state.increment_iteration()); // 4 - exceeds limit
+    }
+
+    #[test]
+    fn test_hil_mode() {
+        assert_eq!(HilMode::Interactive.as_str(), "interactive");
+        assert_eq!(HilMode::AutoReject.as_str(), "auto_reject");
+        assert_eq!(HilMode::AutoApprove.as_str(), "auto_approve");
+
+        assert_eq!(
+            "interactive".parse::<HilMode>().ok(),
+            Some(HilMode::Interactive)
+        );
+        assert_eq!(
+            "auto_reject".parse::<HilMode>().ok(),
+            Some(HilMode::AutoReject)
+        );
+        assert_eq!(
+            "autoapprove".parse::<HilMode>().ok(),
+            Some(HilMode::AutoApprove)
+        );
+        assert!("invalid".parse::<HilMode>().is_err());
+    }
+
+    #[test]
+    fn test_agent_config_hil_defaults() {
+        let config = AgentConfig::default();
+        assert_eq!(config.max_plan_revisions, 3);
+        assert_eq!(config.hil_mode, HilMode::Interactive);
+    }
+
+    #[test]
+    fn test_agent_config_hil_builders() {
+        let config = AgentConfig::default()
+            .with_max_plan_revisions(5)
+            .with_hil_mode(HilMode::AutoReject);
+
+        assert_eq!(config.max_plan_revisions, 5);
+        assert_eq!(config.hil_mode, HilMode::AutoReject);
+    }
+
+    #[test]
+    fn test_plan_revision_count() {
+        let mut plan = Plan::new("Test", "Reasoning");
+        assert_eq!(plan.revision_count(), 0);
+
+        // Add rejected round
+        plan.add_review_round(ReviewRound::new(1, false, vec![]));
+        assert_eq!(plan.revision_count(), 1);
+
+        // Add approved round
+        plan.add_review_round(ReviewRound::new(2, true, vec![]));
+        assert_eq!(plan.revision_count(), 1); // Still 1, approved doesn't count
+
+        // Add another rejected round
+        plan.add_review_round(ReviewRound::new(3, false, vec![]));
+        assert_eq!(plan.revision_count(), 2);
     }
 }
