@@ -1,6 +1,7 @@
 //! REPL (Read-Eval-Print Loop) for agent mode
 
 use crate::ConsoleFormatter;
+use crate::agent::human_intervention::InteractiveHumanIntervention;
 use crate::agent::progress::AgentProgressReporter;
 use crate::agent::thought::summarize_thoughts;
 use crate::progress::reporter::ProgressReporter;
@@ -58,13 +59,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         context_loader: Arc<C>,
         primary_model: Model,
     ) -> Self {
+        // Set up human intervention handler for HiL (Human-in-the-Loop)
+        let human_intervention = Arc::new(InteractiveHumanIntervention::new());
+
         Self {
             gateway: gateway.clone(),
             use_case: RunAgentUseCase::with_context_loader(
                 gateway,
                 tool_executor,
                 context_loader.clone(),
-            ),
+            )
+            .with_human_intervention(human_intervention),
             context_loader,
             config: AgentConfig::new(primary_model),
             quorum_models: Model::default_models(),

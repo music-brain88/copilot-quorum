@@ -12,6 +12,7 @@ use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
+use quorum_domain::core::string::truncate;
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, HilMode, HumanDecision,
     Model, ModelVote, Plan, ProjectContext, ReviewRound, Task, TaskId, Thought, ToolCall,
@@ -485,7 +486,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             state.reject_plan(&feedback);
 
             // Check plan revision limit for human intervention
-            let revision_count = state.plan.as_ref().map(|p| p.revision_count()).unwrap_or(0);
+            // Note: We use state.plan_revision_count instead of plan.revision_count()
+            // because the Plan is recreated on each revision attempt, losing history.
+            let revision_count = state.plan_revision_count;
 
             if revision_count >= input.config.max_plan_revisions {
                 // Human intervention required
@@ -1685,21 +1688,6 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
     }
 
     Some(plan)
-}
-
-/// Truncate a string to a maximum length (char-aware for UTF-8)
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        // Find a valid char boundary at or before (max_len - 3)
-        let target = max_len.saturating_sub(3);
-        let mut end = target.min(s.len());
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
-    }
 }
 
 /// Generate a simple timestamp-based ID

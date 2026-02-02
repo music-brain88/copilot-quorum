@@ -1,5 +1,7 @@
 //! Entities for context management
 //!
+//! Uses [`crate::core::string::truncate`] for UTF-8 safe truncation.
+//!
 //! This module provides the `ProjectContext` entity which aggregates
 //! context information from multiple sources into a unified view.
 //!
@@ -37,6 +39,7 @@
 //! ```
 
 use super::value_objects::{KnownContextFile, LoadedContextFile};
+use crate::core::string::truncate;
 
 /// Aggregated project context from multiple sources.
 ///
@@ -294,27 +297,6 @@ impl ProjectContext {
         } else {
             parts.join("\n\n")
         }
-    }
-}
-
-/// Truncates a string to a maximum length, preserving UTF-8 boundaries.
-///
-/// If the string exceeds `max_len`, it is truncated and "..." is appended.
-///
-/// # Arguments
-///
-/// * `s` - The string to truncate
-/// * `max_len` - Maximum length in bytes (including the "..." suffix)
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        let target = max_len.saturating_sub(3);
-        let mut end = target.min(s.len());
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
     }
 }
 

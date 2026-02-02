@@ -3,6 +3,7 @@
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use quorum_application::{AgentProgressNotifier, ErrorCategory};
+use quorum_domain::core::string::truncate;
 use quorum_domain::{AgentPhase, Model, Task, Thought};
 use std::sync::Mutex;
 
@@ -567,20 +568,5 @@ impl AgentProgressNotifier for SimpleAgentProgress {
             truncate(&task.description, 40)
         );
         println!("    Feedback: {}", truncate(feedback, 60));
-    }
-}
-
-/// Truncate a string to a maximum length (char-aware for UTF-8)
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        // Find a valid char boundary at or before (max_len - 3)
-        let target = max_len.saturating_sub(3);
-        let mut end = target.min(s.len());
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
     }
 }
