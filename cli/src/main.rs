@@ -7,7 +7,9 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase};
 use quorum_domain::{AgentConfig, Model, OutputFormat};
-use quorum_infrastructure::{ConfigLoader, CopilotLlmGateway, FileConfig, LocalToolExecutor};
+use quorum_infrastructure::{
+    ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
+};
 use quorum_presentation::{AgentProgressReporter, AgentRepl, Cli, OutputConfig, ReplConfig};
 use std::sync::Arc;
 use tracing::info;
@@ -115,6 +117,9 @@ async fn main() -> Result<()> {
     }
     let tool_executor = Arc::new(tool_executor);
 
+    // Create context loader
+    let context_loader = Arc::new(LocalContextLoader::new());
+
     // Parse models for agent mode
     // First model is primary, rest are quorum reviewers
     let (primary_model, quorum_models) = if models.len() > 1 {
@@ -134,9 +139,14 @@ async fn main() -> Result<()> {
 
     // No question provided -> Start Agent REPL (default)
     if cli.question.is_none() {
-        let mut repl = AgentRepl::new(gateway.clone(), tool_executor, primary_model)
-            .with_quorum_models(effective_quorum_models)
-            .with_verbose(cli.verbose > 0);
+        let mut repl = AgentRepl::new(
+            gateway.clone(),
+            tool_executor,
+            context_loader.clone(),
+            primary_model,
+        )
+        .with_quorum_models(effective_quorum_models)
+        .with_verbose(cli.verbose > 0);
 
         if let Some(dir) = working_dir {
             repl = repl.with_working_dir(dir);
@@ -194,7 +204,7 @@ async fn main() -> Result<()> {
     }
 
     // Create and run agent
-    let use_case = RunAgentUseCase::new(gateway, tool_executor);
+    let use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader);
     let input = RunAgentInput::new(request, agent_config);
 
     let result = if repl_config.show_progress {

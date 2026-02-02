@@ -10,7 +10,12 @@ pub mod use_cases;
 // Re-export commonly used types
 pub use config::BehaviorConfig;
 pub use ports::{
-    llm_gateway::LlmGateway, progress::ProgressNotifier, tool_executor::ToolExecutorPort,
+    context_loader::ContextLoaderPort, llm_gateway::LlmGateway, progress::ProgressNotifier,
+    tool_executor::ToolExecutorPort,
+};
+pub use use_cases::init_context::{
+    InitContextError, InitContextInput, InitContextOutput, InitContextProgressNotifier,
+    InitContextUseCase, NoInitContextProgress,
 };
 pub use use_cases::run_agent::{
     AgentProgressNotifier, NoAgentProgress, RunAgentError, RunAgentInput, RunAgentOutput,

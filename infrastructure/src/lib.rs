@@ -4,6 +4,7 @@
 //! in the application layer, including configuration file loading.
 
 pub mod config;
+pub mod context;
 pub mod copilot;
 pub mod tools;
 
@@ -12,6 +13,7 @@ pub use config::{
     ConfigLoader, ConfigValidationError, FileConfig, FileCouncilConfig, FileOutputConfig,
     FileOutputFormat, FileReplConfig,
 };
+pub use context::LocalContextLoader;
 pub use copilot::{
     error::{CopilotError, Result},
     gateway::CopilotLlmGateway,
