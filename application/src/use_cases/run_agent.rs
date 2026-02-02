@@ -837,8 +837,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 let context_with_feedback = if let Some(ref feedback) = action_feedback {
                     format!(
                         "{}\n\n---\n[Previous action was rejected]\nFeedback: {}\nPlease try a different approach.",
-                        previous_results,
-                        feedback
+                        previous_results, feedback
                     )
                 } else {
                     previous_results.clone()

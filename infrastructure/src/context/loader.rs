@@ -367,15 +367,21 @@ mod tests {
         let files = loader.load_known_files(root);
 
         assert!(files.len() >= 3);
-        assert!(files
-            .iter()
-            .any(|f| f.file_type == KnownContextFile::ClaudeMdLocal));
-        assert!(files
-            .iter()
-            .any(|f| f.file_type == KnownContextFile::ReadmeMd));
-        assert!(files
-            .iter()
-            .any(|f| f.file_type == KnownContextFile::CargoToml));
+        assert!(
+            files
+                .iter()
+                .any(|f| f.file_type == KnownContextFile::ClaudeMdLocal)
+        );
+        assert!(
+            files
+                .iter()
+                .any(|f| f.file_type == KnownContextFile::ReadmeMd)
+        );
+        assert!(
+            files
+                .iter()
+                .any(|f| f.file_type == KnownContextFile::CargoToml)
+        );
     }
 
     #[test]
@@ -398,9 +404,11 @@ mod tests {
 
         // Can be loaded
         let files = loader.load_known_files(root);
-        assert!(files
-            .iter()
-            .any(|f| f.file_type == KnownContextFile::QuorumContext));
+        assert!(
+            files
+                .iter()
+                .any(|f| f.file_type == KnownContextFile::QuorumContext)
+        );
     }
 
     #[test]
@@ -415,9 +423,11 @@ mod tests {
         let files = loader.load_known_files(root);
 
         // Empty file should be skipped
-        assert!(files
-            .iter()
-            .all(|f| f.file_type != KnownContextFile::ClaudeMdLocal));
+        assert!(
+            files
+                .iter()
+                .all(|f| f.file_type != KnownContextFile::ClaudeMdLocal)
+        );
     }
 
     #[test]

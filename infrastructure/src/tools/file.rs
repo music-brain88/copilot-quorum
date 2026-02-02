@@ -83,7 +83,7 @@ pub fn execute_read_file(call: &ToolCall) -> ToolResult {
             return ToolResult::failure(
                 READ_FILE,
                 ToolError::execution_failed(format!("Failed to get file metadata: {}", e)),
-            )
+            );
         }
     };
 

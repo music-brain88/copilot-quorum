@@ -60,7 +60,7 @@ impl LocalToolExecutor {
                 return ToolResult::failure(
                     &call.tool_name,
                     ToolError::not_found(format!("Unknown tool: {}", call.tool_name)),
-                )
+                );
             }
         };
 
@@ -129,7 +129,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
-    use tempfile::{tempdir, NamedTempFile};
+    use tempfile::{NamedTempFile, tempdir};
 
     #[test]
     fn test_executor_has_all_tools() {

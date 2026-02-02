@@ -2,8 +2,8 @@
 
 use super::file_config::FileConfig;
 use figment::{
-    providers::{Format, Serialized, Toml},
     Figment,
+    providers::{Format, Serialized, Toml},
 };
 use std::path::PathBuf;
 

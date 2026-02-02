@@ -1,9 +1,9 @@
 //! REPL (Read-Eval-Print Loop) for agent mode
 
+use crate::ConsoleFormatter;
 use crate::agent::progress::AgentProgressReporter;
 use crate::agent::thought::summarize_thoughts;
 use crate::progress::reporter::ProgressReporter;
-use crate::ConsoleFormatter;
 use colored::Colorize;
 use quorum_application::{
     ContextLoaderPort, InitContextInput, InitContextUseCase, LlmGateway, RunAgentInput,
@@ -269,7 +269,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!();
                 println!("{}", "Commands:".bold());
                 println!("  /help, /h, /?        - Show this help");
-                println!("  /mode <mode>         - Change orchestration mode (agent, quorum, fast, debate, plan)");
+                println!(
+                    "  /mode <mode>         - Change orchestration mode (agent, quorum, fast, debate, plan)"
+                );
                 println!("  /council <question>  - Consult quorum (multiple models)");
                 println!("  /init [--force]      - Initialize project context (quorum)");
                 println!("  /config              - Show current configuration");
