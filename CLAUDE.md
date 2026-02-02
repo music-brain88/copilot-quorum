@@ -19,6 +19,25 @@ RUST_LOG=debug cargo run -p copilot-quorum -- "Your question"
 
 # Run in chat mode
 cargo run -p copilot-quorum -- --chat -m claude-haiku-4.5
+
+# Initialize project context (generates .quorum/context.md)
+cargo run -p copilot-quorum -- /init
+```
+
+## Configuration
+
+Project-level config: `quorum.toml` (or `~/.config/copilot-quorum/config.toml` for global)
+
+```toml
+[council]
+models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+moderator = "claude-opus-4.5"
+
+[behavior]
+enable_review = true
+
+[output]
+format = "synthesis"  # "full", "synthesis", or "json"
 ```
 
 ## Architecture
@@ -65,6 +84,7 @@ domain/src/
 ├── tool/           # ToolDefinition, ToolCall, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
 ├── session/        # Message, LlmSessionRepository
+├── context/        # ProjectContext, KnownContextFile (/init用)
 └── config/         # OutputFormat
 ```
 
@@ -76,6 +96,7 @@ domain/src/
 - New model: Add variant to `domain/src/core/model.rs` Model enum
 - New tool: Add to `infrastructure/tools/`, register in `default_tool_spec()`
 - New agent capability: Extend `domain/agent/` and `RunAgentUseCase`
+- New context file type: Add to `domain/context/` KnownContextFile enum
 
 ### Vertical Slicing Principle
 
@@ -89,88 +110,18 @@ presentation/new_feature/   → UI components
 
 ## Agent System
 
-### Overview
+The agent system extends quorum to autonomous task execution with safety through multi-model consensus.
 
-The agent system extends the quorum concept to autonomous task execution. It maintains quorum-based review at critical points while allowing single-model execution for routine tasks.
+**Flow**: Context Gathering → Planning → Quorum Plan Review → Task Execution → (Optional) Final Review
 
-### Agent Flow
+**Tools**: `read_file`, `write_file`, `run_command`, `glob_search`, `grep_search`
+- Low-risk (read-only): Direct execution
+- High-risk (write/command): Requires quorum review before execution
 
-```
-User Request
-    │
-    ▼
-┌───────────────────┐
-│ Context Gathering │  ← Project info collection (glob, read_file)
-└───────────────────┘
-    │
-    ▼
-┌───────────────────┐
-│     Planning      │  ← Single model creates task plan
-└───────────────────┘
-    │
-    ▼
-┌───────────────────┐
-│ 🗳️ QUORUM #1     │  ← All models review the plan (REQUIRED)
-│   Plan Review     │     Majority vote to approve/reject
-└───────────────────┘
-    │
-    ▼
-┌───────────────────┐
-│  Task Execution   │
-│   ├─ Low-risk  ────▶ Direct execution
-│   │
-│   └─ High-risk ────▶ 🗳️ QUORUM #2 (Action Review)
-│                        Review before write_file, run_command
-└───────────────────┘
-    │
-    ▼
-┌───────────────────┐
-│ 🗳️ QUORUM #3     │  ← Optional final review
-│  Final Review     │     (require_final_review: true)
-└───────────────────┘
-```
+**Key Components**:
+- `domain/agent/`: AgentState, Plan, Task, AgentConfig
+- `domain/tool/`: ToolDefinition, ToolCall, ToolResult, RiskLevel
+- `application/use_cases/run_agent.rs`: RunAgentUseCase orchestrates the flow
+- `infrastructure/tools/`: LocalToolExecutor implements ToolExecutorPort
 
-### Available Tools
-
-| Tool | Description | Risk Level |
-|------|-------------|------------|
-| `read_file` | Read file contents | Low |
-| `write_file` | Write/create file | High (quorum review) |
-| `run_command` | Execute shell command | High (quorum review) |
-| `glob_search` | Find files by pattern | Low |
-| `grep_search` | Search file contents | Low |
-
-### Key Types
-
-**Agent Domain (`domain/agent/`)**
-- `AgentState` - Current state of agent execution
-- `AgentConfig` - Configuration (primary model, quorum models, etc.)
-- `Plan` - Task plan with objective and reasoning
-- `Task` - Single task with tool call and dependencies
-- `AgentContext` - Gathered project context
-- `Thought` - Agent reasoning record
-
-**Tool Domain (`domain/tool/`)**
-- `ToolDefinition` - Tool metadata (name, params, risk level)
-- `ToolCall` - Tool invocation with arguments
-- `ToolResult` - Execution result (success/failure, output)
-- `ToolSpec` - Registry of available tools
-- `RiskLevel` - Low (read-only) or High (modifying)
-
-**Application Layer**
-- `RunAgentUseCase` - Orchestrates the full agent flow
-- `ToolExecutorPort` - Abstract tool execution interface
-- `AgentProgressNotifier` - Progress callbacks for agent phases
-
-**Infrastructure Layer**
-- `LocalToolExecutor` - Implements ToolExecutorPort for local machine
-
-### Quorum Review
-
-The quorum system ensures safety through multi-model consensus:
-
-1. **Plan Review (Required)**: All configured quorum models review the proposed plan
-2. **Action Review (High-risk ops)**: Reviews `write_file` and `run_command` before execution
-3. **Final Review (Optional)**: Reviews overall execution results
-
-Approval requires majority vote. Rejected plans/actions include aggregated feedback.
+詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照。
