@@ -208,11 +208,7 @@ async fn main() -> Result<()> {
     let input = RunAgentInput::new(request, agent_config);
 
     let result = if repl_config.show_progress {
-        let progress = if cli.verbose > 0 {
-            AgentProgressReporter::verbose()
-        } else {
-            AgentProgressReporter::new()
-        };
+        let progress = AgentProgressReporter::with_options(cli.verbose > 0, cli.show_votes);
         use_case.execute_with_progress(input, &progress).await?
     } else {
         use_case.execute(input).await?
