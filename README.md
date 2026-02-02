@@ -1,6 +1,6 @@
 # Copilot Quorum
 
-[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 > Multiple LLMs discuss and reach consensus on your questions.
@@ -70,7 +70,7 @@ cargo install --path cli
 
 ### Requirements / 必要なもの
 
-- [Rust](https://www.rust-lang.org/) 1.75+
+- [Rust](https://www.rust-lang.org/) 1.85+ (Edition 2024)
 - GitHub Copilot CLI (`copilot` command)
 - Active Copilot subscription
 

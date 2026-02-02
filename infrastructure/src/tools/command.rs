@@ -94,7 +94,7 @@ pub fn execute_run_command(call: &ToolCall) -> ToolResult {
             return ToolResult::failure(
                 RUN_COMMAND,
                 ToolError::execution_failed(format!("Failed to spawn command: {}", e)),
-            )
+            );
         }
     };
 
@@ -108,7 +108,7 @@ pub fn execute_run_command(call: &ToolCall) -> ToolResult {
                     "Command timed out after {} seconds: {}",
                     timeout_secs, e
                 )),
-            )
+            );
         }
     };
 

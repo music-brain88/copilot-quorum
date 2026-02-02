@@ -20,4 +20,4 @@ pub use copilot::{
     session::CopilotSession,
     transport::StdioTransport,
 };
-pub use tools::{default_tool_spec, read_only_tool_spec, LocalToolExecutor};
+pub use tools::{LocalToolExecutor, default_tool_spec, read_only_tool_spec};

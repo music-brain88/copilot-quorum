@@ -117,7 +117,7 @@ pub fn execute_glob_search(call: &ToolCall) -> ToolResult {
             return ToolResult::failure(
                 GLOB_SEARCH,
                 ToolError::invalid_argument(format!("Invalid glob pattern: {}", e)),
-            )
+            );
         }
     };
 
@@ -200,7 +200,7 @@ pub fn execute_grep_search(call: &ToolCall) -> ToolResult {
             return ToolResult::failure(
                 GREP_SEARCH,
                 ToolError::invalid_argument(format!("Invalid regex pattern: {}", e)),
-            )
+            );
         }
     };
 
@@ -220,10 +220,10 @@ pub fn execute_grep_search(call: &ToolCall) -> ToolResult {
         }
 
         // Check file size
-        if let Ok(metadata) = fs::metadata(&file_path) {
-            if metadata.len() > MAX_GREP_FILE_SIZE {
-                continue;
-            }
+        if let Ok(metadata) = fs::metadata(&file_path)
+            && metadata.len() > MAX_GREP_FILE_SIZE
+        {
+            continue;
         }
 
         // Read and search file
@@ -307,7 +307,7 @@ fn collect_files(dir: &Path, file_pattern: Option<&str>) -> Vec<std::path::PathB
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::{tempdir, NamedTempFile};
+    use tempfile::{NamedTempFile, tempdir};
 
     #[test]
     fn test_glob_search_basic() {

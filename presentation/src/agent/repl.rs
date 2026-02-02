@@ -1,9 +1,9 @@
 //! REPL (Read-Eval-Print Loop) for agent mode
 
+use crate::ConsoleFormatter;
 use crate::agent::progress::AgentProgressReporter;
 use crate::agent::thought::summarize_thoughts;
 use crate::progress::reporter::ProgressReporter;
-use crate::ConsoleFormatter;
 use colored::Colorize;
 use quorum_application::{
     ContextLoaderPort, InitContextInput, InitContextUseCase, LlmGateway, RunAgentInput,
@@ -269,7 +269,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!();
                 println!("{}", "Commands:".bold());
                 println!("  /help, /h, /?        - Show this help");
-                println!("  /mode <mode>         - Change orchestration mode (agent, quorum, fast, debate, plan)");
+                println!(
+                    "  /mode <mode>         - Change orchestration mode (agent, quorum, fast, debate, plan)"
+                );
                 println!("  /council <question>  - Consult quorum (multiple models)");
                 println!("  /init [--force]      - Initialize project context (quorum)");
                 println!("  /config              - Show current configuration");
@@ -641,51 +643,50 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!();
 
                 // Show Quorum Journey if there was any review history
-                if let Some(plan) = &output.state.plan {
-                    if !plan.review_history.is_empty() {
-                        println!("  {} Quorum Journey:", "🗳️".bold());
-                        for round in &plan.review_history {
-                            let status_icon = if round.approved { "✓" } else { "✗" };
-                            let status_color: fn(&str) -> colored::ColoredString = if round.approved
-                            {
-                                |s| s.green()
+                if let Some(plan) = &output.state.plan
+                    && !plan.review_history.is_empty()
+                {
+                    println!("  {} Quorum Journey:", "🗳️".bold());
+                    for round in &plan.review_history {
+                        let status_icon = if round.approved { "✓" } else { "✗" };
+                        let status_color: fn(&str) -> colored::ColoredString = if round.approved {
+                            |s| s.green()
+                        } else {
+                            |s| s.red()
+                        };
+
+                        // Build vote details like [claude: ✓, gpt: ✗, gemini: ✓]
+                        let vote_details: Vec<String> = round
+                            .votes
+                            .iter()
+                            .map(|v| {
+                                let icon = if v.approved { "✓" } else { "✗" };
+                                format!("{}: {}", truncate_model_name(&v.model), icon)
+                            })
+                            .collect();
+
+                        println!(
+                            "    {} Rev {}: {} [{}]",
+                            status_color(status_icon),
+                            round.round,
+                            status_color(if round.approved {
+                                "Approved"
                             } else {
-                                |s| s.red()
-                            };
-
-                            // Build vote details like [claude: ✓, gpt: ✗, gemini: ✓]
-                            let vote_details: Vec<String> = round
-                                .votes
-                                .iter()
-                                .map(|v| {
-                                    let icon = if v.approved { "✓" } else { "✗" };
-                                    format!("{}: {}", truncate_model_name(&v.model), icon)
-                                })
-                                .collect();
-
-                            println!(
-                                "    {} Rev {}: {} [{}]",
-                                status_color(status_icon),
-                                round.round,
-                                status_color(if round.approved {
-                                    "Approved"
-                                } else {
-                                    "Rejected"
-                                }),
-                                vote_details.join(", ")
-                            );
-                        }
-
-                        let revision_count = plan.revision_count();
-                        if revision_count > 0 {
-                            println!(
-                                "    {} Approved after {} revision(s)",
-                                "📝".dimmed(),
-                                revision_count
-                            );
-                        }
-                        println!();
+                                "Rejected"
+                            }),
+                            vote_details.join(", ")
+                        );
                     }
+
+                    let revision_count = plan.revision_count();
+                    if revision_count > 0 {
+                        println!(
+                            "    {} Approved after {} revision(s)",
+                            "📝".dimmed(),
+                            revision_count
+                        );
+                    }
+                    println!();
                 }
 
                 // Show task details with status
@@ -710,12 +711,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         );
 
                         // Show failure reason if task failed
-                        if task.status == quorum_domain::TaskStatus::Failed {
-                            if let Some(result) = &task.result {
-                                if let Some(error) = &result.error {
-                                    println!("       {} {}", "└─".dimmed(), error.red());
-                                }
-                            }
+                        if task.status == quorum_domain::TaskStatus::Failed
+                            && let Some(result) = &task.result
+                            && let Some(error) = &result.error
+                        {
+                            println!("       {} {}", "└─".dimmed(), error.red());
                         }
                     }
                 } else {

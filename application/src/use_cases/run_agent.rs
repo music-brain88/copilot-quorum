@@ -316,10 +316,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Check if cancellation has been requested
     fn check_cancelled(&self) -> Result<(), RunAgentError> {
-        if let Some(ref token) = self.cancellation_token {
-            if token.is_cancelled() {
-                return Err(RunAgentError::Cancelled);
-            }
+        if let Some(ref token) = self.cancellation_token
+            && token.is_cancelled()
+        {
+            return Err(RunAgentError::Cancelled);
         }
         Ok(())
     }
@@ -610,25 +610,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // ========== Stage 1: Load known files directly (no LLM needed) ==========
-        if let Some(ref context_loader) = self.context_loader {
-            if let Some(ref working_dir) = config.working_dir {
-                let project_root = Path::new(working_dir);
-                let files = context_loader.load_known_files(project_root);
-                let project_ctx = context_loader.build_project_context(files);
+        if let Some(ref context_loader) = self.context_loader
+            && let Some(ref working_dir) = config.working_dir
+        {
+            let project_root = Path::new(working_dir);
+            let files = context_loader.load_known_files(project_root);
+            let project_ctx = context_loader.build_project_context(files);
 
-                if project_ctx.has_sufficient_context() {
-                    info!(
-                        "Stage 1: Using existing context from: {}",
-                        project_ctx.source_description()
-                    );
-                    return Ok(self.context_from_project_ctx(project_ctx, config));
-                }
+            if project_ctx.has_sufficient_context() {
+                info!(
+                    "Stage 1: Using existing context from: {}",
+                    project_ctx.source_description()
+                );
+                return Ok(self.context_from_project_ctx(project_ctx, config));
+            }
 
-                // Even if not sufficient, preserve any partial context
-                if !project_ctx.is_empty() {
-                    info!("Stage 1: Found partial context, proceeding to exploration");
-                    context = self.merge_project_context(context, &project_ctx);
-                }
+            // Even if not sufficient, preserve any partial context
+            if !project_ctx.is_empty() {
+                info!("Stage 1: Found partial context, proceeding to exploration");
+                context = self.merge_project_context(context, &project_ctx);
             }
         }
 
@@ -732,19 +732,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             progress.on_tool_result(&call.tool_name, success);
 
-            if success {
-                if let Some(output) = result.output() {
-                    results.push((call.tool_name.clone(), output.to_string()));
+            if success && let Some(output) = result.output() {
+                results.push((call.tool_name.clone(), output.to_string()));
 
-                    // Try to detect project type from common files
-                    if call.tool_name == "glob_search" || call.tool_name == "read_file" {
-                        if output.contains("Cargo.toml") {
-                            context = context.with_project_type("rust");
-                        } else if output.contains("package.json") {
-                            context = context.with_project_type("nodejs");
-                        } else if output.contains("pyproject.toml") || output.contains("setup.py") {
-                            context = context.with_project_type("python");
-                        }
+                // Try to detect project type from common files
+                if call.tool_name == "glob_search" || call.tool_name == "read_file" {
+                    if output.contains("Cargo.toml") {
+                        context = context.with_project_type("rust");
+                    } else if output.contains("package.json") {
+                        context = context.with_project_type("nodejs");
+                    } else if output.contains("pyproject.toml") || output.contains("setup.py") {
+                        context = context.with_project_type("python");
                     }
                 }
             }
@@ -820,11 +818,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             };
 
             // Mark task as in progress
-            if let Some(plan) = &mut state.plan {
-                if let Some(task) = plan.get_task_mut(&task_id) {
-                    task.mark_in_progress();
-                    progress.on_task_start(task);
-                }
+            if let Some(plan) = &mut state.plan
+                && let Some(task) = plan.get_task_mut(&task_id)
+            {
+                task.mark_in_progress();
+                progress.on_task_start(task);
             }
 
             // Execute the task with action retry support
@@ -837,8 +835,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 let context_with_feedback = if let Some(ref feedback) = action_feedback {
                     format!(
                         "{}\n\n---\n[Previous action was rejected]\nFeedback: {}\nPlease try a different approach.",
-                        previous_results,
-                        feedback
+                        previous_results, feedback
                     )
                 } else {
                     previous_results.clone()
@@ -865,10 +862,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         }
 
                         // Get task for notification
-                        if let Some(plan) = state.plan.as_ref() {
-                            if let Some(task) = plan.tasks.iter().find(|t| t.id == task_id) {
-                                progress.on_action_retry(task, action_attempts, &feedback);
-                            }
+                        if let Some(plan) = state.plan.as_ref()
+                            && let Some(task) = plan.tasks.iter().find(|t| t.id == task_id)
+                        {
+                            progress.on_action_retry(task, action_attempts, &feedback);
                         }
 
                         info!(
@@ -887,15 +884,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 Err(e) => (false, e.to_string()),
             };
 
-            if let Some(plan) = &mut state.plan {
-                if let Some(task) = plan.get_task_mut(&task_id) {
-                    if success {
-                        task.mark_completed(quorum_domain::TaskResult::success(&output));
-                    } else {
-                        task.mark_failed(quorum_domain::TaskResult::failure(&output));
-                    }
-                    progress.on_task_complete(task, success);
+            if let Some(plan) = &mut state.plan
+                && let Some(task) = plan.get_task_mut(&task_id)
+            {
+                if success {
+                    task.mark_completed(quorum_domain::TaskResult::success(&output));
+                } else {
+                    task.mark_failed(quorum_domain::TaskResult::failure(&output));
                 }
+                progress.on_task_complete(task, success);
             }
 
             results.push(format!(
@@ -1137,11 +1134,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // If successful or not a retryable error, return immediately
             if result.is_success() || !is_retryable_error(&result) {
                 // Report non-retryable errors
-                if !result.is_success() {
-                    if let Some(err) = result.error() {
-                        let category = ErrorCategory::from_error_code(&err.code);
-                        progress.on_tool_error(&current_call.tool_name, category, &err.message);
-                    }
+                if !result.is_success()
+                    && let Some(err) = result.error()
+                {
+                    let category = ErrorCategory::from_error_code(&err.code);
+                    progress.on_tool_error(&current_call.tool_name, category, &err.message);
                 }
                 return result;
             }
@@ -1584,22 +1581,22 @@ fn parse_tool_calls(response: &str) -> Vec<ToolCall> {
             current_block.clear();
         } else if in_tool_block && line.trim() == "```" {
             in_tool_block = false;
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&current_block) {
-                if let Some(tool_name) = parsed.get("tool").and_then(|v| v.as_str()) {
-                    let mut call = ToolCall::new(tool_name);
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&current_block)
+                && let Some(tool_name) = parsed.get("tool").and_then(|v| v.as_str())
+            {
+                let mut call = ToolCall::new(tool_name);
 
-                    if let Some(args) = parsed.get("args").and_then(|v| v.as_object()) {
-                        for (key, value) in args {
-                            call = call.with_arg(key, value.clone());
-                        }
+                if let Some(args) = parsed.get("args").and_then(|v| v.as_object()) {
+                    for (key, value) in args {
+                        call = call.with_arg(key, value.clone());
                     }
-
-                    if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
-                        call = call.with_reasoning(reasoning);
-                    }
-
-                    calls.push(call);
                 }
+
+                if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
+                    call = call.with_reasoning(reasoning);
+                }
+
+                calls.push(call);
             }
         } else if in_tool_block {
             current_block.push_str(line);
@@ -1662,10 +1659,11 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
 
             let mut task = Task::new(id, description);
 
-            if let Some(tool) = task_json.get("tool").and_then(|v| v.as_str()) {
-                if tool != "null" && !tool.is_empty() {
-                    task = task.with_tool(tool);
-                }
+            if let Some(tool) = task_json.get("tool").and_then(|v| v.as_str())
+                && tool != "null"
+                && !tool.is_empty()
+            {
+                task = task.with_tool(tool);
             }
 
             if let Some(args) = task_json.get("args").and_then(|v| v.as_object()) {
