@@ -48,4 +48,15 @@ pub enum CopilotError {
     /// Specified model is not supported.
     #[error("Invalid model: {0}")]
     InvalidModel(String),
+
+    /// Operation was cancelled.
+    #[error("Operation cancelled")]
+    Cancelled,
+}
+
+impl CopilotError {
+    /// Check if this error represents a cancellation
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, CopilotError::Cancelled)
+    }
 }

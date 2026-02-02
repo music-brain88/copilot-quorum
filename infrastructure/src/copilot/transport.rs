@@ -12,6 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 /// Transport for communicating with Copilot CLI via TCP.
@@ -280,6 +281,154 @@ impl StdioTransport {
             let mut body = vec![0u8; content_length];
             use tokio::io::AsyncReadExt;
             reader.read_exact(&mut body).await?;
+
+            let body_str = String::from_utf8_lossy(&body);
+            trace!("Received message: {}", body_str);
+
+            // Check if it's a response (has "id" and "result") or notification (has "method")
+            let json_value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+                warn!("Failed to parse JSON: {}", body_str);
+                CopilotError::ParseError {
+                    error: e.to_string(),
+                    raw: body_str.to_string(),
+                }
+            })?;
+
+            // Skip responses (they have "id" and "result" but no "method")
+            if json_value.get("id").is_some() && json_value.get("method").is_none() {
+                debug!("Skipping response in streaming: {}", body_str);
+                continue;
+            }
+
+            // Parse as notification
+            let notification: JsonRpcNotification =
+                serde_json::from_value(json_value).map_err(|e| {
+                    warn!("Failed to parse notification: {}", body_str);
+                    CopilotError::ParseError {
+                        error: e.to_string(),
+                        raw: body_str.to_string(),
+                    }
+                })?;
+
+            // Handle session.event notifications
+            if notification.method == "session.event" {
+                if let Some(params) = notification.params {
+                    // Extract event type from params.event.type
+                    if let Some(event) = params.get("event") {
+                        if let Some(event_type) = event.get("type").and_then(|t| t.as_str()) {
+                            match event_type {
+                                "assistant.message.delta" => {
+                                    // Extract content from event.data.content
+                                    if let Some(data) = event.get("data") {
+                                        if let Some(content) =
+                                            data.get("content").and_then(|c| c.as_str())
+                                        {
+                                            if !content.is_empty() {
+                                                on_chunk(content);
+                                                full_content.push_str(content);
+                                            }
+                                        }
+                                    }
+                                }
+                                "assistant.message" => {
+                                    // Final message, extract content
+                                    if let Some(data) = event.get("data") {
+                                        if let Some(content) =
+                                            data.get("content").and_then(|c| c.as_str())
+                                        {
+                                            if !content.is_empty() && full_content.is_empty() {
+                                                // Only use if we haven't gotten deltas
+                                                on_chunk(content);
+                                                full_content.push_str(content);
+                                            }
+                                        }
+                                    }
+                                }
+                                "session.idle" => {
+                                    debug!("Session idle, streaming complete");
+                                    return Ok(full_content);
+                                }
+                                other => {
+                                    trace!("Ignoring event type: {}", other);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                debug!("Ignoring notification method: {}", notification.method);
+            }
+        }
+    }
+
+    /// Read streaming notifications until session.idle with cancellation support
+    pub async fn read_streaming_with_cancellation<F>(
+        &self,
+        mut on_chunk: F,
+        cancellation: CancellationToken,
+    ) -> Result<String>
+    where
+        F: FnMut(&str),
+    {
+        let mut reader = self.reader.lock().await;
+        let mut line = String::new();
+        let mut full_content = String::new();
+
+        loop {
+            // Check for cancellation
+            if cancellation.is_cancelled() {
+                return Err(CopilotError::Cancelled);
+            }
+
+            // Read Content-Length header with cancellation support
+            let content_length: usize = loop {
+                line.clear();
+
+                // Use select! to allow cancellation during read
+                let bytes_read = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        return Err(CopilotError::Cancelled);
+                    }
+                    result = reader.read_line(&mut line) => result?,
+                };
+
+                if bytes_read == 0 {
+                    return Err(CopilotError::TransportClosed);
+                }
+
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                if let Some(len_str) = trimmed.strip_prefix("Content-Length:") {
+                    if let Ok(len) = len_str.trim().parse::<usize>() {
+                        break len;
+                    }
+                }
+            };
+
+            // Skip empty line after headers
+            loop {
+                line.clear();
+                reader.read_line(&mut line).await?;
+                if line.trim().is_empty() {
+                    break;
+                }
+            }
+
+            // Read exact content length with cancellation support
+            let mut body = vec![0u8; content_length];
+            use tokio::io::AsyncReadExt;
+
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
+                    return Err(CopilotError::Cancelled);
+                }
+                result = reader.read_exact(&mut body) => { result?; }
+            }
 
             let body_str = String::from_utf8_lossy(&body);
             trace!("Received message: {}", body_str);
