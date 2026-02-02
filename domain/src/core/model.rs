@@ -1,12 +1,12 @@
 //! Model value object representing an LLM model
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Available LLM models (Value Object)
 ///
 /// This is a domain concept representing the different AI models
 /// that can participate in a Quorum discussion.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Model {
     // Claude models
     ClaudeSonnet45,
@@ -123,6 +123,25 @@ impl std::str::FromStr for Model {
             "gemini-3-pro-preview" => Model::Gemini3Pro,
             other => Model::Custom(other.to_string()),
         })
+    }
+}
+
+impl Serialize for Model {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Model {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(s.parse().unwrap())
     }
 }
 
