@@ -576,6 +576,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 .final_review(&input, &state, &summary, progress)
                 .await?;
 
+            // UI notification for final review result
+            progress.on_quorum_complete_with_votes(
+                "final_review",
+                final_review.approved,
+                &final_review.votes,
+                final_review.feedback.as_deref(),
+            );
+
             if !final_review.approved {
                 state.add_thought(Thought::observation(format!(
                     "Final review raised concerns: {}",
@@ -957,6 +965,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     .review_action(input, state, task, &tool_call_json, progress)
                     .await?;
 
+                // UI notification for action review result
+                progress.on_quorum_complete_with_votes(
+                    "action_review",
+                    review.approved,
+                    &review.votes,
+                    review.feedback.as_deref(),
+                );
+
                 if !review.approved {
                     return Err(RunAgentError::ActionRejected(
                         review
@@ -1021,6 +1037,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 let review = self
                     .review_action(input, state, task, &tool_call_json, progress)
                     .await?;
+
+                // UI notification for action review result
+                progress.on_quorum_complete_with_votes(
+                    "action_review",
+                    review.approved,
+                    &review.votes,
+                    review.feedback.as_deref(),
+                );
 
                 if !review.approved {
                     warn!("Tool call {} rejected by quorum", call.tool_name);
@@ -1316,7 +1340,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         let result = QuorumReviewResult::from_votes(votes);
-        progress.on_quorum_complete("plan_review", result.approved, result.feedback.as_deref());
+        // Note: UI notification is handled by the caller (execute_with_progress)
+        // to maintain separation between business logic and presentation
 
         Ok(result)
     }
@@ -1407,7 +1432,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         let result = QuorumReviewResult::from_votes(votes);
-        progress.on_quorum_complete("action_review", result.approved, result.feedback.as_deref());
+        // Note: UI notification is handled by the caller (execute_single_task)
+        // to maintain separation between business logic and presentation
 
         Ok(result)
     }
@@ -1501,7 +1527,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         let result = QuorumReviewResult::from_votes(votes);
-        progress.on_quorum_complete("final_review", result.approved, result.feedback.as_deref());
+        // Note: UI notification is handled by the caller (execute_with_progress)
+        // to maintain separation between business logic and presentation
 
         Ok(result)
     }
