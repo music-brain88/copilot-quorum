@@ -18,7 +18,7 @@ pub use use_cases::init_context::{
     InitContextUseCase, NoInitContextProgress,
 };
 pub use use_cases::run_agent::{
-    AgentProgressNotifier, NoAgentProgress, RunAgentError, RunAgentInput, RunAgentOutput,
-    RunAgentUseCase,
+    AgentProgressNotifier, ErrorCategory, NoAgentProgress, RunAgentError, RunAgentInput,
+    RunAgentOutput, RunAgentUseCase,
 };
 pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};

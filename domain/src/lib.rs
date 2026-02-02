@@ -14,7 +14,9 @@ pub mod tool;
 
 // Re-export commonly used types
 pub use agent::{
-    entities::{AgentConfig, AgentPhase, AgentState, Plan, Task, TaskStatus},
+    entities::{
+        AgentConfig, AgentPhase, AgentState, ModelVote, Plan, ReviewRound, Task, TaskStatus,
+    },
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
 pub use config::OutputFormat;
