@@ -148,6 +148,12 @@ async fn main() -> Result<()> {
         .with_quorum_models(effective_quorum_models)
         .with_verbose(cli.verbose > 0);
 
+        // Set moderator if explicitly configured
+        if let Some(ref moderator_name) = config.council.moderator {
+            let moderator: Model = moderator_name.parse().unwrap();
+            repl = repl.with_moderator(moderator);
+        }
+
         if let Some(dir) = working_dir {
             repl = repl.with_working_dir(dir);
         }

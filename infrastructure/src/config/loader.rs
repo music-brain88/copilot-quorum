@@ -33,7 +33,8 @@ impl ConfigLoader {
         for filename in &["quorum.toml", ".quorum.toml"] {
             let path = PathBuf::from(filename);
             if path.exists() {
-                figment = figment.merge(Toml::file(&path).nested());
+                // Remove nested() to merge at root level
+                figment = figment.merge(Toml::file(&path));
                 break;
             }
         }

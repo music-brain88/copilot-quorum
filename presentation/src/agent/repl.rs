@@ -35,6 +35,8 @@ pub struct AgentRepl<
     context_loader: Arc<C>,
     config: AgentConfig,
     quorum_models: Vec<Model>,
+    /// Moderator model for synthesis (if explicitly configured)
+    moderator: Option<Model>,
     verbose: bool,
     working_dir: Option<String>,
     /// Conversation history for /council context
@@ -61,6 +63,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             context_loader,
             config: AgentConfig::new(primary_model),
             quorum_models: Model::default_models(),
+            moderator: None,
             verbose: false,
             working_dir: None,
             conversation_history: Vec::new(),
@@ -71,6 +74,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub fn with_quorum_models(mut self, models: Vec<Model>) -> Self {
         self.quorum_models = models.clone();
         self.config = self.config.with_quorum_models(models);
+        self
+    }
+
+    /// Set moderator model for synthesis
+    pub fn with_moderator(mut self, model: Model) -> Self {
+        self.moderator = Some(model);
         self
     }
 
@@ -188,6 +197,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            // Show moderator (explicit or default to first quorum model)
+            let moderator_display = self
+                .moderator
+                .as_ref()
+                .or(self.quorum_models.first())
+                .map(|m| m.to_string())
+                .unwrap_or_default();
+            if !moderator_display.is_empty() {
+                println!("{} {}", "Moderator:".bold(), moderator_display);
+            }
         }
         if let Some(ref dir) = self.working_dir {
             println!("{} {}", "Working Dir:".bold(), dir);
