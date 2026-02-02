@@ -586,6 +586,7 @@ impl AgentConfig {
 /// - The execution plan and its approval status
 /// - Agent's reasoning history (thoughts)
 /// - Iteration count for loop limits
+/// - Plan revision count for HiL (Human-in-the-Loop) triggering
 #[derive(Debug, Clone)]
 pub struct AgentState {
     /// Unique identifier for this agent run
@@ -604,6 +605,9 @@ pub struct AgentState {
     pub thoughts: Vec<Thought>,
     /// Number of iterations executed
     pub iteration_count: usize,
+    /// Number of plan revisions (rejections) - tracked separately from Plan
+    /// because Plan is recreated on each revision attempt
+    pub plan_revision_count: usize,
     /// Error message if failed
     pub error: Option<String>,
 }
@@ -620,6 +624,7 @@ impl AgentState {
             plan: None,
             thoughts: Vec::new(),
             iteration_count: 0,
+            plan_revision_count: 0,
             error: None,
         }
     }
@@ -644,12 +649,17 @@ impl AgentState {
     }
 
     /// Marks the plan as rejected and returns to Planning phase for revision.
+    ///
+    /// Increments `plan_revision_count` which is used to determine when
+    /// Human-in-the-Loop intervention is required.
     pub fn reject_plan(&mut self, feedback: impl Into<String>) {
         if let Some(plan) = &mut self.plan {
             plan.reject(feedback);
             // Go back to planning to revise
             self.phase = AgentPhase::Planning;
         }
+        // Track revision count at state level (Plan is recreated each revision)
+        self.plan_revision_count += 1;
     }
 
     /// Manually sets the execution phase.
@@ -839,5 +849,52 @@ mod tests {
         // Add another rejected round
         plan.add_review_round(ReviewRound::new(3, false, vec![]));
         assert_eq!(plan.revision_count(), 2);
+    }
+
+    #[test]
+    fn test_agent_state_plan_revision_count() {
+        let config = AgentConfig::default();
+        let mut state = AgentState::new("agent-1", "Test request", config);
+
+        // Initially zero
+        assert_eq!(state.plan_revision_count, 0);
+
+        // Set a plan
+        let plan = Plan::new("Test objective", "Test reasoning");
+        state.set_plan(plan);
+        assert_eq!(state.phase, AgentPhase::PlanReview);
+
+        // Reject the plan - should increment plan_revision_count
+        state.reject_plan("First rejection feedback");
+        assert_eq!(state.plan_revision_count, 1);
+        assert_eq!(state.phase, AgentPhase::Planning);
+
+        // Create and set a new plan (simulating revision)
+        let plan2 = Plan::new("Revised objective", "Revised reasoning");
+        state.set_plan(plan2);
+
+        // Reject again
+        state.reject_plan("Second rejection");
+        assert_eq!(state.plan_revision_count, 2);
+
+        // Third rejection
+        let plan3 = Plan::new("Third attempt", "Third reasoning");
+        state.set_plan(plan3);
+        state.reject_plan("Third rejection");
+        assert_eq!(state.plan_revision_count, 3);
+
+        // This would trigger HiL with default max_plan_revisions = 3
+        assert!(state.plan_revision_count >= state.config.max_plan_revisions);
+    }
+
+    #[test]
+    fn test_reject_plan_without_plan() {
+        let config = AgentConfig::default();
+        let mut state = AgentState::new("agent-1", "Test", config);
+
+        // Rejecting without a plan should still increment counter
+        // (defensive behavior - counter tracks attempts)
+        state.reject_plan("No plan feedback");
+        assert_eq!(state.plan_revision_count, 1);
     }
 }

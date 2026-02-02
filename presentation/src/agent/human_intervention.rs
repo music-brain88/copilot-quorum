@@ -49,6 +49,7 @@ use colored::Colorize;
 use quorum_application::ports::human_intervention::{
     HumanInterventionError, HumanInterventionPort,
 };
+use quorum_domain::core::string::truncate;
 use quorum_domain::{HumanDecision, Plan, ReviewRound};
 use std::io::{self, Write};
 
@@ -224,25 +225,5 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
                 }
             }
         }
-    }
-}
-
-/// Truncate a string to a maximum length with ellipsis
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_truncate() {
-        assert_eq!(truncate("hello", 10), "hello");
-        assert_eq!(truncate("hello world", 8), "hello...");
     }
 }
