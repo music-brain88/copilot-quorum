@@ -308,7 +308,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
                 if let Some(mode) = OrchestrationMode::from_str(args) {
                     self.current_mode = mode;
-                    println!("Mode changed to: {} ({})", mode, mode.description().dimmed());
+                    println!(
+                        "Mode changed to: {} ({})",
+                        mode,
+                        mode.description().dimmed()
+                    );
                 } else {
                     println!("{} Unknown mode: {}", "Error:".red().bold(), args);
                     println!("Available modes: agent, quorum, fast, debate, plan");

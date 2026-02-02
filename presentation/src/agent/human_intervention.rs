@@ -136,12 +136,7 @@ impl InteractiveHumanIntervention {
                 } else {
                     "REJECTED".red()
                 };
-                println!(
-                    "  Rev {}: {} {}",
-                    round.round,
-                    status,
-                    round.vote_summary()
-                );
+                println!("  Rev {}: {} {}", round.round, status, round.vote_summary());
 
                 // Show feedback from rejecting models
                 for vote in &round.votes {
@@ -158,7 +153,10 @@ impl InteractiveHumanIntervention {
         println!("{}", "Commands:".cyan().bold());
         println!("  {}  - Execute this plan as-is", "/approve".green());
         println!("  {}   - Abort the agent", "/reject".red());
-        println!("  {}     - Edit plan (feature coming soon)", "/edit".yellow());
+        println!(
+            "  {}     - Edit plan (feature coming soon)",
+            "/edit".yellow()
+        );
         println!();
     }
 
@@ -170,9 +168,9 @@ impl InteractiveHumanIntervention {
         })?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| {
-            HumanInterventionError::IoError(format!("Failed to read input: {}", e))
-        })?;
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| HumanInterventionError::IoError(format!("Failed to read input: {}", e)))?;
 
         Ok(input.trim().to_string())
     }
@@ -210,10 +208,7 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
                 }
                 "/edit" | "edit" | "e" => {
                     println!();
-                    println!(
-                        "{}",
-                        "⚠️  Plan editing is not yet implemented.".yellow()
-                    );
+                    println!("{}", "⚠️  Plan editing is not yet implemented.".yellow());
                     println!("Please use /approve or /reject.");
                     println!();
                 }
@@ -223,11 +218,7 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
                 }
                 _ => {
                     println!();
-                    println!(
-                        "{} Unknown command: {}",
-                        "⚠️".yellow(),
-                        input.red()
-                    );
+                    println!("{} Unknown command: {}", "⚠️".yellow(), input.red());
                     println!("Available commands: /approve, /reject, /edit");
                     println!();
                 }

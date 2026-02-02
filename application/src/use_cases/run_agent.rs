@@ -13,9 +13,8 @@ use crate::ports::human_intervention::{HumanInterventionError, HumanIntervention
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::{
-    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, HilMode,
-    HumanDecision, Model, ModelVote, Plan, ProjectContext, ReviewRound, Task, TaskId, Thought,
-    ToolCall,
+    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, HilMode, HumanDecision,
+    Model, ModelVote, Plan, ProjectContext, ReviewRound, Task, TaskId, Thought, ToolCall,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -304,10 +303,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Set a human intervention handler for when plan revision limit is exceeded
-    pub fn with_human_intervention(
-        mut self,
-        intervention: Arc<dyn HumanInterventionPort>,
-    ) -> Self {
+    pub fn with_human_intervention(mut self, intervention: Arc<dyn HumanInterventionPort>) -> Self {
         self.human_intervention = Some(intervention);
         self
     }
@@ -489,11 +485,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             state.reject_plan(&feedback);
 
             // Check plan revision limit for human intervention
-            let revision_count = state
-                .plan
-                .as_ref()
-                .map(|p| p.revision_count())
-                .unwrap_or(0);
+            let revision_count = state.plan.as_ref().map(|p| p.revision_count()).unwrap_or(0);
 
             if revision_count >= input.config.max_plan_revisions {
                 // Human intervention required

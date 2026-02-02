@@ -3,11 +3,11 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OrchestrationMode {
     #[default]
-    Agent,      // Plan -> Review -> Execute (Default)
-    Quorum,     // Multi-model consensus (/council)
-    Fast,       // Single model, no review (High speed)
-    Debate,     // Model vs Model discussion
-    Plan,       // Plan creation only, no execution
+    Agent, // Plan -> Review -> Execute (Default)
+    Quorum, // Multi-model consensus (/council)
+    Fast,   // Single model, no review (High speed)
+    Debate, // Model vs Model discussion
+    Plan,   // Plan creation only, no execution
 }
 
 impl fmt::Display for OrchestrationMode {
@@ -57,9 +57,18 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        assert_eq!(OrchestrationMode::from_str("agent"), Some(OrchestrationMode::Agent));
-        assert_eq!(OrchestrationMode::from_str("a"), Some(OrchestrationMode::Agent));
-        assert_eq!(OrchestrationMode::from_str("Quorum"), Some(OrchestrationMode::Quorum));
+        assert_eq!(
+            OrchestrationMode::from_str("agent"),
+            Some(OrchestrationMode::Agent)
+        );
+        assert_eq!(
+            OrchestrationMode::from_str("a"),
+            Some(OrchestrationMode::Agent)
+        );
+        assert_eq!(
+            OrchestrationMode::from_str("Quorum"),
+            Some(OrchestrationMode::Quorum)
+        );
         assert_eq!(OrchestrationMode::from_str("unknown"), None);
     }
 }
