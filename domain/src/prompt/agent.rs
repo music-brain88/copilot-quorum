@@ -270,7 +270,7 @@ Provide your assessment with:
     /// }
     /// ```
     ///
-    /// The score is parsed by [`parse_vote_score`] in the application layer.
+    /// The score is parsed by `parse_vote_score` in the application layer.
     ///
     /// # See Also
     ///

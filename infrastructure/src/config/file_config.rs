@@ -146,7 +146,7 @@ impl FileAgentConfig {
         self.decision_model.as_ref().and_then(|s| s.parse().ok())
     }
 
-    /// Parse review_models strings into Vec<Model>
+    /// Parse review_models strings into `Vec<Model>`
     pub fn parse_review_models(&self) -> Option<Vec<Model>> {
         self.review_models
             .as_ref()
