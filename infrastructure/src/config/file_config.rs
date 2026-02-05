@@ -134,6 +134,226 @@ pub struct FileIntegrationsConfig {
     pub github: FileGitHubConfig,
 }
 
+// ==================== Tools Configuration ====================
+//
+// The tools configuration allows customizing how Quorum executes tools.
+// Tools come from multiple providers (builtin, CLI, MCP, scripts) and
+// can be configured to use enhanced CLI tools when available.
+//
+// Example configuration:
+//
+// ```toml
+// [tools]
+// providers = ["cli", "builtin"]
+// suggest_enhanced_tools = true
+//
+// [tools.cli.aliases]
+// grep_search = "rg"    # Use ripgrep
+// glob_search = "fd"    # Use fd-find
+// ```
+
+/// Tool provider types that can be enabled
+///
+/// Providers are tried in order of their priority (highest first).
+/// See [`crate::tools::ToolRegistry`] for details on priority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolProviderType {
+    /// Built-in tools (read_file, write_file, etc.) - always available
+    Builtin,
+    /// CLI tools (grep/rg, find/fd) - wraps system commands
+    Cli,
+    /// MCP server tools - connects to external servers
+    Mcp,
+    /// User scripts as tools
+    Script,
+}
+
+/// Enhanced tool definition (for suggesting upgrades)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EnhancedToolConfig {
+    /// CLI command to use
+    pub command: String,
+    /// Additional arguments
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Description for user prompt
+    #[serde(default)]
+    pub description: String,
+}
+
+/// CLI tool provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileCliToolsConfig {
+    /// Whether CLI tools are enabled
+    pub enabled: bool,
+    /// Tool aliases (tool_name -> CLI command)
+    /// e.g., grep_search = "grep" or grep_search = "rg"
+    #[serde(default)]
+    pub aliases: std::collections::HashMap<String, String>,
+    /// Enhanced tool definitions (for suggesting upgrades)
+    #[serde(default)]
+    pub enhanced: std::collections::HashMap<String, EnhancedToolConfig>,
+}
+
+impl Default for FileCliToolsConfig {
+    fn default() -> Self {
+        let mut aliases = std::collections::HashMap::new();
+        // Default to standard tools (available everywhere)
+        aliases.insert("grep_search".to_string(), "grep".to_string());
+        aliases.insert("glob_search".to_string(), "find".to_string());
+        aliases.insert("read_file".to_string(), "cat".to_string());
+
+        let mut enhanced = std::collections::HashMap::new();
+        enhanced.insert(
+            "grep_search".to_string(),
+            EnhancedToolConfig {
+                command: "rg".to_string(),
+                args: vec![],
+                description: "10x faster than grep".to_string(),
+            },
+        );
+        enhanced.insert(
+            "glob_search".to_string(),
+            EnhancedToolConfig {
+                command: "fd".to_string(),
+                args: vec![],
+                description: "5x faster than find".to_string(),
+            },
+        );
+        enhanced.insert(
+            "read_file".to_string(),
+            EnhancedToolConfig {
+                command: "bat".to_string(),
+                args: vec!["--plain".to_string(), "--paging=never".to_string()],
+                description: "syntax highlighting".to_string(),
+            },
+        );
+
+        Self {
+            enabled: true,
+            aliases,
+            enhanced,
+        }
+    }
+}
+
+/// MCP server configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FileMcpServerConfig {
+    /// Server name
+    pub name: String,
+    /// Command to start the server
+    pub command: String,
+    /// Command arguments
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variables
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+/// MCP tools configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileMcpToolsConfig {
+    /// Whether MCP tools are enabled
+    pub enabled: bool,
+    /// MCP servers to connect to
+    #[serde(default)]
+    pub servers: Vec<FileMcpServerConfig>,
+}
+
+impl Default for FileMcpToolsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Disabled by default (requires setup)
+            servers: vec![],
+        }
+    }
+}
+
+/// Builtin tools configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileBuiltinToolsConfig {
+    /// Whether builtin tools are enabled
+    pub enabled: bool,
+}
+
+impl Default for FileBuiltinToolsConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// Complete tools configuration
+///
+/// Controls which tool providers are enabled and how they behave.
+///
+/// # Example
+///
+/// ```toml
+/// [tools]
+/// providers = ["mcp", "cli", "builtin"]
+/// suggest_enhanced_tools = true
+///
+/// [tools.cli.aliases]
+/// grep_search = "rg"
+/// glob_search = "fd"
+///
+/// [tools.mcp]
+/// enabled = true
+///
+/// [[tools.mcp.servers]]
+/// name = "filesystem"
+/// command = "npx"
+/// args = ["-y", "@anthropic/mcp-server-filesystem"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileToolsConfig {
+    /// Which providers to enable (order matters for priority)
+    ///
+    /// Providers are listed from highest to lowest priority.
+    /// Default: `["cli", "builtin"]`
+    #[serde(default)]
+    pub providers: Vec<ToolProviderType>,
+    /// Whether to suggest enhanced tools when detected
+    ///
+    /// When enabled, Quorum will check for tools like `rg`, `fd`, `bat`
+    /// and offer to configure them if found.
+    #[serde(default = "default_suggest_enhanced")]
+    pub suggest_enhanced_tools: bool,
+    /// Builtin tools settings
+    #[serde(default)]
+    pub builtin: FileBuiltinToolsConfig,
+    /// CLI tools settings
+    #[serde(default)]
+    pub cli: FileCliToolsConfig,
+    /// MCP tools settings
+    #[serde(default)]
+    pub mcp: FileMcpToolsConfig,
+}
+
+fn default_suggest_enhanced() -> bool {
+    true
+}
+
+impl Default for FileToolsConfig {
+    fn default() -> Self {
+        Self {
+            providers: vec![ToolProviderType::Cli, ToolProviderType::Builtin],
+            suggest_enhanced_tools: true,
+            builtin: FileBuiltinToolsConfig::default(),
+            cli: FileCliToolsConfig::default(),
+            mcp: FileMcpToolsConfig::default(),
+        }
+    }
+}
+
 /// Complete file configuration (raw TOML structure)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -150,6 +370,8 @@ pub struct FileConfig {
     pub agent: FileAgentConfig,
     /// Integration settings
     pub integrations: FileIntegrationsConfig,
+    /// Tools settings
+    pub tools: FileToolsConfig,
 }
 
 impl FileConfig {
@@ -271,5 +493,55 @@ format = "json"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.output.format, Some(OutputFormat::Json));
+    }
+
+    #[test]
+    fn test_tools_config_default() {
+        let config = FileToolsConfig::default();
+        assert!(config.suggest_enhanced_tools);
+        assert!(config.builtin.enabled);
+        assert!(config.cli.enabled);
+        assert!(!config.mcp.enabled);
+        assert_eq!(config.cli.aliases.get("grep_search"), Some(&"grep".to_string()));
+        assert_eq!(config.cli.aliases.get("glob_search"), Some(&"find".to_string()));
+    }
+
+    #[test]
+    fn test_tools_config_deserialize() {
+        let toml_str = r#"
+[tools]
+providers = ["cli", "builtin"]
+suggest_enhanced_tools = false
+
+[tools.cli]
+enabled = true
+
+[tools.cli.aliases]
+grep_search = "rg"
+glob_search = "fd"
+
+[tools.mcp]
+enabled = true
+
+[[tools.mcp.servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@anthropic/mcp-server-filesystem"]
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.tools.suggest_enhanced_tools);
+        assert!(config.tools.cli.enabled);
+        assert_eq!(config.tools.cli.aliases.get("grep_search"), Some(&"rg".to_string()));
+        assert!(config.tools.mcp.enabled);
+        assert_eq!(config.tools.mcp.servers.len(), 1);
+        assert_eq!(config.tools.mcp.servers[0].name, "filesystem");
+    }
+
+    #[test]
+    fn test_tools_enhanced_config() {
+        let config = FileCliToolsConfig::default();
+        let rg = config.enhanced.get("grep_search").unwrap();
+        assert_eq!(rg.command, "rg");
+        assert!(rg.description.contains("faster"));
     }
 }

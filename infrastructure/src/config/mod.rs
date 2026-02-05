@@ -13,7 +13,9 @@ mod file_config;
 mod loader;
 
 pub use file_config::{
-    ConfigValidationError, FileAgentConfig, FileConfig, FileCouncilConfig, FileGitHubConfig,
-    FileIntegrationsConfig, FileOutputConfig, FileOutputFormat, FileReplConfig,
+    ConfigValidationError, EnhancedToolConfig, FileAgentConfig, FileBuiltinToolsConfig,
+    FileCliToolsConfig, FileConfig, FileCouncilConfig, FileGitHubConfig, FileIntegrationsConfig,
+    FileMcpServerConfig, FileMcpToolsConfig, FileOutputConfig, FileOutputFormat, FileReplConfig,
+    FileToolsConfig, ToolProviderType,
 };
 pub use loader::ConfigLoader;
