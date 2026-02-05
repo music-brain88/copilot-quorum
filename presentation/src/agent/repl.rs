@@ -252,12 +252,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         println!("  {}    - Show this help", "/help".cyan());
         println!("  {}    - Change mode (solo, ensemble)", "/mode".cyan());
         println!("  {}    - Shortcut: switch to Solo mode", "/solo".cyan());
-        println!("  {}     - Shortcut: switch to Ensemble mode", "/ens".cyan());
-        println!("  {} - Consult quorum (Quorum Discussion)", "/discuss".cyan());
         println!(
-            "  {}    - Initialize project context",
-            "/init".cyan()
+            "  {}     - Shortcut: switch to Ensemble mode",
+            "/ens".cyan()
         );
+        println!(
+            "  {} - Consult quorum (Quorum Discussion)",
+            "/discuss".cyan()
+        );
+        println!("  {}    - Initialize project context", "/init".cyan());
         println!("  {}  - Show current configuration", "/config".cyan());
         println!("  {}   - Clear conversation history", "/clear".cyan());
         println!("  {}    - Exit", "/quit".cyan());
@@ -328,7 +331,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     println!("{} Usage: /mode <mode>", "Error:".red().bold());
                     println!("Available modes: solo, ensemble, fast, debate, plan");
                     println!("Aliases: agent=solo, quorum=ensemble, ens=ensemble");
-                    println!("Current mode: {} ({})", self.current_mode, self.current_mode.short_description());
+                    println!(
+                        "Current mode: {} ({})",
+                        self.current_mode,
+                        self.current_mode.short_description()
+                    );
                     return CommandResult::Continue;
                 }
 
@@ -353,7 +360,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     "Solo mode".green().bold(),
                     "single model, quick execution".dimmed()
                 );
-                println!("Use {} for ad-hoc multi-model consultation.", "/discuss".cyan());
+                println!(
+                    "Use {} for ad-hoc multi-model consultation.",
+                    "/discuss".cyan()
+                );
                 CommandResult::Continue
             }
             // Ensemble mode shortcut

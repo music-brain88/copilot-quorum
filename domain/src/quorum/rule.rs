@@ -105,9 +105,7 @@ impl std::str::FromStr for QuorumRule {
             }
             s if s.starts_with("percentage:") || s.ends_with('%') => {
                 let num_str = s.trim_start_matches("percentage:").trim_end_matches('%');
-                let p: u8 = num_str
-                    .parse()
-                    .map_err(|_| "Invalid percentage")?;
+                let p: u8 = num_str.parse().map_err(|_| "Invalid percentage")?;
                 Ok(QuorumRule::Percentage(p))
             }
             _ => Err(format!(
@@ -187,18 +185,42 @@ mod tests {
 
     #[test]
     fn test_parse_rule() {
-        assert_eq!("majority".parse::<QuorumRule>().ok(), Some(QuorumRule::Majority));
-        assert_eq!("unanimous".parse::<QuorumRule>().ok(), Some(QuorumRule::Unanimous));
-        assert_eq!("atleast:2".parse::<QuorumRule>().ok(), Some(QuorumRule::AtLeast(2)));
-        assert_eq!("at_least:3".parse::<QuorumRule>().ok(), Some(QuorumRule::AtLeast(3)));
-        assert_eq!("percentage:75".parse::<QuorumRule>().ok(), Some(QuorumRule::Percentage(75)));
-        assert_eq!("80%".parse::<QuorumRule>().ok(), Some(QuorumRule::Percentage(80)));
+        assert_eq!(
+            "majority".parse::<QuorumRule>().ok(),
+            Some(QuorumRule::Majority)
+        );
+        assert_eq!(
+            "unanimous".parse::<QuorumRule>().ok(),
+            Some(QuorumRule::Unanimous)
+        );
+        assert_eq!(
+            "atleast:2".parse::<QuorumRule>().ok(),
+            Some(QuorumRule::AtLeast(2))
+        );
+        assert_eq!(
+            "at_least:3".parse::<QuorumRule>().ok(),
+            Some(QuorumRule::AtLeast(3))
+        );
+        assert_eq!(
+            "percentage:75".parse::<QuorumRule>().ok(),
+            Some(QuorumRule::Percentage(75))
+        );
+        assert_eq!(
+            "80%".parse::<QuorumRule>().ok(),
+            Some(QuorumRule::Percentage(80))
+        );
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(QuorumRule::Majority.to_string(), "majority (more than half)");
-        assert_eq!(QuorumRule::Unanimous.to_string(), "unanimous (all must approve)");
+        assert_eq!(
+            QuorumRule::Majority.to_string(),
+            "majority (more than half)"
+        );
+        assert_eq!(
+            QuorumRule::Unanimous.to_string(),
+            "unanimous (all must approve)"
+        );
     }
 
     #[test]

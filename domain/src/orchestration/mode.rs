@@ -82,7 +82,9 @@ impl OrchestrationMode {
     /// Get a human-readable description of this mode
     pub fn description(&self) -> &'static str {
         match self {
-            OrchestrationMode::Agent => "Solo: Autonomous task execution (Plan -> Review -> Execute)",
+            OrchestrationMode::Agent => {
+                "Solo: Autonomous task execution (Plan -> Review -> Execute)"
+            }
             OrchestrationMode::Quorum => "Ensemble: Multi-model Quorum Discussion",
             OrchestrationMode::Fast => "Solo: Single model immediate response (No review)",
             OrchestrationMode::Debate => "Ensemble: Inter-model debate discussion",
