@@ -10,7 +10,7 @@ use quorum_application::{
     ContextLoaderPort, InitContextInput, InitContextUseCase, LlmGateway, RunAgentInput,
     RunAgentUseCase, RunQuorumInput, RunQuorumUseCase, ToolExecutorPort,
 };
-use quorum_domain::{AgentConfig, Model, OrchestrationMode, OutputFormat};
+use quorum_domain::{AgentConfig, Model, OrchestrationMode, OutputFormat, PlanningMode};
 use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
 use std::path::Path;
@@ -115,6 +115,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self
     }
 
+    /// Set initial orchestration mode (Solo or Ensemble)
+    pub fn with_mode(mut self, mode: OrchestrationMode) -> Self {
+        self.current_mode = mode;
+        self
+    }
+
     /// Run the interactive REPL
     pub async fn run(&mut self) -> RlResult<()> {
         let mut rl = DefaultEditor::new()?;
@@ -134,10 +140,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         loop {
             let prompt = match self.current_mode {
-                OrchestrationMode::Agent => format!("{} ", "agent>".green()),
-                OrchestrationMode::Quorum => format!("{} ", "quorum>".blue()),
+                OrchestrationMode::Agent => format!("{} ", "solo>".green()),
+                OrchestrationMode::Quorum => format!("{} ", "ensemble>".magenta()),
                 OrchestrationMode::Fast => format!("{} ", "fast>".yellow()),
-                OrchestrationMode::Debate => format!("{} ", "debate>".purple()),
+                OrchestrationMode::Debate => format!("{} ", "debate>".blue()),
                 OrchestrationMode::Plan => format!("{} ", "plan>".cyan()),
             };
 
@@ -244,15 +250,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         println!();
         println!("Commands:");
         println!("  {}    - Show this help", "/help".cyan());
-        println!("  {}    - Change orchestration mode", "/mode".cyan());
-        println!("  {} - Consult quorum on a question", "/council".cyan());
+        println!("  {}    - Change mode (solo, ensemble)", "/mode".cyan());
+        println!("  {}    - Shortcut: switch to Solo mode", "/solo".cyan());
         println!(
-            "  {}    - Initialize project context (quorum)",
-            "/init".cyan()
+            "  {}     - Shortcut: switch to Ensemble mode",
+            "/ens".cyan()
         );
+        println!(
+            "  {} - Consult quorum (Quorum Discussion)",
+            "/discuss".cyan()
+        );
+        println!("  {}    - Initialize project context", "/init".cyan());
         println!("  {}  - Show current configuration", "/config".cyan());
         println!("  {}   - Clear conversation history", "/clear".cyan());
-        println!("  {}    - Exit agent mode", "/quit".cyan());
+        println!("  {}    - Exit", "/quit".cyan());
         println!();
     }
 
@@ -271,42 +282,60 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!();
                 println!("{}", "Commands:".bold());
                 println!("  /help, /h, /?        - Show this help");
+                println!();
+                println!("{}", "Mode Commands:".bold().cyan());
                 println!(
-                    "  /mode <mode>         - Change orchestration mode (agent, quorum, fast, debate, plan)"
+                    "  /mode <mode>         - Change mode (solo, ensemble, fast, debate, plan)"
                 );
-                println!("  /council <question>  - Consult quorum (multiple models)");
-                println!("  /init [--force]      - Initialize project context (quorum)");
+                println!("  /solo                - Switch to Solo mode (single model, quick)");
+                println!("  /ens                 - Switch to Ensemble mode (multi-model)");
+                println!();
+                println!("{}", "Quorum Commands:".bold().magenta());
+                println!("  /discuss <question>  - Quorum Discussion (consult multiple models)");
+                println!("  /council <question>  - Alias for /discuss");
+                println!();
+                println!("{}", "Other Commands:".bold());
+                println!("  /init [--force]      - Initialize project context");
                 println!("  /config              - Show current configuration");
                 println!("  /clear               - Clear conversation history");
                 println!("  /verbose             - Toggle verbose mode");
-                println!("  /quit, /exit, /q     - Exit agent mode");
+                println!("  /quit, /exit, /q     - Exit");
+                println!();
+                println!("{}", "Modes:".bold());
+                println!("  solo (agent)   - Single model driven, quick execution");
+                println!("  ensemble (ens) - Multi-model Quorum Discussion for all");
+                println!("  fast           - No review, immediate response");
+                println!("  debate         - Inter-model debate");
+                println!("  plan           - Plan only, no execution");
                 println!();
                 println!("{}", "Usage:".bold());
                 println!("  Type your request and press Enter.");
-                println!("  The agent will create a plan and execute it.");
-                println!("  High-risk operations require quorum approval.");
+                println!("  In Solo mode: Single model executes, /discuss for quorum");
+                println!("  In Ensemble mode: All queries go through Quorum Discussion");
                 println!();
-                println!("{}", "/council:".bold());
-                println!("  Use /council to consult multiple models on a question.");
-                println!("  The conversation history provides context to the quorum.");
-                println!();
-                println!("{}", "/init:".bold());
-                println!("  Generates .quorum/context.md using multiple models.");
-                println!("  Use --force to overwrite existing context file.");
+                println!("{}", "/discuss:".bold());
+                println!("  Use /discuss to trigger a Quorum Discussion.");
+                println!("  Multiple models provide perspectives and reach consensus.");
+                println!("  The conversation history provides context.");
                 println!();
                 println!("{}", "Examples:".bold());
                 println!("  - \"Fix the bug in login.rs\"");
-                println!("  - \"/council What do you think about this design?\"");
+                println!("  - \"/discuss What's the best approach for auth?\"");
+                println!("  - \"/ens\" then \"Design the API\"");
                 println!("  - \"/init --force\"");
-                println!("  - \"Add unit tests for the User struct\"");
                 println!();
                 CommandResult::Continue
             }
             "/mode" => {
                 if args.is_empty() {
                     println!("{} Usage: /mode <mode>", "Error:".red().bold());
-                    println!("Available modes: agent, quorum, fast, debate, plan");
-                    println!("Current mode: {}", self.current_mode);
+                    println!("Available modes: solo, ensemble, fast, debate, plan");
+                    println!("Aliases: agent=solo, quorum=ensemble, ens=ensemble");
+                    println!(
+                        "Current mode: {} ({})",
+                        self.current_mode,
+                        self.current_mode.short_description()
+                    );
                     return CommandResult::Continue;
                 }
 
@@ -319,14 +348,45 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     );
                 } else {
                     println!("{} Unknown mode: {}", "Error:".red().bold(), args);
-                    println!("Available modes: agent, quorum, fast, debate, plan");
+                    println!("Available modes: solo, ensemble, fast, debate, plan");
                 }
                 CommandResult::Continue
             }
-            "/council" => {
+            // Solo mode shortcut
+            "/solo" => {
+                self.current_mode = OrchestrationMode::Agent;
+                self.config = self.config.clone().with_planning_mode(PlanningMode::Single);
+                println!(
+                    "Switched to {} - {}",
+                    "Solo mode".green().bold(),
+                    "single model, quick execution".dimmed()
+                );
+                println!(
+                    "Use {} for ad-hoc multi-model consultation.",
+                    "/discuss".cyan()
+                );
+                CommandResult::Continue
+            }
+            // Ensemble mode shortcut
+            "/ens" | "/ensemble" => {
+                self.current_mode = OrchestrationMode::Quorum;
+                self.config = self
+                    .config
+                    .clone()
+                    .with_planning_mode(PlanningMode::Ensemble);
+                println!(
+                    "Switched to {} - {}",
+                    "Ensemble mode".magenta().bold(),
+                    "multi-model ensemble planning".dimmed()
+                );
+                println!("Plans will be generated by multiple models and voted on.");
+                CommandResult::Continue
+            }
+            // Quorum Discussion
+            "/discuss" | "/council" => {
                 if args.is_empty() {
-                    println!("{} Usage: /council <your question>", "Error:".red().bold());
-                    println!("Example: /council What do you think about the current architecture?");
+                    println!("{} Usage: /discuss <your question>", "Error:".red().bold());
+                    println!("Example: /discuss What's the best approach for this design?");
                     return CommandResult::Continue;
                 }
 
@@ -358,6 +418,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             .map(|m| m.to_string())
                             .collect::<Vec<_>>()
                             .join(", ")
+                    }
+                );
+                println!(
+                    "  Planning Mode:     {} {}",
+                    self.config.planning_mode,
+                    if self.config.planning_mode.is_ensemble() {
+                        "(multi-model planning + voting)".dimmed()
+                    } else {
+                        "(single model planning)".dimmed()
                     }
                 );
                 println!("  Plan Review:       {}", "Always required".green());
@@ -428,13 +497,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         context
     }
 
-    /// Run quorum council with conversation context
+    /// Run Quorum Discussion with conversation context
     async fn run_council(&self, question: &str) {
         println!();
         println!(
             "{} {}",
             "━".repeat(50).dimmed(),
-            "Council Starting".bold().magenta()
+            "Quorum Discussion".bold().magenta()
         );
         println!();
 
@@ -466,7 +535,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Ok(output) => {
                 // Show synthesis
                 println!();
-                println!("{}", "Council Conclusion:".bold().magenta());
+                println!("{}", "Quorum Synthesis:".bold().magenta());
                 println!();
 
                 let formatted = match OutputFormat::Synthesis {
@@ -477,7 +546,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!("{}", formatted);
             }
             Err(e) => {
-                println!("{} {}", "❌".red(), "Council failed".red().bold());
+                println!("{} {}", "❌".red(), "Quorum Discussion failed".red().bold());
                 println!();
                 println!("{} {}", "Error:".red().bold(), e);
             }
@@ -591,9 +660,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     async fn process_request(&mut self, request: &str) {
         // Route based on mode
         match self.current_mode {
+            // Solo mode: Single model driven, quick execution
+            OrchestrationMode::Agent => {
+                // Fall through to agent logic
+            }
+            // Ensemble mode: Multi-model driven, more thorough
+            // Uses the same agent flow but with ensemble flag for future enhancements
             OrchestrationMode::Quorum => {
-                self.run_council(request).await;
-                return;
+                // For now, use the same agent flow
+                // TODO: Add multi-model planning discussion in Ensemble mode
             }
             OrchestrationMode::Fast | OrchestrationMode::Debate | OrchestrationMode::Plan => {
                 println!();
@@ -602,21 +677,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     "⚠️".yellow(),
                     self.current_mode
                 );
-                println!("Please switch back to 'agent' or 'quorum' using /mode.");
+                println!("Please switch back to 'solo' or 'ensemble' using /mode.");
                 println!();
                 return;
-            }
-            OrchestrationMode::Agent => {
-                // Fall through to existing agent logic
             }
         }
 
         println!();
-        println!(
-            "{} {}",
-            "━".repeat(50).dimmed(),
-            "Agent Starting".bold().cyan()
-        );
+        let mode_label = if self.current_mode.is_ensemble() {
+            "Ensemble Agent Starting".bold().magenta()
+        } else {
+            "Solo Agent Starting".bold().cyan()
+        };
+        println!("{} {}", "━".repeat(50).dimmed(), mode_label);
+        if self.current_mode.is_ensemble() {
+            println!(
+                "{}",
+                "  (Multi-model mode: higher accuracy, more thorough)".dimmed()
+            );
+        }
         println!();
 
         let input = RunAgentInput::new(request, self.config.clone());

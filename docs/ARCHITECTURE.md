@@ -13,6 +13,66 @@ copilot-quorum は **DDD (Domain-Driven Design) + オニオンアーキテクチ
 
 ---
 
+## Core Concepts / コア概念
+
+### Quorum とは
+
+**Quorum** は分散システムにおける合意形成の概念を LLM に応用したものです：
+
+- **Quorum Discussion**: 複数モデルによる対等な議論（意見収集）
+- **Quorum Consensus**: 投票による合意形成（承認/却下の判定）
+- **Quorum Synthesis**: 複数意見の統合・矛盾解決
+
+### Solo / Ensemble モード
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  モード切り替え                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  【Solo モード】(default)          【Ensemble モード】          │
+│  - 単一モデル（Agent）主導         - 複数モデル（Quorum）主導   │
+│  - 素早く実行                      - 多角的な視点で議論         │
+│  - 必要時のみ /discuss             - 常に複数モデルで合議       │
+│  - シンプルなタスク向け            - 複雑な設計・判断向け       │
+│                                                                 │
+│  CLI: --solo (default)             CLI: --ensemble              │
+│  REPL: /solo                       REPL: /ens or /ensemble      │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**ML 的アナロジー**:
+- Solo = 単一モデルの予測
+- Ensemble = 複数モデルを組み合わせて精度・信頼性を向上（アンサンブル学習）
+
+### Quorum Layers（将来ビジョン）
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Quorum Layers                                                   │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Knowledge Quorum (知識層) - Phase 3                       │  │
+│  │  - 永続化された知識からの合意形成                         │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          ↓                                       │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Context Quorum (コンテキスト層) - Phase 2                 │  │
+│  │  - セッション間でコンテキスト共有（常駐）                 │  │
+│  │  - 議論履歴、決定事項、パターンを保持                     │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          ↓                                       │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Decision Quorum (決定層) - Phase 1 (Current)              │  │
+│  │  - 複数モデルによる意思決定の合意                         │  │
+│  │  - Quorum Discussion, Quorum Consensus                     │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Design Philosophy / 設計思想
 
 ### Why DDD + Onion Architecture? / なぜDDD + オニオンアーキテクチャか
@@ -53,6 +113,7 @@ copilot-quorum/
 │
 ├── domain/                    # ドメイン層
 │   ├── core/                  #   共通概念 (Model, Question, Error)
+│   ├── quorum/                #   [Quorum] 合意形成 (Vote, QuorumRule, ConsensusRound)
 │   ├── session/               #   [セッション] エンティティ + リポジトリtrait
 │   ├── orchestration/         #   [オーケストレーション] フェーズ、結果、戦略trait
 │   ├── agent/                 #   [エージェント] 自律実行の状態管理
@@ -268,6 +329,18 @@ copilot-quorum/
 | `Model` | Value Object | 利用可能なAIモデル（Claude, GPT, Gemini等） |
 | `Question` | Value Object | Quorumに投げかける質問 |
 | `DomainError` | Error | ドメインレベルのエラー |
+
+### Quorum Module
+
+Quorum（合意形成）に関する型を定義します。
+
+| Type | Kind | Description |
+|------|------|-------------|
+| `Vote` | Value Object | モデルからの投票（承認/却下 + 理由） |
+| `VoteResult` | Value Object | 投票結果の集計 |
+| `QuorumRule` | Value Object | 合意ルール（過半数、全会一致など） |
+| `ConsensusRound` | Entity | 投票ラウンドの記録 |
+| `ConsensusOutcome` | Value Object | 結果（Approved, Rejected, Pending） |
 
 ### Session Module
 
@@ -545,7 +618,7 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 ## Agent System / エージェントシステム
 
 エージェントシステムは、Quorumの概念を自律タスク実行に拡張したものです。
-重要なポイントでは合議によるレビューを維持しつつ、ルーチンタスクは単一モデルで実行します。
+Solo モードで動作し、重要なポイントでは Quorum Consensus によるレビューを行います。
 
 ### Agent Flow / エージェントフロー
 
@@ -563,36 +636,36 @@ User Request
 └───────────────────┘
     │
     ▼
-┌───────────────────┐
-│ 🗳️ QUORUM #1     │  ← 全モデルが計画をレビュー（必須）
-│   Plan Review     │     過半数の投票で承認/却下
-└───────────────────┘
+┌───────────────────────────┐
+│ 🗳️ Quorum Consensus #1   │  ← 全モデルが計画をレビュー（必須）
+│   Plan Review             │     過半数の投票で承認/却下
+└───────────────────────────┘
     │
     ▼
 ┌───────────────────┐
 │  Task Execution   │
 │   ├─ Low-risk  ────▶ 直接実行
 │   │
-│   └─ High-risk ────▶ 🗳️ QUORUM #2 (Action Review)
+│   └─ High-risk ────▶ 🗳️ Quorum Consensus #2 (Action Review)
 │                        write_file, run_command 実行前にレビュー
 └───────────────────┘
     │
     ▼
-┌───────────────────┐
-│ 🗳️ QUORUM #3     │  ← オプションの最終レビュー
-│  Final Review     │     (require_final_review: true)
-└───────────────────┘
+┌───────────────────────────┐
+│ 🗳️ Quorum Consensus #3   │  ← オプションの最終レビュー
+│  Final Review             │     (require_final_review: true)
+└───────────────────────────┘
 ```
 
-### Quorum Review / 合議レビュー
+### Quorum Consensus / 合意形成
 
-合議システムは複数モデルの合意によって安全性を確保します：
+Quorum Consensus は複数モデルの投票によって安全性を確保します：
 
-1. **Plan Review（必須）**: 設定された全合議モデルが提案された計画をレビュー
+1. **Plan Review（必須）**: 設定された全 review_models が提案された計画をレビュー
 2. **Action Review（高リスク操作）**: `write_file` と `run_command` の実行前にレビュー
 3. **Final Review（オプション）**: 実行結果全体をレビュー
 
-承認には過半数の投票が必要。却下された計画/アクションには集約されたフィードバックが含まれます。
+承認には過半数（または設定された QuorumRule）の投票が必要。却下された計画/アクションには集約されたフィードバックが含まれます。
 
 ### Risk Levels / リスクレベル
 

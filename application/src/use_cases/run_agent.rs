@@ -14,8 +14,9 @@ use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::core::string::truncate;
 use quorum_domain::{
-    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, HilMode, HumanDecision,
-    Model, ModelVote, Plan, ProjectContext, ReviewRound, Task, TaskId, Thought, ToolCall,
+    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
+    HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
+    Task, TaskId, Thought, ToolCall,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -35,6 +36,9 @@ pub enum RunAgentError {
 
     #[error("Planning failed: {0}")]
     PlanningFailed(String),
+
+    #[error("Ensemble planning failed: {0}")]
+    EnsemblePlanningFailed(String),
 
     #[error("Plan rejected by quorum: {0}")]
     PlanRejected(String),
@@ -147,13 +151,56 @@ impl ErrorCategory {
     }
 }
 
-/// Progress notifier specific to agent execution
+/// Progress notifier for agent execution
+///
+/// This trait provides callbacks for various stages of agent execution,
+/// allowing UI implementations to display progress to the user.
+///
+/// All methods have default no-op implementations, so implementers only
+/// need to override the callbacks they care about.
+///
+/// # Callback Categories
+///
+/// - **Phase callbacks**: Track high-level execution phases
+/// - **Task callbacks**: Track individual task execution
+/// - **Tool callbacks**: Track tool calls and results
+/// - **Quorum callbacks**: Track multi-model voting (Solo mode)
+/// - **Ensemble callbacks**: Track multi-model planning (Ensemble mode)
+///
+/// # Example Implementation
+///
+/// ```ignore
+/// use quorum_application::use_cases::run_agent::AgentProgressNotifier;
+///
+/// struct MyProgress;
+///
+/// impl AgentProgressNotifier for MyProgress {
+///     fn on_phase_change(&self, phase: &AgentPhase) {
+///         println!("Phase: {}", phase);
+///     }
+///
+///     fn on_ensemble_complete(&self, model: &Model, score: f64) {
+///         println!("Selected: {} ({:.1}/10)", model, score);
+///     }
+/// }
+/// ```
 pub trait AgentProgressNotifier: Send + Sync {
+    /// Called when the agent transitions to a new phase
     fn on_phase_change(&self, _phase: &AgentPhase) {}
+
+    /// Called when the agent records a reasoning step
     fn on_thought(&self, _thought: &Thought) {}
+
+    /// Called when a task begins execution
     fn on_task_start(&self, _task: &Task) {}
+
+    /// Called when a task completes (success or failure)
     fn on_task_complete(&self, _task: &Task, _success: bool) {}
+
+    /// Called when a tool is invoked
     fn on_tool_call(&self, _tool_name: &str, _args: &str) {}
+
+    /// Called when a tool returns a result
     fn on_tool_result(&self, _tool_name: &str, _success: bool) {}
 
     /// Called when a tool execution fails with details about the error
@@ -162,19 +209,33 @@ pub trait AgentProgressNotifier: Send + Sync {
     /// Called when retrying a tool call after an error
     fn on_tool_retry(&self, _tool_name: &str, _attempt: usize, _max_retries: usize, _error: &str) {}
 
-    // Plan revision callbacks
+    // ==================== Plan Revision Callbacks ====================
+
     /// Called when a plan revision is triggered after rejection
     fn on_plan_revision(&self, _revision: usize, _feedback: &str) {}
 
     /// Called when an action is being retried after rejection
     fn on_action_retry(&self, _task: &Task, _attempt: usize, _feedback: &str) {}
 
-    // Quorum-related callbacks
+    // ==================== Quorum Callbacks (Solo Mode) ====================
+
+    /// Called when quorum voting begins
+    ///
+    /// # Arguments
+    /// * `phase` - The review phase (e.g., "plan_review", "action_review")
+    /// * `model_count` - Number of models participating in the vote
     fn on_quorum_start(&self, _phase: &str, _model_count: usize) {}
+
+    /// Called when a single model completes its vote
     fn on_quorum_model_complete(&self, _model: &Model, _approved: bool) {}
+
+    /// Called when quorum voting completes
     fn on_quorum_complete(&self, _phase: &str, _approved: bool, _feedback: Option<&str>) {}
 
     /// Called when quorum voting completes with detailed vote information
+    ///
+    /// # Arguments
+    /// * `votes` - Vec of (model_name, approved, reasoning) tuples
     fn on_quorum_complete_with_votes(
         &self,
         _phase: &str,
@@ -193,6 +254,37 @@ pub trait AgentProgressNotifier: Send + Sync {
         _max_revisions: usize,
     ) {
     }
+
+    // ==================== Ensemble Planning Callbacks ====================
+
+    /// Called when ensemble planning starts (Ensemble mode only)
+    ///
+    /// In ensemble mode, multiple models generate plans independently.
+    /// This is called at the start of that process.
+    ///
+    /// # Arguments
+    /// * `model_count` - Number of models that will generate plans
+    fn on_ensemble_start(&self, _model_count: usize) {}
+
+    /// Called when a model finishes generating its plan
+    ///
+    /// Called once per model as they complete plan generation.
+    fn on_ensemble_plan_generated(&self, _model: &Model) {}
+
+    /// Called when ensemble voting starts
+    ///
+    /// After all plans are generated, models vote on each other's plans.
+    ///
+    /// # Arguments
+    /// * `plan_count` - Number of plans to be voted on
+    fn on_ensemble_voting_start(&self, _plan_count: usize) {}
+
+    /// Called when ensemble planning completes with the selected plan
+    ///
+    /// # Arguments
+    /// * `selected_model` - The model whose plan was selected
+    /// * `score` - The average score (1-10) the selected plan received
+    fn on_ensemble_complete(&self, _selected_model: &Model, _score: f64) {}
 }
 
 /// No-op implementation for when progress isn't needed
@@ -406,11 +498,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // ==================== Phase 2-3: Planning + Review Loop ====================
-        // Uses decision_model (default: Sonnet - needs strong reasoning for planning)
-        let planning_session = self
-            .gateway
-            .create_session_with_system_prompt(&input.config.decision_model, &system_prompt)
-            .await?;
+        // Mode determines planning approach:
+        // - Single (Solo): decision_model creates plan, review_models vote
+        // - Ensemble: review_models each create plans in parallel, then vote on each other's plans
 
         let mut plan_feedback: Option<String> = None;
 
@@ -421,6 +511,70 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // Phase 2: Planning
             progress.on_phase_change(&AgentPhase::Planning);
             state.set_phase(AgentPhase::Planning);
+
+            // Branch based on planning mode
+            if input.config.planning_mode.is_ensemble() {
+                // ==================== Ensemble Planning ====================
+                // Multiple models create plans independently, then vote
+                info!(
+                    "Ensemble planning: {} models will generate plans",
+                    input.config.review_models.len()
+                );
+
+                let ensemble_result = match self
+                    .create_ensemble_plans(
+                        &input,
+                        &state.context,
+                        &system_prompt,
+                        plan_feedback.as_deref(),
+                        progress,
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(e) => {
+                        state.fail(format!("Ensemble planning failed: {}", e));
+                        return Ok(RunAgentOutput {
+                            summary: format!("Agent failed during ensemble planning: {}", e),
+                            success: false,
+                            state,
+                        });
+                    }
+                };
+
+                // Get the selected plan
+                let selected = ensemble_result.selected().ok_or_else(|| {
+                    RunAgentError::EnsemblePlanningFailed("No plan was selected".to_string())
+                })?;
+
+                state.add_thought(Thought::planning(format!(
+                    "Ensemble selected plan from {} with score {:.1}/10: {}",
+                    selected.model,
+                    selected.average_score(),
+                    selected.plan.objective
+                )));
+
+                // Log the summary
+                info!("Ensemble planning result:\n{}", ensemble_result.summary());
+
+                state.set_plan(selected.plan.clone());
+
+                // Ensemble mode: voting is already done during plan generation
+                // Skip the separate review phase and mark as approved
+                state.approve_plan();
+                state.add_thought(Thought::observation(format!(
+                    "Plan selected by ensemble voting (avg score: {:.1}/10)",
+                    selected.average_score()
+                )));
+                break; // Exit loop and proceed to Phase 4
+            }
+
+            // ==================== Single (Solo) Planning ====================
+            // Uses decision_model (default: Sonnet - needs strong reasoning for planning)
+            let planning_session = self
+                .gateway
+                .create_session_with_system_prompt(&input.config.decision_model, &system_prompt)
+                .await?;
 
             let plan = match self
                 .create_plan(
@@ -452,7 +606,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             state.set_plan(plan);
 
-            // Phase 3: Plan Review (Quorum) - REQUIRED
+            // Phase 3: Plan Review (Quorum) - REQUIRED for Solo mode
             progress.on_phase_change(&AgentPhase::PlanReview);
             state.set_phase(AgentPhase::PlanReview);
 
@@ -810,6 +964,229 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         parse_plan(&response).ok_or_else(|| {
             RunAgentError::PlanningFailed("Failed to parse plan from model response".to_string())
         })
+    }
+
+    /// Create plans using ensemble approach (multiple models generate independently, then vote)
+    ///
+    /// This implements the "Independent Generation + Voting" paradigm (ensemble-after-inference)
+    /// based on recent research showing this approach outperforms iterative debate methods.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Independent Generation**: Each `review_model` generates a plan in parallel,
+    ///    without seeing other models' plans. This preserves diversity and avoids
+    ///    "degeneration of thought" where models converge on potentially wrong answers.
+    ///
+    /// 2. **Voting**: Each model scores the other models' plans on a 1-10 scale.
+    ///    Models do not vote on their own plans.
+    ///
+    /// 3. **Selection**: The plan with the highest average score is selected.
+    ///
+    /// # Research Background
+    ///
+    /// This approach is based on findings from:
+    /// - "Debate or Vote" (ACL 2025): Voting matches debate performance with less cost
+    /// - "Multi-Agent Debate" (ICLR 2025): Debate leads to "degeneration of thought"
+    /// - "Beyond Majority Voting" (NeurIPS 2024): Advanced aggregation methods
+    ///
+    /// See `docs/ENSEMBLE_ARCHITECTURE.md` for detailed design rationale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunAgentError::EnsemblePlanningFailed`] if:
+    /// - No review models are configured
+    /// - Fewer than 2 models are configured
+    /// - All models fail to generate plans
+    ///
+    /// # Progress Callbacks
+    ///
+    /// Calls the following progress notifier methods:
+    /// - [`AgentProgressNotifier::on_ensemble_start`] - At the beginning
+    /// - [`AgentProgressNotifier::on_ensemble_plan_generated`] - For each plan
+    /// - [`AgentProgressNotifier::on_ensemble_voting_start`] - Before voting
+    /// - [`AgentProgressNotifier::on_ensemble_complete`] - With the selected plan
+    async fn create_ensemble_plans(
+        &self,
+        input: &RunAgentInput,
+        context: &AgentContext,
+        system_prompt: &str,
+        previous_feedback: Option<&str>,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<EnsemblePlanResult, RunAgentError> {
+        let models = &input.config.review_models;
+
+        if models.is_empty() {
+            return Err(RunAgentError::EnsemblePlanningFailed(
+                "No review models configured for ensemble planning".to_string(),
+            ));
+        }
+
+        if models.len() < 2 {
+            return Err(RunAgentError::EnsemblePlanningFailed(
+                "Ensemble planning requires at least 2 models".to_string(),
+            ));
+        }
+
+        // Step 1: Generate plans from each model in parallel
+        info!(
+            "Ensemble Step 1: Generating plans from {} models",
+            models.len()
+        );
+        progress.on_ensemble_start(models.len());
+
+        let prompt =
+            AgentPromptTemplate::planning_with_feedback(&input.request, context, previous_feedback);
+
+        let mut join_set = JoinSet::new();
+
+        for model in models {
+            let gateway = Arc::clone(&self.gateway);
+            let model = model.clone();
+            let prompt = prompt.clone();
+            let system_prompt = system_prompt.to_string();
+
+            join_set.spawn(async move {
+                let session = gateway
+                    .create_session_with_system_prompt(&model, &system_prompt)
+                    .await?;
+                let response = session.send(&prompt).await?;
+                let plan = parse_plan(&response)
+                    .ok_or_else(|| GatewayError::Other("Failed to parse plan".to_string()))?;
+                Ok::<(Model, Plan), GatewayError>((model, plan))
+            });
+        }
+
+        // Collect generated plans with cancellation support
+        let mut candidates: Vec<PlanCandidate> = Vec::new();
+
+        loop {
+            let result = if let Some(ref token) = self.cancellation_token {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        join_set.abort_all();
+                        return Err(RunAgentError::Cancelled);
+                    }
+                    result = join_set.join_next() => result,
+                }
+            } else {
+                join_set.join_next().await
+            };
+
+            let Some(result) = result else {
+                break;
+            };
+
+            match result {
+                Ok(Ok((model, plan))) => {
+                    info!("Model {} generated plan: {}", model, plan.objective);
+                    progress.on_ensemble_plan_generated(&model);
+                    candidates.push(PlanCandidate::new(model, plan));
+                }
+                Ok(Err(e)) => {
+                    warn!("Model failed to generate plan: {}", e);
+                }
+                Err(e) => {
+                    warn!("Task join error: {}", e);
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return Err(RunAgentError::EnsemblePlanningFailed(
+                "All models failed to generate plans".to_string(),
+            ));
+        }
+
+        if candidates.len() == 1 {
+            // Only one plan succeeded, use it directly
+            info!("Only one plan generated, selecting it directly");
+            return Ok(EnsemblePlanResult::new(candidates, 0));
+        }
+
+        // Step 2: Each model votes on the other models' plans
+        info!("Ensemble Step 2: Voting on {} plans", candidates.len());
+        progress.on_ensemble_voting_start(candidates.len());
+
+        // For each candidate, have other models vote on it
+        for i in 0..candidates.len() {
+            // Clone plan and model name for use in async tasks and logging
+            let plan_to_vote = candidates[i].plan.clone();
+            let plan_model_name = candidates[i].model.to_string();
+
+            // Get votes from other models
+            let mut voting_join_set = JoinSet::new();
+
+            for (j, other_candidate) in candidates.iter().enumerate() {
+                if i == j {
+                    continue; // Don't vote on own plan
+                }
+
+                let gateway = Arc::clone(&self.gateway);
+                let voter_model = other_candidate.model.clone();
+                let voting_prompt = AgentPromptTemplate::plan_voting(&plan_to_vote);
+                let system_prompt = system_prompt.to_string();
+
+                voting_join_set.spawn(async move {
+                    let session = gateway
+                        .create_session_with_system_prompt(&voter_model, &system_prompt)
+                        .await?;
+                    let response = session.send(&voting_prompt).await?;
+                    let score = parse_vote_score(&response);
+                    Ok::<(String, f64), GatewayError>((voter_model.to_string(), score))
+                });
+            }
+
+            // Collect votes for this plan
+            loop {
+                let result = if let Some(ref token) = self.cancellation_token {
+                    tokio::select! {
+                        biased;
+                        _ = token.cancelled() => {
+                            voting_join_set.abort_all();
+                            return Err(RunAgentError::Cancelled);
+                        }
+                        result = voting_join_set.join_next() => result,
+                    }
+                } else {
+                    voting_join_set.join_next().await
+                };
+
+                let Some(result) = result else {
+                    break;
+                };
+
+                match result {
+                    Ok(Ok((voter, score))) => {
+                        info!(
+                            "Model {} voted {}/10 for plan from {}",
+                            voter, score as i32, plan_model_name
+                        );
+                        candidates[i].add_vote(&voter, score);
+                    }
+                    Ok(Err(e)) => {
+                        warn!("Voting failed: {}", e);
+                    }
+                    Err(e) => {
+                        warn!("Voting task join error: {}", e);
+                    }
+                }
+            }
+        }
+
+        // Step 3: Select the best plan
+        let result = EnsemblePlanResult::select_best(candidates);
+
+        if let Some(selected) = result.selected() {
+            info!(
+                "Selected plan from {} with average score {:.1}/10",
+                selected.model,
+                selected.average_score()
+            );
+            progress.on_ensemble_complete(&selected.model, selected.average_score());
+        }
+
+        Ok(result)
     }
 
     /// Determine the appropriate model for a task based on tool risk level
@@ -1644,6 +2021,67 @@ fn parse_final_review_response(response: &str) -> (bool, String) {
     (success, response.to_string())
 }
 
+/// Parse a vote score from ensemble voting response
+///
+/// Parses the model's voting response to extract a numerical score (1-10).
+/// Supports multiple response formats for robustness.
+///
+/// # Supported Formats
+///
+/// 1. **JSON** (preferred): `{"score": 8, "reasoning": "..."}`
+/// 2. **Fraction**: `8/10` or `Score: 7/10`
+/// 3. **Standalone number**: `9` (if in valid range 1-10)
+///
+/// # Return Value
+///
+/// - Returns the parsed score clamped to 1.0-10.0
+/// - Returns 5.0 (neutral) if parsing fails
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(parse_vote_score(r#"{"score": 8, "reasoning": "Good"}"#), 8.0);
+/// assert_eq!(parse_vote_score("I rate this 7/10"), 7.0);
+/// assert_eq!(parse_vote_score("Score: 9"), 9.0);
+/// assert_eq!(parse_vote_score("No numbers here"), 5.0); // fallback
+/// ```
+fn parse_vote_score(response: &str) -> f64 {
+    // Try to find JSON in the response
+    if let Some(start) = response.find('{')
+        && let Some(end) = response[start..].rfind('}')
+    {
+        let json_str = &response[start..start + end + 1];
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str)
+            && let Some(score) = parsed.get("score").and_then(|v| v.as_f64())
+        {
+            // Clamp to valid range
+            return score.clamp(1.0, 10.0);
+        }
+    }
+
+    // Fallback: try to find a number that looks like a score
+    // Look for patterns like "8/10" or "score: 8" or just a standalone number
+    for word in response.split_whitespace() {
+        // Check for "N/10" pattern
+        if let Some(num_str) = word.strip_suffix("/10")
+            && let Ok(num) = num_str.parse::<f64>()
+        {
+            return num.clamp(1.0, 10.0);
+        }
+        // Check for standalone number (1-10)
+        if let Ok(num) = word
+            .trim_matches(|c: char| !c.is_ascii_digit())
+            .parse::<f64>()
+            && (1.0..=10.0).contains(&num)
+        {
+            return num;
+        }
+    }
+
+    // Default to middle score if parsing fails
+    5.0
+}
+
 /// Parse tool calls from model response
 fn parse_tool_calls(response: &str) -> Vec<ToolCall> {
     let mut calls = Vec::new();
@@ -1863,5 +2301,57 @@ Here's my plan:
         for error in errors {
             assert!(!error.is_cancelled(), "{:?} should not be cancelled", error);
         }
+    }
+
+    // ==================== Ensemble Planning Tests ====================
+
+    #[test]
+    fn test_parse_vote_score_json() {
+        // Standard JSON response
+        let response = r#"{"score": 8, "reasoning": "Good plan"}"#;
+        assert_eq!(parse_vote_score(response), 8.0);
+
+        // With markdown code block
+        let response = r#"
+Here is my evaluation:
+```json
+{"score": 7, "reasoning": "Solid but could improve"}
+```
+"#;
+        assert_eq!(parse_vote_score(response), 7.0);
+    }
+
+    #[test]
+    fn test_parse_vote_score_pattern() {
+        // "N/10" pattern
+        assert_eq!(parse_vote_score("I rate this 8/10"), 8.0);
+        assert_eq!(parse_vote_score("Score: 6/10"), 6.0);
+
+        // Standalone number
+        assert_eq!(parse_vote_score("My score is 9"), 9.0);
+    }
+
+    #[test]
+    fn test_parse_vote_score_clamp() {
+        // Clamps to valid range
+        let response = r#"{"score": 15, "reasoning": "Too high"}"#;
+        assert_eq!(parse_vote_score(response), 10.0);
+
+        let response = r#"{"score": -5, "reasoning": "Too low"}"#;
+        assert_eq!(parse_vote_score(response), 1.0);
+    }
+
+    #[test]
+    fn test_parse_vote_score_fallback() {
+        // Fallback to 5.0 when parsing fails
+        assert_eq!(parse_vote_score("No numbers here"), 5.0);
+        assert_eq!(parse_vote_score(""), 5.0);
+    }
+
+    #[test]
+    fn test_ensemble_planning_error() {
+        let error = RunAgentError::EnsemblePlanningFailed("test error".to_string());
+        assert_eq!(error.to_string(), "Ensemble planning failed: test error");
+        assert!(!error.is_cancelled());
     }
 }
