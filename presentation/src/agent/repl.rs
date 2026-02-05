@@ -36,7 +36,6 @@ pub struct AgentRepl<
     use_case: RunAgentUseCase<G, T, C>,
     context_loader: Arc<C>,
     config: AgentConfig,
-    quorum_models: Vec<Model>,
     /// Moderator model for synthesis (if explicitly configured)
     moderator: Option<Model>,
     verbose: bool,
@@ -52,12 +51,12 @@ pub struct AgentRepl<
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
     AgentRepl<G, T, C>
 {
-    /// Create a new AgentRepl with context loader
+    /// Create a new AgentRepl with role-based agent configuration
     pub fn new(
         gateway: Arc<G>,
         tool_executor: Arc<T>,
         context_loader: Arc<C>,
-        primary_model: Model,
+        config: AgentConfig,
     ) -> Self {
         // Set up human intervention handler for HiL (Human-in-the-Loop)
         let human_intervention = Arc::new(InteractiveHumanIntervention::new());
@@ -71,8 +70,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             )
             .with_human_intervention(human_intervention),
             context_loader,
-            config: AgentConfig::new(primary_model),
-            quorum_models: Model::default_models(),
+            config,
             moderator: None,
             verbose: false,
             working_dir: None,
@@ -80,13 +78,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             current_mode: OrchestrationMode::Agent,
             cancellation_token: None,
         }
-    }
-
-    /// Set quorum models for review
-    pub fn with_quorum_models(mut self, models: Vec<Model>) -> Self {
-        self.quorum_models = models.clone();
-        self.config = self.config.with_quorum_models(models);
-        self
     }
 
     /// Set moderator model for synthesis
@@ -213,22 +204,28 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             "╰─────────────────────────────────────────────╯".cyan()
         );
         println!();
-        println!("{} {}", "Primary Model:".bold(), self.config.primary_model);
-        if !self.quorum_models.is_empty() {
+        // Show role-based model configuration
+        println!(
+            "{} {}",
+            "Decision Model:".bold(),
+            self.config.decision_model
+        );
+        if !self.config.review_models.is_empty() {
             println!(
                 "{} {}",
-                "Quorum Models:".bold(),
-                self.quorum_models
+                "Review Models:".bold(),
+                self.config
+                    .review_models
                     .iter()
                     .map(|m| m.to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            // Show moderator (explicit or default to first quorum model)
+            // Show moderator (explicit or default to first review model)
             let moderator_display = self
                 .moderator
                 .as_ref()
-                .or(self.quorum_models.first())
+                .or(self.config.review_models.first())
                 .map(|m| m.to_string())
                 .unwrap_or_default();
             if !moderator_display.is_empty() {
@@ -339,38 +336,41 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             "/config" => {
                 println!();
                 println!("{}", "Current Configuration:".bold().cyan());
-                println!("  Primary Model:    {}", self.config.primary_model);
+                // Role-based model configuration (3 fields)
+                println!("  Exploration Model: {} {}", self.config.exploration_model, "(context + low-risk tools)".dimmed());
+                println!("  Decision Model:    {} {}", self.config.decision_model, "(planning + high-risk tools)".dimmed());
                 println!(
-                    "  Quorum Models:    {}",
-                    if self.quorum_models.is_empty() {
+                    "  Review Models:     {}",
+                    if self.config.review_models.is_empty() {
                         "None (auto-approve)".to_string()
                     } else {
-                        self.quorum_models
+                        self.config
+                            .review_models
                             .iter()
                             .map(|m| m.to_string())
                             .collect::<Vec<_>>()
                             .join(", ")
                     }
                 );
-                println!("  Plan Review:      {}", "Always required".green());
+                println!("  Plan Review:       {}", "Always required".green());
                 println!(
-                    "  Final Review:     {}",
+                    "  Final Review:      {}",
                     if self.config.require_final_review {
                         "Enabled"
                     } else {
                         "Disabled"
                     }
                 );
-                println!("  Max Iterations:   {}", self.config.max_iterations);
+                println!("  Max Iterations:    {}", self.config.max_iterations);
                 println!("  Max Plan Revisions: {}", self.config.max_plan_revisions);
-                println!("  HiL Mode:         {}", self.config.hil_mode);
+                println!("  HiL Mode:          {}", self.config.hil_mode);
                 println!(
-                    "  Working Dir:      {}",
+                    "  Working Dir:       {}",
                     self.working_dir.as_deref().unwrap_or("(current)")
                 );
-                println!("  Verbose:          {}", self.verbose);
+                println!("  Verbose:           {}", self.verbose);
                 println!(
-                    "  History:          {} entries",
+                    "  History:           {} entries",
                     self.conversation_history.len()
                 );
                 println!();
@@ -438,11 +438,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             format!("{}\n\n## Current Question\n\n{}", context, question)
         };
 
-        // Create quorum input
-        let mut input = RunQuorumInput::new(full_question, self.quorum_models.clone());
+        // Create quorum input using review models
+        let mut input = RunQuorumInput::new(full_question, self.config.review_models.clone());
 
-        // Use first quorum model as moderator if available
-        if let Some(moderator) = self.quorum_models.first() {
+        // Use first review model as moderator if available
+        if let Some(moderator) = self.config.review_models.first() {
             input = input.with_moderator(moderator.clone());
         }
 
@@ -514,14 +514,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         println!();
         println!(
             "Analyzing project with {} models...",
-            self.quorum_models.len()
+            self.config.review_models.len()
         );
         println!();
 
-        // Create the init context input
-        let mut input = InitContextInput::new(&working_dir, self.quorum_models.clone());
+        // Create the init context input using review models
+        let mut input = InitContextInput::new(&working_dir, self.config.review_models.clone());
 
-        if let Some(moderator) = self.quorum_models.first() {
+        if let Some(moderator) = self.config.review_models.first() {
             input = input.with_moderator(moderator.clone());
         }
 
