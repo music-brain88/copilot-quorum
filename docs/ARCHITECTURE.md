@@ -368,16 +368,28 @@ copilot-quorum/
 
 ### Tools Adapter
 
+ツールシステムはプラグインベースのアーキテクチャを採用しています（詳細は [Tool Provider System](#tool-provider-system--ツールプロバイダーシステム) を参照）。
+
 | Type | Implements | Description |
 |------|------------|-------------|
-| `LocalToolExecutor` | `ToolExecutorPort` | ローカルマシンでのツール実行 |
+| `ToolRegistry` | `ToolExecutorPort` | プロバイダーを集約、優先度でルーティング |
+| `BuiltinProvider` | `ToolProvider` | 最小限の組み込みツール（priority: -100） |
+| `CliToolProvider` | `ToolProvider` | システムCLIツールのラッパー（priority: 50） |
 
-利用可能なツール:
+#### 利用可能なツール
+
+**Builtin Provider:**
 - `read_file` - ファイル内容の読み取り（Low risk）
 - `write_file` - ファイルの書き込み/作成（High risk）
 - `run_command` - シェルコマンド実行（High risk）
 - `glob_search` - パターンによるファイル検索（Low risk）
 - `grep_search` - ファイル内容の検索（Low risk）
+
+**CLI Provider:**
+- `grep_search` - grep/rg によるファイル内容検索（Low risk）
+- `glob_search` - find/fd によるファイルパターン検索（Low risk）
+
+CLI Provider は Builtin Provider より高い優先度を持つため、同じ名前のツールは CLI 版が優先されます。
 
 ### Context Adapter
 
@@ -625,6 +637,179 @@ UseCase (Application層)
 
 ---
 
+## Tool Provider System / ツールプロバイダーシステム
+
+ツールプロバイダーシステムは、**プラグインベースのオーケストレーション**アーキテクチャを採用しています。
+Quorum はツールの呼び出し・連携に専念し、実際のツール実装は外部プロバイダーに委譲します。
+
+### Design Philosophy / 設計思想
+
+| 原則 | 説明 |
+|------|------|
+| **オーケストレーション専念** | Quorum はツールの呼び出し・連携に注力、実装は外部に委譲 |
+| **外部ツール追従** | CLI ツール（rg, gh, fd 等）や MCP サーバーが進化しても自動追従 |
+| **ユーザー選択可能** | 設定ファイルでツールプロバイダーを切り替え |
+| **プラグイン拡張** | コード変更なしで新しいツールを追加可能 |
+| **標準ツールがデフォルト** | grep, find, cat など標準ツールをデフォルトに（どこでも動く） |
+| **推奨ツール提案** | 高速ツール（rg, fd, bat）検知時はユーザーに切り替えを提案 |
+
+### Architecture / アーキテクチャ
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     ToolRegistry                            │
+│  (プロバイダーを集約、優先度でルーティング)                 │
+└─────────────────────────────────────────────────────────────┘
+          │              │              │              │
+          ▼              ▼              ▼              ▼
+   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+   │ Builtin  │   │   CLI    │   │   MCP    │   │  Script  │
+   │ Provider │   │ Provider │   │ Provider │   │ Provider │
+   └──────────┘   └──────────┘   └──────────┘   └──────────┘
+   最小限の        rg, fd, gh     MCP サーバー    ユーザー
+   フォールバック   等をラップ    を統合         スクリプト
+   (優先度: -100)  (優先度: 50)  (優先度: 100)  (優先度: 75)
+```
+
+### Provider Types / プロバイダーの種類
+
+| Provider | Priority | Description | Use Case |
+|----------|----------|-------------|----------|
+| **MCP** | 100 | MCP サーバー経由のツール | 外部サーバーとの連携、豊富な機能 |
+| **Script** | 75 | ユーザー定義スクリプト | カスタム処理、プロジェクト固有ツール |
+| **CLI** | 50 | システムCLIツールのラッパー | grep/rg, find/fd, cat/bat |
+| **Builtin** | -100 | 最小限の組み込みツール | フォールバック、常に利用可能 |
+
+優先度が高いプロバイダーが同じ名前のツールを提供している場合、そちらが優先されます。
+
+### ToolProvider Trait
+
+```rust
+#[async_trait]
+pub trait ToolProvider: Send + Sync {
+    /// 一意な識別子 (e.g., "builtin", "cli", "mcp:filesystem")
+    fn id(&self) -> &str;
+
+    /// 表示名
+    fn display_name(&self) -> &str;
+
+    /// 優先度 (高い方が優先)
+    fn priority(&self) -> i32 { 0 }
+
+    /// プロバイダーが利用可能か確認
+    async fn is_available(&self) -> bool;
+
+    /// 利用可能なツールを検出
+    async fn discover_tools(&self) -> Result<Vec<ToolDefinition>, ProviderError>;
+
+    /// ツール実行
+    async fn execute(&self, call: &ToolCall) -> ToolResult;
+}
+```
+
+### CLI Tool Discovery / CLI ツール検知
+
+CLI プロバイダーは標準ツールをデフォルトとしつつ、高速な代替ツールを検知して提案します。
+
+#### Tool Mapping / ツールマッピング
+
+| Tool | Standard (Default) | Enhanced (Recommended) | Improvement |
+|------|-------------------|------------------------|-------------|
+| `grep_search` | `grep` | `rg` (ripgrep) | ~10x faster, .gitignore support |
+| `glob_search` | `find` | `fd` | ~5x faster, simpler syntax |
+| `read_file` | `cat` | `bat` | Syntax highlighting |
+
+#### Discovery Flow / 検知フロー
+
+```
+$ quorum init
+📦 Tool configuration...
+
+Default tools (always available):
+  ✓ grep  → file content search
+  ✓ find  → file pattern search
+
+🔍 Enhanced tools detected on your system:
+  • rg (ripgrep) - 10x faster than grep
+  • fd           - 5x faster than find
+
+Would you like to use these enhanced tools? [Y/n]: y
+
+✨ Configuration updated!
+```
+
+### Configuration / 設定
+
+`quorum.toml` でプロバイダーとツールを設定できます：
+
+```toml
+[tools]
+providers = ["cli", "builtin"]  # 有効化するプロバイダー
+suggest_enhanced_tools = true   # 推奨ツール検知時に提案するか
+
+[tools.builtin]
+enabled = true
+
+[tools.cli]
+enabled = true
+
+# ツールのエイリアス設定（標準ツールがデフォルト）
+[tools.cli.aliases]
+grep_search = "grep"    # デフォルト: grep, 推奨: rg
+glob_search = "find"    # デフォルト: find, 推奨: fd
+
+# MCP サーバー設定
+[tools.mcp]
+enabled = true
+
+[[tools.mcp.servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@anthropic/mcp-server-filesystem", "/workspace"]
+```
+
+### ToolRegistry / ツールレジストリ
+
+`ToolRegistry` は複数のプロバイダーを集約し、`ToolExecutorPort` を実装します：
+
+```rust
+// レジストリの初期化
+let mut registry = ToolRegistry::new()
+    .register(CliToolProvider::new())      // priority: 50
+    .register(BuiltinProvider::new());     // priority: -100
+
+// ツール検出（優先度順に処理）
+registry.discover().await?;
+
+// ツール実行（適切なプロバイダーにルーティング）
+let call = ToolCall::new("grep_search").with_arg("pattern", "TODO");
+let result = registry.execute(&call).await;
+```
+
+### Module Structure / モジュール構造
+
+```
+infrastructure/src/tools/
+├── mod.rs              # 全体エクスポート
+├── registry.rs         # ToolRegistry 実装
+├── builtin/
+│   ├── mod.rs
+│   ├── provider.rs     # BuiltinProvider (priority: -100)
+│   └── *.rs            # read_file, write_file, etc.
+├── cli/
+│   ├── mod.rs
+│   ├── provider.rs     # CliToolProvider (priority: 50)
+│   └── discovery.rs    # 推奨ツール検知 & 提案
+├── mcp/                # (Future: MCP integration)
+│   ├── mod.rs
+│   ├── provider.rs     # McpToolProvider (priority: 100)
+│   └── client.rs       # MCP クライアント
+└── script/             # (Future: User scripts)
+    └── provider.rs     # ScriptToolProvider (priority: 75)
+```
+
+---
+
 ## Error Handling / エラーハンドリング
 
 | Error Type | Location | Handling |
@@ -744,16 +929,72 @@ impl ProgressNotifier for WebSocketProgress {
 
 ### Adding New Tools / 新しいツールの追加
 
-`infrastructure/tools/` に新しいツールを追加し、`default_tool_spec()` に登録：
+ツールプロバイダーシステムでは、複数の方法でツールを追加できます：
+
+#### Option 1: CLI ツールのラッピング（推奨）
+
+既存の CLI ツールを Quorum で利用可能にする最も簡単な方法：
+
+```toml
+# quorum.toml
+[tools.cli.aliases]
+my_tool = "external-cli-command"
+```
+
+#### Option 2: BuiltinProvider への追加
+
+`infrastructure/tools/builtin/` に新しいツールを追加：
 
 ```rust
-// infrastructure/src/tools/my_tool.rs
-pub fn execute_my_tool(args: &ToolCall) -> ToolResult {
+// infrastructure/src/tools/builtin/my_tool.rs
+pub fn execute_my_tool(call: &ToolCall) -> ToolResult {
     // Tool implementation
 }
 
-// infrastructure/src/tools/mod.rs の default_tool_spec() に追加
-ToolDefinition::new("my_tool", "Description", RiskLevel::Low, params)
+// infrastructure/src/tools/builtin/provider.rs の build_default_spec() に追加
+ToolDefinition::new("my_tool", "Description", RiskLevel::Low)
+    .with_parameter(ToolParameter::new("arg", "Description", true))
+```
+
+#### Option 3: 新しい ToolProvider の実装
+
+完全なカスタムプロバイダーを作成：
+
+```rust
+// infrastructure/src/tools/custom/provider.rs
+pub struct CustomToolProvider { /* ... */ }
+
+#[async_trait]
+impl ToolProvider for CustomToolProvider {
+    fn id(&self) -> &str { "custom" }
+    fn display_name(&self) -> &str { "Custom Tools" }
+    fn priority(&self) -> i32 { 60 }  // CLI より高く、Script より低い
+
+    async fn is_available(&self) -> bool { true }
+
+    async fn discover_tools(&self) -> Result<Vec<ToolDefinition>, ProviderError> {
+        Ok(vec![
+            ToolDefinition::new("my_tool", "Description", RiskLevel::Low)
+        ])
+    }
+
+    async fn execute(&self, call: &ToolCall) -> ToolResult {
+        match call.tool_name.as_str() {
+            "my_tool" => execute_my_tool(call),
+            _ => ToolResult::failure(&call.tool_name, ToolError::not_found(&call.tool_name)),
+        }
+    }
+}
+```
+
+レジストリへの登録：
+
+```rust
+// cli/src/main.rs
+let mut registry = ToolRegistry::new()
+    .register(CustomToolProvider::new())  // priority: 60
+    .register(CliToolProvider::new())     // priority: 50
+    .register(BuiltinProvider::new());    // priority: -100
 ```
 
 ### Adding New Context File Types / 新しいコンテキストファイル種別の追加

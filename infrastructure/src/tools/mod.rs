@@ -3,14 +3,27 @@
 //! This module provides concrete implementations of tools that
 //! can be used by the agent to interact with the local file system
 //! and execute commands.
+//!
+//! ## Providers
+//!
+//! Tools are organized into providers:
+//! - `builtin`: Built-in tools (read_file, write_file, etc.) - always available
+//! - `cli`: CLI tool wrappers (coming soon)
+//! - `mcp`: MCP server tools (coming soon)
 
+pub mod builtin;
+pub mod cli;
 pub mod command;
 pub mod file;
 pub mod search;
 
 mod executor;
+mod registry;
 
+pub use builtin::BuiltinProvider;
+pub use cli::CliToolProvider;
 pub use executor::LocalToolExecutor;
+pub use registry::{RegistryStats, ToolRegistry};
 
 use quorum_domain::tool::entities::ToolSpec;
 
