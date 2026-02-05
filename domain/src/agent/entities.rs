@@ -539,7 +539,7 @@ impl Default for AgentConfig {
         Self {
             // Role-based defaults (cost-optimized)
             exploration_model: Model::ClaudeHaiku45, // Cheap: info collection + low-risk tools
-            decision_model: Model::ClaudeSonnet45,   // High performance: planning + high-risk decisions
+            decision_model: Model::ClaudeSonnet45, // High performance: planning + high-risk decisions
             review_models: vec![Model::ClaudeSonnet45, Model::Gpt52Codex], // High performance: safety
 
             // Behavior defaults

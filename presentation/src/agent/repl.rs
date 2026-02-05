@@ -337,8 +337,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!();
                 println!("{}", "Current Configuration:".bold().cyan());
                 // Role-based model configuration (3 fields)
-                println!("  Exploration Model: {} {}", self.config.exploration_model, "(context + low-risk tools)".dimmed());
-                println!("  Decision Model:    {} {}", self.config.decision_model, "(planning + high-risk tools)".dimmed());
+                println!(
+                    "  Exploration Model: {} {}",
+                    self.config.exploration_model,
+                    "(context + low-risk tools)".dimmed()
+                );
+                println!(
+                    "  Decision Model:    {} {}",
+                    self.config.decision_model,
+                    "(planning + high-risk tools)".dimmed()
+                );
                 println!(
                     "  Review Models:     {}",
                     if self.config.review_models.is_empty() {

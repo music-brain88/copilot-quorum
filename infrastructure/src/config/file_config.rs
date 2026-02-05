@@ -148,12 +148,9 @@ impl FileAgentConfig {
 
     /// Parse review_models strings into Vec<Model>
     pub fn parse_review_models(&self) -> Option<Vec<Model>> {
-        self.review_models.as_ref().map(|models| {
-            models
-                .iter()
-                .filter_map(|s| s.parse().ok())
-                .collect()
-        })
+        self.review_models
+            .as_ref()
+            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
     }
 }
 
