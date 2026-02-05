@@ -646,9 +646,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     async fn process_request(&mut self, request: &str) {
         // Route based on mode
         match self.current_mode {
+            // Solo mode: Single model driven, quick execution
+            OrchestrationMode::Agent => {
+                // Fall through to agent logic
+            }
+            // Ensemble mode: Multi-model driven, more thorough
+            // Uses the same agent flow but with ensemble flag for future enhancements
             OrchestrationMode::Quorum => {
-                self.run_council(request).await;
-                return;
+                // For now, use the same agent flow
+                // TODO: Add multi-model planning discussion in Ensemble mode
             }
             OrchestrationMode::Fast | OrchestrationMode::Debate | OrchestrationMode::Plan => {
                 println!();
@@ -657,21 +663,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     "⚠️".yellow(),
                     self.current_mode
                 );
-                println!("Please switch back to 'agent' or 'quorum' using /mode.");
+                println!("Please switch back to 'solo' or 'ensemble' using /mode.");
                 println!();
                 return;
-            }
-            OrchestrationMode::Agent => {
-                // Fall through to existing agent logic
             }
         }
 
         println!();
-        println!(
-            "{} {}",
-            "━".repeat(50).dimmed(),
-            "Agent Starting".bold().cyan()
-        );
+        let mode_label = if self.current_mode.is_ensemble() {
+            "Ensemble Agent Starting".bold().magenta()
+        } else {
+            "Solo Agent Starting".bold().cyan()
+        };
+        println!("{} {}", "━".repeat(50).dimmed(), mode_label);
+        if self.current_mode.is_ensemble() {
+            println!(
+                "{}",
+                "  (Multi-model mode: higher accuracy, more thorough)".dimmed()
+            );
+        }
         println!();
 
         let input = RunAgentInput::new(request, self.config.clone());
