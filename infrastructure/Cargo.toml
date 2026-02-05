@@ -38,6 +38,9 @@ tracing = { workspace = true }
 glob = "0.3"
 regex = "1"
 
+# CLI tool detection
+which = "7"
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros"] }
