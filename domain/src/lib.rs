@@ -30,8 +30,8 @@ pub mod tool;
 // Re-export commonly used types
 pub use agent::{
     entities::{
-        AgentConfig, AgentPhase, AgentState, HilMode, HumanDecision, ModelVote, Plan, ReviewRound,
-        Task, TaskStatus,
+        AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
+        Plan, PlanCandidate, PlanningMode, ReviewRound, Task, TaskStatus,
     },
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };

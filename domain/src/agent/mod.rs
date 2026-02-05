@@ -7,7 +7,7 @@ pub mod entities;
 pub mod value_objects;
 
 pub use entities::{
-    AgentConfig, AgentPhase, AgentState, HilMode, HumanDecision, ModelVote, Plan, ReviewRound,
-    Task, TaskStatus,
+    AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
+    Plan, PlanCandidate, PlanningMode, ReviewRound, Task, TaskStatus,
 };
 pub use value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
