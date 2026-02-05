@@ -151,13 +151,56 @@ impl ErrorCategory {
     }
 }
 
-/// Progress notifier specific to agent execution
+/// Progress notifier for agent execution
+///
+/// This trait provides callbacks for various stages of agent execution,
+/// allowing UI implementations to display progress to the user.
+///
+/// All methods have default no-op implementations, so implementers only
+/// need to override the callbacks they care about.
+///
+/// # Callback Categories
+///
+/// - **Phase callbacks**: Track high-level execution phases
+/// - **Task callbacks**: Track individual task execution
+/// - **Tool callbacks**: Track tool calls and results
+/// - **Quorum callbacks**: Track multi-model voting (Solo mode)
+/// - **Ensemble callbacks**: Track multi-model planning (Ensemble mode)
+///
+/// # Example Implementation
+///
+/// ```ignore
+/// use quorum_application::use_cases::run_agent::AgentProgressNotifier;
+///
+/// struct MyProgress;
+///
+/// impl AgentProgressNotifier for MyProgress {
+///     fn on_phase_change(&self, phase: &AgentPhase) {
+///         println!("Phase: {}", phase);
+///     }
+///
+///     fn on_ensemble_complete(&self, model: &Model, score: f64) {
+///         println!("Selected: {} ({:.1}/10)", model, score);
+///     }
+/// }
+/// ```
 pub trait AgentProgressNotifier: Send + Sync {
+    /// Called when the agent transitions to a new phase
     fn on_phase_change(&self, _phase: &AgentPhase) {}
+
+    /// Called when the agent records a reasoning step
     fn on_thought(&self, _thought: &Thought) {}
+
+    /// Called when a task begins execution
     fn on_task_start(&self, _task: &Task) {}
+
+    /// Called when a task completes (success or failure)
     fn on_task_complete(&self, _task: &Task, _success: bool) {}
+
+    /// Called when a tool is invoked
     fn on_tool_call(&self, _tool_name: &str, _args: &str) {}
+
+    /// Called when a tool returns a result
     fn on_tool_result(&self, _tool_name: &str, _success: bool) {}
 
     /// Called when a tool execution fails with details about the error
@@ -166,19 +209,33 @@ pub trait AgentProgressNotifier: Send + Sync {
     /// Called when retrying a tool call after an error
     fn on_tool_retry(&self, _tool_name: &str, _attempt: usize, _max_retries: usize, _error: &str) {}
 
-    // Plan revision callbacks
+    // ==================== Plan Revision Callbacks ====================
+
     /// Called when a plan revision is triggered after rejection
     fn on_plan_revision(&self, _revision: usize, _feedback: &str) {}
 
     /// Called when an action is being retried after rejection
     fn on_action_retry(&self, _task: &Task, _attempt: usize, _feedback: &str) {}
 
-    // Quorum-related callbacks
+    // ==================== Quorum Callbacks (Solo Mode) ====================
+
+    /// Called when quorum voting begins
+    ///
+    /// # Arguments
+    /// * `phase` - The review phase (e.g., "plan_review", "action_review")
+    /// * `model_count` - Number of models participating in the vote
     fn on_quorum_start(&self, _phase: &str, _model_count: usize) {}
+
+    /// Called when a single model completes its vote
     fn on_quorum_model_complete(&self, _model: &Model, _approved: bool) {}
+
+    /// Called when quorum voting completes
     fn on_quorum_complete(&self, _phase: &str, _approved: bool, _feedback: Option<&str>) {}
 
     /// Called when quorum voting completes with detailed vote information
+    ///
+    /// # Arguments
+    /// * `votes` - Vec of (model_name, approved, reasoning) tuples
     fn on_quorum_complete_with_votes(
         &self,
         _phase: &str,
@@ -198,17 +255,35 @@ pub trait AgentProgressNotifier: Send + Sync {
     ) {
     }
 
-    // Ensemble planning callbacks
-    /// Called when ensemble planning starts
+    // ==================== Ensemble Planning Callbacks ====================
+
+    /// Called when ensemble planning starts (Ensemble mode only)
+    ///
+    /// In ensemble mode, multiple models generate plans independently.
+    /// This is called at the start of that process.
+    ///
+    /// # Arguments
+    /// * `model_count` - Number of models that will generate plans
     fn on_ensemble_start(&self, _model_count: usize) {}
 
     /// Called when a model finishes generating its plan
+    ///
+    /// Called once per model as they complete plan generation.
     fn on_ensemble_plan_generated(&self, _model: &Model) {}
 
     /// Called when ensemble voting starts
+    ///
+    /// After all plans are generated, models vote on each other's plans.
+    ///
+    /// # Arguments
+    /// * `plan_count` - Number of plans to be voted on
     fn on_ensemble_voting_start(&self, _plan_count: usize) {}
 
-    /// Called when ensemble planning completes with the selected model and score
+    /// Called when ensemble planning completes with the selected plan
+    ///
+    /// # Arguments
+    /// * `selected_model` - The model whose plan was selected
+    /// * `score` - The average score (1-10) the selected plan received
     fn on_ensemble_complete(&self, _selected_model: &Model, _score: f64) {}
 }
 
@@ -893,12 +968,43 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Create plans using ensemble approach (multiple models generate independently, then vote)
     ///
-    /// This implements the "Independent Generation + Voting" paradigm based on research:
-    /// - Each review_model generates a plan independently in parallel
-    /// - Each model then votes on the other models' plans
-    /// - The plan with the highest average score is selected
+    /// This implements the "Independent Generation + Voting" paradigm (ensemble-after-inference)
+    /// based on recent research showing this approach outperforms iterative debate methods.
     ///
-    /// See docs/ENSEMBLE_ARCHITECTURE.md for research background.
+    /// # Algorithm
+    ///
+    /// 1. **Independent Generation**: Each `review_model` generates a plan in parallel,
+    ///    without seeing other models' plans. This preserves diversity and avoids
+    ///    "degeneration of thought" where models converge on potentially wrong answers.
+    ///
+    /// 2. **Voting**: Each model scores the other models' plans on a 1-10 scale.
+    ///    Models do not vote on their own plans.
+    ///
+    /// 3. **Selection**: The plan with the highest average score is selected.
+    ///
+    /// # Research Background
+    ///
+    /// This approach is based on findings from:
+    /// - "Debate or Vote" (ACL 2025): Voting matches debate performance with less cost
+    /// - "Multi-Agent Debate" (ICLR 2025): Debate leads to "degeneration of thought"
+    /// - "Beyond Majority Voting" (NeurIPS 2024): Advanced aggregation methods
+    ///
+    /// See `docs/ENSEMBLE_ARCHITECTURE.md` for detailed design rationale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunAgentError::EnsemblePlanningFailed`] if:
+    /// - No review models are configured
+    /// - Fewer than 2 models are configured
+    /// - All models fail to generate plans
+    ///
+    /// # Progress Callbacks
+    ///
+    /// Calls the following progress notifier methods:
+    /// - [`AgentProgressNotifier::on_ensemble_start`] - At the beginning
+    /// - [`AgentProgressNotifier::on_ensemble_plan_generated`] - For each plan
+    /// - [`AgentProgressNotifier::on_ensemble_voting_start`] - Before voting
+    /// - [`AgentProgressNotifier::on_ensemble_complete`] - With the selected plan
     async fn create_ensemble_plans(
         &self,
         input: &RunAgentInput,
@@ -1917,8 +2023,28 @@ fn parse_final_review_response(response: &str) -> (bool, String) {
 
 /// Parse a vote score from ensemble voting response
 ///
-/// Expects JSON response like: {"score": 8, "reasoning": "..."}
-/// Returns a score between 1 and 10, defaulting to 5 if parsing fails.
+/// Parses the model's voting response to extract a numerical score (1-10).
+/// Supports multiple response formats for robustness.
+///
+/// # Supported Formats
+///
+/// 1. **JSON** (preferred): `{"score": 8, "reasoning": "..."}`
+/// 2. **Fraction**: `8/10` or `Score: 7/10`
+/// 3. **Standalone number**: `9` (if in valid range 1-10)
+///
+/// # Return Value
+///
+/// - Returns the parsed score clamped to 1.0-10.0
+/// - Returns 5.0 (neutral) if parsing fails
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(parse_vote_score(r#"{"score": 8, "reasoning": "Good"}"#), 8.0);
+/// assert_eq!(parse_vote_score("I rate this 7/10"), 7.0);
+/// assert_eq!(parse_vote_score("Score: 9"), 9.0);
+/// assert_eq!(parse_vote_score("No numbers here"), 5.0); // fallback
+/// ```
 fn parse_vote_score(response: &str) -> f64 {
     // Try to find JSON in the response
     if let Some(start) = response.find('{')

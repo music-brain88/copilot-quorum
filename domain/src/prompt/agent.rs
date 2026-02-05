@@ -252,8 +252,30 @@ Provide your assessment with:
 
     /// Prompt for ensemble plan voting
     ///
-    /// Used when one model evaluates another model's plan during ensemble planning.
-    /// The response should include a score (1-10) and reasoning.
+    /// Used during ensemble planning when one model evaluates another model's plan.
+    /// The evaluating model scores the plan on a 1-10 scale based on:
+    ///
+    /// - **Completeness**: Does the plan cover all requirements?
+    /// - **Safety**: Are risky operations handled appropriately?
+    /// - **Efficiency**: Is there unnecessary complexity?
+    /// - **Feasibility**: Can each step be executed?
+    ///
+    /// # Response Format
+    ///
+    /// The prompt requests a JSON response:
+    /// ```json
+    /// {
+    ///   "score": 8,
+    ///   "reasoning": "Good plan with minor improvements possible"
+    /// }
+    /// ```
+    ///
+    /// The score is parsed by [`parse_vote_score`] in the application layer.
+    ///
+    /// # See Also
+    ///
+    /// - [`EnsemblePlanResult`](crate::agent::EnsemblePlanResult) - Aggregates votes
+    /// - `docs/ENSEMBLE_ARCHITECTURE.md` - Research background
     pub fn plan_voting(plan: &Plan) -> String {
         let tasks_description = plan
             .tasks
