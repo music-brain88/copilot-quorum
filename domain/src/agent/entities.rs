@@ -486,13 +486,38 @@ impl Plan {
     }
 }
 
-/// Configuration for agent behavior
+/// Configuration for agent behavior with role-based model selection
+///
+/// # Role-based Model Configuration
+///
+/// Different phases of agent execution have different requirements:
+///
+/// - **Exploration**: Uses `exploration_model` (default: Haiku - info collection + low-risk tools)
+/// - **Decision**: Uses `decision_model` (default: Sonnet - planning + high-risk tool decisions)
+/// - **Reviews**: Uses `review_models` (default: [Sonnet, GPT-5.2] - quality judgments)
+///
+/// # Example
+///
+/// ```toml
+/// [agent]
+/// exploration_model = "claude-haiku-4.5"  # Context gathering + low-risk tools
+/// decision_model = "claude-sonnet-4.5"    # Planning + high-risk tool decisions
+/// review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
-    /// Primary model for agent execution
-    pub primary_model: Model,
-    /// Models for quorum voting (plan review, action review)
-    pub quorum_models: Vec<Model>,
+    // ==================== Role-based Model Configuration ====================
+    /// Model for exploration: context gathering + low-risk tool execution
+    /// (default: Haiku - info collection and read-only ops are cheap)
+    pub exploration_model: Model,
+    /// Model for decisions: planning + high-risk tool execution
+    /// (default: Sonnet - needs strong reasoning for plans and write operations)
+    pub decision_model: Model,
+    /// Models for review phases: plan review, action review, final review
+    /// (default: [Sonnet, GPT-5.2] - quality judgments require high performance)
+    pub review_models: Vec<Model>,
+
+    // ==================== Behavior Configuration ====================
     /// Whether to require plan review (always true by design)
     pub require_plan_review: bool,
     /// Whether to require final review
@@ -512,8 +537,12 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            primary_model: Model::ClaudeSonnet45,
-            quorum_models: Model::default_models(),
+            // Role-based defaults (cost-optimized)
+            exploration_model: Model::ClaudeHaiku45, // Cheap: info collection + low-risk tools
+            decision_model: Model::ClaudeSonnet45, // High performance: planning + high-risk decisions
+            review_models: vec![Model::ClaudeSonnet45, Model::Gpt52Codex], // High performance: safety
+
+            // Behavior defaults
             require_plan_review: true, // Always required
             require_final_review: false,
             max_iterations: 50,
@@ -526,17 +555,55 @@ impl Default for AgentConfig {
 }
 
 impl AgentConfig {
-    pub fn new(primary_model: Model) -> Self {
+    /// Create a new AgentConfig with a specific decision model
+    ///
+    /// Other role models will use defaults. Use builder methods to customize.
+    pub fn new(decision_model: Model) -> Self {
         Self {
-            primary_model,
+            decision_model,
             ..Default::default()
         }
     }
 
-    pub fn with_quorum_models(mut self, models: Vec<Model>) -> Self {
-        self.quorum_models = models;
+    // ==================== Role-based Model Builders ====================
+
+    /// Set the model for exploration phase (context gathering + low-risk tools)
+    pub fn with_exploration_model(mut self, model: Model) -> Self {
+        self.exploration_model = model;
         self
     }
+
+    /// Set the model for decision phase (planning + high-risk tool decisions)
+    pub fn with_decision_model(mut self, model: Model) -> Self {
+        self.decision_model = model;
+        self
+    }
+
+    /// Set the models for review phases (plan review, action review, final review)
+    pub fn with_review_models(mut self, models: Vec<Model>) -> Self {
+        self.review_models = models;
+        self
+    }
+
+    // ==================== Legacy Compatibility ====================
+
+    /// Get the primary model (for backward compatibility)
+    ///
+    /// Returns the decision model, which was previously used as the primary model.
+    #[deprecated(since = "0.6.0", note = "Use decision_model directly")]
+    pub fn primary_model(&self) -> &Model {
+        &self.decision_model
+    }
+
+    /// Get the quorum models (for backward compatibility)
+    ///
+    /// Returns the review models, which are used for quorum voting.
+    #[deprecated(since = "0.6.0", note = "Use review_models directly")]
+    pub fn quorum_models(&self) -> &[Model] {
+        &self.review_models
+    }
+
+    // ==================== Behavior Builders ====================
 
     pub fn with_final_review(mut self) -> Self {
         self.require_final_review = true;
@@ -896,5 +963,54 @@ mod tests {
         // (defensive behavior - counter tracks attempts)
         state.reject_plan("No plan feedback");
         assert_eq!(state.plan_revision_count, 1);
+    }
+
+    #[test]
+    fn test_agent_config_role_based_defaults() {
+        let config = AgentConfig::default();
+
+        // Exploration uses cheap model (context gathering + low-risk tools)
+        assert_eq!(config.exploration_model, Model::ClaudeHaiku45);
+        // Decision uses high-performance model (planning + high-risk decisions)
+        assert_eq!(config.decision_model, Model::ClaudeSonnet45);
+        // Reviews use multiple high-performance models
+        assert_eq!(config.review_models.len(), 2);
+        assert!(config.review_models.contains(&Model::ClaudeSonnet45));
+        assert!(config.review_models.contains(&Model::Gpt52Codex));
+    }
+
+    #[test]
+    fn test_agent_config_role_based_builders() {
+        let config = AgentConfig::default()
+            .with_exploration_model(Model::ClaudeSonnet45)
+            .with_decision_model(Model::ClaudeOpus45)
+            .with_review_models(vec![Model::ClaudeOpus45, Model::Gemini3Pro]);
+
+        assert_eq!(config.exploration_model, Model::ClaudeSonnet45);
+        assert_eq!(config.decision_model, Model::ClaudeOpus45);
+        assert_eq!(config.review_models.len(), 2);
+        assert!(config.review_models.contains(&Model::ClaudeOpus45));
+        assert!(config.review_models.contains(&Model::Gemini3Pro));
+    }
+
+    #[test]
+    fn test_agent_config_new_sets_decision_model() {
+        let config = AgentConfig::new(Model::ClaudeOpus45);
+
+        // new() sets the decision model, others use defaults
+        assert_eq!(config.decision_model, Model::ClaudeOpus45);
+        assert_eq!(config.exploration_model, Model::ClaudeHaiku45);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_agent_config_legacy_compatibility() {
+        let config = AgentConfig::default()
+            .with_decision_model(Model::ClaudeOpus45)
+            .with_review_models(vec![Model::Gpt52Codex]);
+
+        // Legacy accessors should work
+        assert_eq!(config.primary_model(), &Model::ClaudeOpus45);
+        assert_eq!(config.quorum_models(), &[Model::Gpt52Codex]);
     }
 }

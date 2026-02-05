@@ -369,19 +369,26 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let agent_id = format!("agent-{}", chrono_lite_timestamp());
         let mut state = AgentState::new(agent_id, &input.request, input.config.clone());
 
-        // Create a session with the primary model
+        // Create system prompt (shared across phases)
         let system_prompt = AgentPromptTemplate::agent_system(self.tool_executor.tool_spec());
-        let session = self
-            .gateway
-            .create_session_with_system_prompt(&input.config.primary_model, &system_prompt)
-            .await?;
 
-        // Phase 1: Context Gathering
+        // ==================== Phase 1: Context Gathering ====================
+        // Uses exploration_model (default: Haiku - cheap for info collection)
         progress.on_phase_change(&AgentPhase::ContextGathering);
         state.set_phase(AgentPhase::ContextGathering);
 
+        let context_session = self
+            .gateway
+            .create_session_with_system_prompt(&input.config.exploration_model, &system_prompt)
+            .await?;
+
         match self
-            .gather_context(session.as_ref(), &input.request, &input.config, progress)
+            .gather_context(
+                context_session.as_ref(),
+                &input.request,
+                &input.config,
+                progress,
+            )
             .await
         {
             Ok(context) => {
@@ -398,7 +405,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
         }
 
-        // Phase 2-3: Planning + Review Loop
+        // ==================== Phase 2-3: Planning + Review Loop ====================
+        // Uses decision_model (default: Sonnet - needs strong reasoning for planning)
+        let planning_session = self
+            .gateway
+            .create_session_with_system_prompt(&input.config.decision_model, &system_prompt)
+            .await?;
+
         let mut plan_feedback: Option<String> = None;
 
         loop {
@@ -411,7 +424,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             let plan = match self
                 .create_plan(
-                    session.as_ref(),
+                    planning_session.as_ref(),
                     &input.request,
                     &state.context,
                     plan_feedback.as_deref(),
@@ -547,12 +560,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             );
         }
 
-        // Phase 4: Task Execution
+        // ==================== Phase 4: Task Execution ====================
+        // Model selection is now dynamic based on tool risk level:
+        // - Low-risk tools (read_file, glob_search, grep_search): exploration_model
+        // - High-risk tools (write_file, run_command): decision_model
         progress.on_phase_change(&AgentPhase::Executing);
         state.set_phase(AgentPhase::Executing);
 
         let execution_result = self
-            .execute_tasks(session.as_ref(), &input, &mut state, progress)
+            .execute_tasks_with_dynamic_model(&input, &mut state, &system_prompt, progress)
             .await;
 
         let summary = match execution_result {
@@ -796,12 +812,29 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         })
     }
 
-    /// Execute all tasks in the plan
-    async fn execute_tasks(
+    /// Determine the appropriate model for a task based on tool risk level
+    ///
+    /// - Low-risk tools (read_file, glob_search, grep_search): exploration_model
+    /// - High-risk tools (write_file, run_command) or unknown: decision_model
+    fn select_model_for_task<'a>(&self, task: &Task, config: &'a AgentConfig) -> &'a Model {
+        if let Some(tool_name) = &task.tool_name {
+            if self.is_high_risk_tool(tool_name) {
+                &config.decision_model
+            } else {
+                &config.exploration_model
+            }
+        } else {
+            // Tool not specified yet - model will decide, so use decision_model
+            &config.decision_model
+        }
+    }
+
+    /// Execute all tasks in the plan with dynamic model selection based on risk level
+    async fn execute_tasks_with_dynamic_model(
         &self,
-        session: &dyn LlmSession,
         input: &RunAgentInput,
         state: &mut AgentState,
+        system_prompt: &str,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<String, RunAgentError> {
         let mut results = Vec::new();
@@ -816,17 +849,31 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 return Err(RunAgentError::MaxIterationsExceeded);
             }
 
-            // Get next task
-            let task_id = {
+            // Get next task and determine appropriate model
+            let (task_id, selected_model) = {
                 let plan = state.plan.as_ref().ok_or_else(|| {
                     RunAgentError::TaskExecutionFailed("No plan available".to_string())
                 })?;
 
                 match plan.next_task() {
-                    Some(task) => task.id.clone(),
+                    Some(task) => {
+                        let model = self.select_model_for_task(task, &input.config);
+                        (task.id.clone(), model.clone())
+                    }
                     None => break, // All tasks complete
                 }
             };
+
+            // Create session with the selected model
+            let session = self
+                .gateway
+                .create_session_with_system_prompt(&selected_model, system_prompt)
+                .await?;
+
+            debug!(
+                "Task {} using model {} (risk-based selection)",
+                task_id, selected_model
+            );
 
             // Mark task as in progress
             if let Some(plan) = &mut state.plan
@@ -854,7 +901,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
                 match self
                     .execute_single_task(
-                        session,
+                        session.as_ref(),
                         input,
                         state,
                         &task_id,
@@ -954,7 +1001,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // Check if this is a high-risk tool that needs review
             let needs_review = task.requires_review || self.is_high_risk_tool(tool_name);
 
-            if needs_review && !input.config.quorum_models.is_empty() {
+            if needs_review && !input.config.review_models.is_empty() {
                 let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
                     "tool": tool_name,
                     "args": task.tool_args,
@@ -1027,7 +1074,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // Check if this is a high-risk tool that needs review
             let needs_review = self.is_high_risk_tool(&call.tool_name);
 
-            if needs_review && !input.config.quorum_models.is_empty() {
+            if needs_review && !input.config.review_models.is_empty() {
                 let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
                     "tool": call.tool_name,
                     "args": call.arguments,
@@ -1261,7 +1308,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             });
         }
 
-        let models = &input.config.quorum_models;
+        let models = &input.config.review_models;
         if models.is_empty() {
             // No quorum models configured, auto-approve
             info!("No quorum models configured, auto-approving plan");
@@ -1355,7 +1402,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         tool_call_json: &str,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<QuorumReviewResult, RunAgentError> {
-        let models = &input.config.quorum_models;
+        let models = &input.config.review_models;
         if models.is_empty() {
             // No quorum models configured, auto-approve
             return Ok(QuorumReviewResult {
@@ -1450,7 +1497,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             RunAgentError::TaskExecutionFailed("No plan for final review".to_string())
         })?;
 
-        let models = &input.config.quorum_models;
+        let models = &input.config.review_models;
         if models.is_empty() {
             return Ok(QuorumReviewResult {
                 approved: true,

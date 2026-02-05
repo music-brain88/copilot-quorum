@@ -140,22 +140,41 @@ async fn main() -> Result<()> {
     // Create context loader
     let context_loader = Arc::new(LocalContextLoader::new());
 
-    // Parse models for agent mode
-    // First model is primary, rest are quorum reviewers
-    let (primary_model, quorum_models) = if models.len() > 1 {
-        (models[0].clone(), models[1..].to_vec())
-    } else if !models.is_empty() {
-        (models[0].clone(), Model::default_models())
-    } else {
-        (Model::default(), Model::default_models())
-    };
+    // Build agent config with role-based model configuration
+    // Start with defaults, then apply config file overrides, then CLI overrides
+    let mut agent_config = AgentConfig::default();
 
-    // Determine quorum models based on --no-quorum flag
-    let effective_quorum_models = if cli.no_quorum {
-        vec![] // Empty quorum models will auto-approve
-    } else {
-        quorum_models.clone()
-    };
+    // Apply role-based model settings from config file
+    if let Some(model) = config.agent.parse_exploration_model() {
+        agent_config = agent_config.with_exploration_model(model);
+    }
+    if let Some(model) = config.agent.parse_decision_model() {
+        agent_config = agent_config.with_decision_model(model);
+    }
+    if let Some(models) = config.agent.parse_review_models() {
+        agent_config = agent_config.with_review_models(models);
+    }
+
+    // CLI --model flag overrides decision_model (for backward compatibility)
+    // First model from CLI becomes decision model, rest become review models
+    if !models.is_empty() {
+        agent_config = agent_config.with_decision_model(models[0].clone());
+        if models.len() > 1 {
+            agent_config = agent_config.with_review_models(models[1..].to_vec());
+        }
+    }
+
+    // Apply HiL settings from config
+    agent_config = agent_config
+        .with_max_plan_revisions(config.agent.max_plan_revisions)
+        .with_hil_mode(config.agent.parse_hil_mode());
+
+    // Apply --no-quorum flag
+    if cli.no_quorum {
+        agent_config = agent_config
+            .with_review_models(vec![])
+            .with_skip_plan_review();
+    }
 
     // No question provided -> Start Agent REPL (default)
     if cli.question.is_none() {
@@ -163,9 +182,8 @@ async fn main() -> Result<()> {
             gateway.clone(),
             tool_executor,
             context_loader.clone(),
-            primary_model,
+            agent_config.clone(),
         )
-        .with_quorum_models(effective_quorum_models)
         .with_verbose(cli.verbose > 0)
         .with_cancellation(cancellation_token.clone());
 
@@ -187,10 +205,6 @@ async fn main() -> Result<()> {
     // Question provided -> Single request agent mode
     let request = cli.question.unwrap();
 
-    // Build agent config
-    let mut agent_config =
-        AgentConfig::new(primary_model.clone()).with_quorum_models(effective_quorum_models.clone());
-
     if let Some(dir) = &working_dir {
         agent_config = agent_config.with_working_dir(dir);
     }
@@ -198,15 +212,6 @@ async fn main() -> Result<()> {
     if cli.final_review {
         agent_config = agent_config.with_final_review();
     }
-
-    if cli.no_quorum {
-        agent_config = agent_config.with_skip_plan_review();
-    }
-
-    // Apply HiL settings from config
-    agent_config = agent_config
-        .with_max_plan_revisions(config.agent.max_plan_revisions)
-        .with_hil_mode(config.agent.parse_hil_mode());
 
     // Print header
     if repl_config.show_progress {
@@ -216,13 +221,14 @@ async fn main() -> Result<()> {
         println!("+============================================================+");
         println!();
         println!("Request: {}", request);
-        println!("Primary Model: {}", primary_model);
+        println!("Decision Model: {}", agent_config.decision_model);
         if cli.no_quorum {
             println!("Quorum: Disabled (--no-quorum)");
         } else {
             println!(
-                "Quorum Models: {}",
-                quorum_models
+                "Review Models: {}",
+                agent_config
+                    .review_models
                     .iter()
                     .map(|m| m.to_string())
                     .collect::<Vec<_>>()
