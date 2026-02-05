@@ -89,6 +89,17 @@ impl Default for FileReplConfig {
 }
 
 /// Raw agent configuration from TOML
+///
+/// # Role-based Model Configuration
+///
+/// ```toml
+/// [agent]
+/// exploration_model = "claude-haiku-4.5"   # Context gathering + low-risk tools
+/// decision_model = "claude-sonnet-4.5"     # Planning + high-risk tool decisions
+/// review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]  # Reviews (quality)
+/// ```
+///
+/// All model fields are optional; defaults are defined in `AgentConfig`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileAgentConfig {
@@ -96,6 +107,14 @@ pub struct FileAgentConfig {
     pub max_plan_revisions: usize,
     /// Human-in-the-loop mode (interactive, auto_reject, auto_approve)
     pub hil_mode: String,
+
+    // ==================== Role-based Model Configuration ====================
+    /// Model for exploration: context gathering + low-risk tools (optional)
+    pub exploration_model: Option<String>,
+    /// Model for decisions: planning + high-risk tool execution (optional)
+    pub decision_model: Option<String>,
+    /// Models for review phases (optional, uses default if not set)
+    pub review_models: Option<Vec<String>>,
 }
 
 impl Default for FileAgentConfig {
@@ -103,6 +122,10 @@ impl Default for FileAgentConfig {
         Self {
             max_plan_revisions: 3,
             hil_mode: "interactive".to_string(),
+            // Role-based defaults are None - will use AgentConfig defaults
+            exploration_model: None,
+            decision_model: None,
+            review_models: None,
         }
     }
 }
@@ -111,6 +134,23 @@ impl FileAgentConfig {
     /// Parse hil_mode string into HilMode enum
     pub fn parse_hil_mode(&self) -> HilMode {
         self.hil_mode.parse().unwrap_or_default()
+    }
+
+    /// Parse exploration_model string into Model enum
+    pub fn parse_exploration_model(&self) -> Option<Model> {
+        self.exploration_model.as_ref().and_then(|s| s.parse().ok())
+    }
+
+    /// Parse decision_model string into Model enum
+    pub fn parse_decision_model(&self) -> Option<Model> {
+        self.decision_model.as_ref().and_then(|s| s.parse().ok())
+    }
+
+    /// Parse review_models strings into Vec<Model>
+    pub fn parse_review_models(&self) -> Option<Vec<Model>> {
+        self.review_models
+            .as_ref()
+            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
     }
 }
 
@@ -545,5 +585,86 @@ args = ["-y", "@anthropic/mcp-server-filesystem"]
         let rg = config.enhanced.get("grep_search").unwrap();
         assert_eq!(rg.command, "rg");
         assert!(rg.description.contains("faster"));
+    }
+
+    #[test]
+    fn test_agent_config_role_based_defaults() {
+        let config = FileAgentConfig::default();
+        assert!(config.exploration_model.is_none());
+        assert!(config.decision_model.is_none());
+        assert!(config.review_models.is_none());
+    }
+
+    #[test]
+    fn test_agent_config_role_based_deserialize() {
+        let toml_str = r#"
+[agent]
+max_plan_revisions = 5
+hil_mode = "auto_reject"
+exploration_model = "claude-haiku-4.5"
+decision_model = "claude-sonnet-4.5"
+review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.max_plan_revisions, 5);
+        assert_eq!(config.agent.hil_mode, "auto_reject");
+        assert_eq!(
+            config.agent.exploration_model,
+            Some("claude-haiku-4.5".to_string())
+        );
+        assert_eq!(
+            config.agent.decision_model,
+            Some("claude-sonnet-4.5".to_string())
+        );
+        assert_eq!(
+            config.agent.review_models,
+            Some(vec![
+                "claude-sonnet-4.5".to_string(),
+                "gpt-5.2-codex".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_agent_config_parse_role_models() {
+        let toml_str = r#"
+[agent]
+exploration_model = "claude-haiku-4.5"
+decision_model = "claude-sonnet-4.5"
+review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(
+            config.agent.parse_exploration_model(),
+            Some(Model::ClaudeHaiku45)
+        );
+        assert_eq!(
+            config.agent.parse_decision_model(),
+            Some(Model::ClaudeSonnet45)
+        );
+
+        let review_models = config.agent.parse_review_models().unwrap();
+        assert_eq!(review_models.len(), 2);
+        assert!(review_models.contains(&Model::ClaudeSonnet45));
+        assert!(review_models.contains(&Model::Gpt52Codex));
+    }
+
+    #[test]
+    fn test_agent_config_partial_role_models() {
+        // Only some models specified
+        let toml_str = r#"
+[agent]
+decision_model = "claude-opus-4.5"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+
+        // Only decision model is set
+        assert!(config.agent.exploration_model.is_none());
+        assert_eq!(
+            config.agent.parse_decision_model(),
+            Some(Model::ClaudeOpus45)
+        );
+        assert!(config.agent.review_models.is_none());
     }
 }
