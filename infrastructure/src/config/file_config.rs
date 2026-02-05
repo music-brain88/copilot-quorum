@@ -3,7 +3,7 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
-use quorum_domain::{HilMode, Model, OutputFormat, QuorumRule};
+use quorum_domain::{HilMode, Model, OutputFormat, PlanningMode, QuorumRule};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -97,6 +97,7 @@ impl Default for FileReplConfig {
 /// exploration_model = "claude-haiku-4.5"   # Context gathering + low-risk tools
 /// decision_model = "claude-sonnet-4.5"     # Planning + high-risk tool decisions
 /// review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]  # Reviews (quality)
+/// planning_mode = "single"                 # or "ensemble" for multi-model planning
 /// ```
 ///
 /// All model fields are optional; defaults are defined in `AgentConfig`.
@@ -107,6 +108,8 @@ pub struct FileAgentConfig {
     pub max_plan_revisions: usize,
     /// Human-in-the-loop mode (interactive, auto_reject, auto_approve)
     pub hil_mode: String,
+    /// Planning mode: "single" (Solo) or "ensemble" (multi-model planning)
+    pub planning_mode: String,
 
     // ==================== Role-based Model Configuration ====================
     /// Model for exploration: context gathering + low-risk tools (optional)
@@ -122,6 +125,7 @@ impl Default for FileAgentConfig {
         Self {
             max_plan_revisions: 3,
             hil_mode: "interactive".to_string(),
+            planning_mode: "single".to_string(),
             // Role-based defaults are None - will use AgentConfig defaults
             exploration_model: None,
             decision_model: None,
@@ -134,6 +138,13 @@ impl FileAgentConfig {
     /// Parse hil_mode string into HilMode enum
     pub fn parse_hil_mode(&self) -> HilMode {
         self.hil_mode.parse().unwrap_or_default()
+    }
+
+    /// Parse planning_mode string into PlanningMode enum
+    ///
+    /// Accepts: "single", "solo", "ensemble", "multi", "quorum"
+    pub fn parse_planning_mode(&self) -> PlanningMode {
+        self.planning_mode.parse().unwrap_or_default()
     }
 
     /// Parse exploration_model string into Model enum
@@ -699,6 +710,7 @@ args = ["-y", "@anthropic/mcp-server-filesystem"]
 [agent]
 max_plan_revisions = 5
 hil_mode = "auto_reject"
+planning_mode = "ensemble"
 exploration_model = "claude-haiku-4.5"
 decision_model = "claude-sonnet-4.5"
 review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
@@ -706,6 +718,8 @@ review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agent.max_plan_revisions, 5);
         assert_eq!(config.agent.hil_mode, "auto_reject");
+        assert_eq!(config.agent.planning_mode, "ensemble");
+        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Ensemble);
         assert_eq!(
             config.agent.exploration_model,
             Some("claude-haiku-4.5".to_string())
@@ -721,6 +735,43 @@ review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
                 "gpt-5.2-codex".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn test_agent_config_planning_mode_deserialize() {
+        // Test "single" (default)
+        let toml_str = r#"
+[agent]
+planning_mode = "single"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.planning_mode, "single");
+        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Single);
+
+        // Test "ensemble"
+        let toml_str = r#"
+[agent]
+planning_mode = "ensemble"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.planning_mode, "ensemble");
+        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Ensemble);
+
+        // Test alias "solo" -> Single
+        let toml_str = r#"
+[agent]
+planning_mode = "solo"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Single);
+
+        // Test alias "quorum" -> Ensemble
+        let toml_str = r#"
+[agent]
+planning_mode = "quorum"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Ensemble);
     }
 
     #[test]

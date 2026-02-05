@@ -79,6 +79,10 @@ enable_review = true
 
 [output]
 format = "synthesis"  # "full", "synthesis", or "json"
+
+[agent]
+planning_mode = "single"  # "single" (Solo) or "ensemble" (multi-model planning)
+hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
 ```
 
 ## Architecture

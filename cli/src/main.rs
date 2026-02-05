@@ -169,6 +169,9 @@ async fn main() -> Result<()> {
         .with_max_plan_revisions(config.agent.max_plan_revisions)
         .with_hil_mode(config.agent.parse_hil_mode());
 
+    // Apply planning mode from config file
+    agent_config = agent_config.with_planning_mode(config.agent.parse_planning_mode());
+
     // Apply --no-quorum flag
     if cli.no_quorum {
         agent_config = agent_config
@@ -177,7 +180,10 @@ async fn main() -> Result<()> {
     }
 
     // Determine initial orchestration mode
+    // --ensemble flag overrides config file setting
     let initial_mode = if cli.ensemble {
+        // When --ensemble is specified, also enable ensemble planning
+        agent_config = agent_config.with_ensemble_planning();
         OrchestrationMode::Quorum
     } else {
         // Default to Solo (Agent) mode
