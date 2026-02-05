@@ -193,10 +193,7 @@ impl CliToolProvider {
                 } else {
                     ToolResult::failure(
                         &call.tool_name,
-                        ToolError::execution_failed(format!(
-                            "Command failed: {}",
-                            stderr.trim()
-                        )),
+                        ToolError::execution_failed(format!("Command failed: {}", stderr.trim())),
                     )
                 }
             }
@@ -289,7 +286,11 @@ impl CliToolProvider {
         let mut tools = Vec::new();
 
         if self.available_tools.contains(&"grep_search".to_string()) {
-            let cmd = self.aliases.get("grep_search").map(|s| s.as_str()).unwrap_or("grep");
+            let cmd = self
+                .aliases
+                .get("grep_search")
+                .map(|s| s.as_str())
+                .unwrap_or("grep");
             tools.push(
                 ToolDefinition::new(
                     "grep_search",
@@ -312,7 +313,11 @@ impl CliToolProvider {
         }
 
         if self.available_tools.contains(&"glob_search".to_string()) {
-            let cmd = self.aliases.get("glob_search").map(|s| s.as_str()).unwrap_or("find");
+            let cmd = self
+                .aliases
+                .get("glob_search")
+                .map(|s| s.as_str())
+                .unwrap_or("find");
             tools.push(
                 ToolDefinition::new(
                     "glob_search",
@@ -446,7 +451,13 @@ mod tests {
 
         let result = provider.execute(&call).await;
         // Should succeed or have no matches
-        assert!(result.is_success() || result.output().map(|o| o.contains("No matches")).unwrap_or(false));
+        assert!(
+            result.is_success()
+                || result
+                    .output()
+                    .map(|o| o.contains("No matches"))
+                    .unwrap_or(false)
+        );
     }
 
     #[tokio::test]
@@ -483,7 +494,9 @@ mod tests {
             assert!(CliToolProvider::is_command_available("cat"));
         }
         // This should not exist
-        assert!(!CliToolProvider::is_command_available("definitely_not_a_real_command_xyz123"));
+        assert!(!CliToolProvider::is_command_available(
+            "definitely_not_a_real_command_xyz123"
+        ));
     }
 
     #[tokio::test]
@@ -494,10 +507,16 @@ mod tests {
         }
 
         let mut config = FileCliToolsConfig::default();
-        config.aliases.insert("grep_search".to_string(), "rg".to_string());
+        config
+            .aliases
+            .insert("grep_search".to_string(), "rg".to_string());
 
         let provider = CliToolProvider::with_config(&config);
-        assert!(provider.available_tools.contains(&"grep_search".to_string()));
+        assert!(
+            provider
+                .available_tools
+                .contains(&"grep_search".to_string())
+        );
 
         let tools = provider.discover_tools().await.unwrap();
         let grep_tool = tools.iter().find(|t| t.name == "grep_search");

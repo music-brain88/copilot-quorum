@@ -502,8 +502,14 @@ format = "json"
         assert!(config.builtin.enabled);
         assert!(config.cli.enabled);
         assert!(!config.mcp.enabled);
-        assert_eq!(config.cli.aliases.get("grep_search"), Some(&"grep".to_string()));
-        assert_eq!(config.cli.aliases.get("glob_search"), Some(&"find".to_string()));
+        assert_eq!(
+            config.cli.aliases.get("grep_search"),
+            Some(&"grep".to_string())
+        );
+        assert_eq!(
+            config.cli.aliases.get("glob_search"),
+            Some(&"find".to_string())
+        );
     }
 
     #[test]
@@ -531,7 +537,10 @@ args = ["-y", "@anthropic/mcp-server-filesystem"]
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert!(!config.tools.suggest_enhanced_tools);
         assert!(config.tools.cli.enabled);
-        assert_eq!(config.tools.cli.aliases.get("grep_search"), Some(&"rg".to_string()));
+        assert_eq!(
+            config.tools.cli.aliases.get("grep_search"),
+            Some(&"rg".to_string())
+        );
         assert!(config.tools.mcp.enabled);
         assert_eq!(config.tools.mcp.servers.len(), 1);
         assert_eq!(config.tools.mcp.servers[0].name, "filesystem");

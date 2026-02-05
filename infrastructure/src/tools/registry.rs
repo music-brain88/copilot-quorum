@@ -102,17 +102,15 @@ impl ToolRegistry {
     /// Tools are merged with priority-based conflict resolution.
     pub async fn discover(&mut self) -> Result<(), String> {
         // Sort providers by priority (descending)
-        self.providers.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        self.providers
+            .sort_by(|a, b| b.priority().cmp(&a.priority()));
 
         let mut tool_spec = ToolSpec::new();
         let mut tool_mapping = HashMap::new();
 
         for provider in &self.providers {
             if !provider.is_available().await {
-                tracing::debug!(
-                    provider = provider.id(),
-                    "Provider not available, skipping"
-                );
+                tracing::debug!(provider = provider.id(), "Provider not available, skipping");
                 continue;
             }
 
@@ -287,11 +285,7 @@ mod tests {
         let result = registry.execute(&call).await;
 
         assert!(!result.is_success());
-        assert!(result
-            .error()
-            .unwrap()
-            .message
-            .contains("not initialized"));
+        assert!(result.error().unwrap().message.contains("not initialized"));
     }
 
     #[tokio::test]

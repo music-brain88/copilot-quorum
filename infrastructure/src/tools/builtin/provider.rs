@@ -5,10 +5,10 @@
 
 use async_trait::async_trait;
 use quorum_domain::tool::{
+    DefaultToolValidator, ToolValidator,
     entities::{ToolCall, ToolDefinition, ToolSpec},
     provider::{ProviderError, ToolProvider},
     value_objects::ToolResult,
-    DefaultToolValidator, ToolValidator,
 };
 
 use crate::tools::{command, file, search};

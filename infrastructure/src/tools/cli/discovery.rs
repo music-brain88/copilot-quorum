@@ -125,14 +125,15 @@ pub fn discover_enhanced_tools(config: &FileCliToolsConfig) -> DiscoveryResult {
         match current_cmd {
             Some(cmd) if cmd == &enhanced.command => {
                 // Already using enhanced tool
-                result.already_enhanced.push(format!(
-                    "{} ({})",
-                    tool_name, enhanced.command
-                ));
+                result
+                    .already_enhanced
+                    .push(format!("{} ({})", tool_name, enhanced.command));
             }
             Some(cmd) => {
                 // Using standard tool
-                result.using_standard.push(format!("{} ({})", tool_name, cmd));
+                result
+                    .using_standard
+                    .push(format!("{} ({})", tool_name, cmd));
 
                 if enhanced_available {
                     // Enhanced tool is available but not configured

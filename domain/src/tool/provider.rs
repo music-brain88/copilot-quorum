@@ -208,10 +208,7 @@ mod tests {
             if self.tools.iter().any(|t| t.name == call.tool_name) {
                 ToolResult::success(&call.tool_name, "Mock output")
             } else {
-                ToolResult::failure(
-                    &call.tool_name,
-                    ToolError::not_found(&call.tool_name),
-                )
+                ToolResult::failure(&call.tool_name, ToolError::not_found(&call.tool_name))
             }
         }
     }

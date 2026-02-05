@@ -7,7 +7,7 @@ mod discovery;
 mod provider;
 
 pub use discovery::{
-    discover_additional_tools, discover_enhanced_tools, generate_enhanced_aliases, DetectedTool,
-    DiscoveryResult,
+    DetectedTool, DiscoveryResult, discover_additional_tools, discover_enhanced_tools,
+    generate_enhanced_aliases,
 };
-pub use provider::{CliToolProvider, CLI_PRIORITY};
+pub use provider::{CLI_PRIORITY, CliToolProvider};

@@ -4,4 +4,4 @@
 
 mod provider;
 
-pub use provider::{BuiltinProvider, BUILTIN_PRIORITY};
+pub use provider::{BUILTIN_PRIORITY, BuiltinProvider};
