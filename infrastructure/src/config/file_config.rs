@@ -3,7 +3,7 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
-use quorum_domain::{HilMode, Model, OutputFormat};
+use quorum_domain::{HilMode, Model, OutputFormat, QuorumRule};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -164,6 +164,102 @@ pub struct FileGitHubConfig {
     pub repo: Option<String>,
     /// Discussion category for escalations
     pub category: Option<String>,
+}
+
+// ==================== Quorum Configuration ====================
+//
+// The quorum configuration controls how multi-model consensus works.
+// This is the core of the Quorum system - inspired by distributed systems
+// where consensus ensures reliability.
+//
+// Example configuration:
+//
+// ```toml
+// [quorum]
+// rule = "majority"
+// min_models = 2
+//
+// [quorum.discussion]
+// models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro"]
+// moderator = "claude-opus-4.5"
+// enable_peer_review = true
+// ```
+
+/// Quorum discussion settings
+///
+/// Controls how Quorum Discussion (multi-model dialogue) operates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileQuorumDiscussionConfig {
+    /// Models to use for discussion (optional, uses council.models if not set)
+    pub models: Option<Vec<String>>,
+    /// Moderator model for synthesis (optional, uses council.moderator if not set)
+    pub moderator: Option<String>,
+    /// Enable peer review phase in discussion
+    pub enable_peer_review: bool,
+}
+
+impl Default for FileQuorumDiscussionConfig {
+    fn default() -> Self {
+        Self {
+            models: None,
+            moderator: None,
+            enable_peer_review: true,
+        }
+    }
+}
+
+impl FileQuorumDiscussionConfig {
+    /// Parse models into Model enums
+    pub fn parse_models(&self) -> Option<Vec<Model>> {
+        self.models
+            .as_ref()
+            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
+    }
+
+    /// Parse moderator into Model enum
+    pub fn parse_moderator(&self) -> Option<Model> {
+        self.moderator.as_ref().and_then(|s| s.parse().ok())
+    }
+}
+
+/// Quorum consensus configuration
+///
+/// Controls how Quorum Consensus (voting for approval) works.
+///
+/// # Example
+///
+/// ```toml
+/// [quorum]
+/// rule = "majority"           # or "unanimous", "atleast:2", "75%"
+/// min_models = 2              # minimum models required for valid consensus
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileQuorumConfig {
+    /// Consensus rule: "majority", "unanimous", "atleast:N", "N%"
+    pub rule: String,
+    /// Minimum number of models required for valid consensus
+    pub min_models: usize,
+    /// Discussion settings
+    pub discussion: FileQuorumDiscussionConfig,
+}
+
+impl Default for FileQuorumConfig {
+    fn default() -> Self {
+        Self {
+            rule: "majority".to_string(),
+            min_models: 2,
+            discussion: FileQuorumDiscussionConfig::default(),
+        }
+    }
+}
+
+impl FileQuorumConfig {
+    /// Parse the rule string into QuorumRule enum
+    pub fn parse_rule(&self) -> QuorumRule {
+        self.rule.parse().unwrap_or_default()
+    }
 }
 
 /// Raw integrations configuration from TOML
@@ -391,8 +487,10 @@ impl Default for FileToolsConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileConfig {
-    /// Council settings
+    /// Council settings (legacy, prefer [quorum.discussion])
     pub council: FileCouncilConfig,
+    /// Quorum settings (new unified configuration)
+    pub quorum: FileQuorumConfig,
     /// Behavior settings
     pub behavior: FileBehaviorConfig,
     /// Output settings
@@ -666,5 +764,80 @@ decision_model = "claude-opus-4.5"
             Some(Model::ClaudeOpus45)
         );
         assert!(config.agent.review_models.is_none());
+    }
+
+    #[test]
+    fn test_quorum_config_default() {
+        let config = FileQuorumConfig::default();
+        assert_eq!(config.rule, "majority");
+        assert_eq!(config.min_models, 2);
+        assert!(config.discussion.enable_peer_review);
+        assert!(config.discussion.models.is_none());
+    }
+
+    #[test]
+    fn test_quorum_config_deserialize() {
+        let toml_str = r#"
+[quorum]
+rule = "unanimous"
+min_models = 3
+
+[quorum.discussion]
+models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+moderator = "claude-opus-4.5"
+enable_peer_review = false
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.quorum.rule, "unanimous");
+        assert_eq!(config.quorum.min_models, 3);
+        assert!(!config.quorum.discussion.enable_peer_review);
+
+        let models = config.quorum.discussion.parse_models().unwrap();
+        assert_eq!(models.len(), 3);
+        assert!(models.contains(&Model::ClaudeSonnet45));
+        assert!(models.contains(&Model::Gpt52Codex));
+        assert!(models.contains(&Model::Gemini3Pro));
+
+        let moderator = config.quorum.discussion.parse_moderator().unwrap();
+        assert_eq!(moderator, Model::ClaudeOpus45);
+    }
+
+    #[test]
+    fn test_quorum_config_parse_rule() {
+        let mut config = FileQuorumConfig::default();
+
+        config.rule = "majority".to_string();
+        assert_eq!(config.parse_rule(), QuorumRule::Majority);
+
+        config.rule = "unanimous".to_string();
+        assert_eq!(config.parse_rule(), QuorumRule::Unanimous);
+
+        config.rule = "atleast:2".to_string();
+        assert_eq!(config.parse_rule(), QuorumRule::AtLeast(2));
+
+        config.rule = "75%".to_string();
+        assert_eq!(config.parse_rule(), QuorumRule::Percentage(75));
+    }
+
+    #[test]
+    fn test_quorum_config_with_council_fallback() {
+        // When quorum.discussion is not set, should use council settings
+        let toml_str = r#"
+[council]
+models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
+moderator = "claude-opus-4.5"
+
+[quorum]
+rule = "majority"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+
+        // quorum.discussion should be None (using defaults)
+        assert!(config.quorum.discussion.models.is_none());
+        assert!(config.quorum.discussion.moderator.is_none());
+
+        // But council is set
+        assert_eq!(config.council.models.len(), 2);
+        assert_eq!(config.council.moderator, Model::ClaudeOpus45);
     }
 }

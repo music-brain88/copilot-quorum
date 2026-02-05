@@ -6,7 +6,7 @@
 use anyhow::{Result, bail};
 use clap::Parser;
 use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase};
-use quorum_domain::{AgentConfig, Model, OutputFormat};
+use quorum_domain::{AgentConfig, Model, OrchestrationMode, OutputFormat};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
 };
@@ -176,6 +176,14 @@ async fn main() -> Result<()> {
             .with_skip_plan_review();
     }
 
+    // Determine initial orchestration mode
+    let initial_mode = if cli.ensemble {
+        OrchestrationMode::Quorum
+    } else {
+        // Default to Solo (Agent) mode
+        OrchestrationMode::Agent
+    };
+
     // No question provided -> Start Agent REPL (default)
     if cli.question.is_none() {
         let mut repl = AgentRepl::new(
@@ -185,7 +193,8 @@ async fn main() -> Result<()> {
             agent_config.clone(),
         )
         .with_verbose(cli.verbose > 0)
-        .with_cancellation(cancellation_token.clone());
+        .with_cancellation(cancellation_token.clone())
+        .with_mode(initial_mode);
 
         // Set moderator from config
         repl = repl.with_moderator(config.council.moderator.clone());
