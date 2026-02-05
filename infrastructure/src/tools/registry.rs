@@ -103,7 +103,7 @@ impl ToolRegistry {
     pub async fn discover(&mut self) -> Result<(), String> {
         // Sort providers by priority (descending)
         self.providers
-            .sort_by(|a, b| b.priority().cmp(&a.priority()));
+            .sort_by_key(|p| std::cmp::Reverse(p.priority()));
 
         let mut tool_spec = ToolSpec::new();
         let mut tool_mapping = HashMap::new();

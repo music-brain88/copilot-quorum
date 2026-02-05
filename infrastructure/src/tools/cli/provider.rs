@@ -146,8 +146,8 @@ impl CliToolProvider {
                 cmd.arg(pattern);
                 cmd.arg(path);
             }
-            "grep" | _ => {
-                // Standard grep
+            _ => {
+                // Standard grep (default fallback)
                 cmd.arg("-rn");
                 cmd.arg("--color=never");
                 if case_insensitive {
@@ -226,8 +226,8 @@ impl CliToolProvider {
                 cmd.arg(pattern);
                 cmd.arg(base_dir);
             }
-            "find" | _ => {
-                // Standard find
+            _ => {
+                // Standard find (default fallback)
                 cmd.arg(base_dir);
                 cmd.arg("-name");
                 cmd.arg(pattern);

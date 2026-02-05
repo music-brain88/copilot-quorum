@@ -256,23 +256,16 @@ pub struct FileMcpServerConfig {
 }
 
 /// MCP tools configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// MCP is disabled by default as it requires explicit server setup.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileMcpToolsConfig {
-    /// Whether MCP tools are enabled
+    /// Whether MCP tools are enabled (default: false, requires setup)
     pub enabled: bool,
     /// MCP servers to connect to
     #[serde(default)]
     pub servers: Vec<FileMcpServerConfig>,
-}
-
-impl Default for FileMcpToolsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false, // Disabled by default (requires setup)
-            servers: vec![],
-        }
-    }
 }
 
 /// Builtin tools configuration
