@@ -441,7 +441,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             if input.config.planning_mode.is_ensemble() {
                 // ==================== Ensemble Planning ====================
                 // Multiple models create plans independently, then vote
-                info!("Ensemble planning: {} models will generate plans", input.config.review_models.len());
+                info!(
+                    "Ensemble planning: {} models will generate plans",
+                    input.config.review_models.len()
+                );
 
                 let ensemble_result = match self
                     .create_ensemble_plans(
@@ -941,9 +944,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     .create_session_with_system_prompt(&model, &system_prompt)
                     .await?;
                 let response = session.send(&prompt).await?;
-                let plan = parse_plan(&response).ok_or_else(|| {
-                    GatewayError::Other("Failed to parse plan".to_string())
-                })?;
+                let plan = parse_plan(&response)
+                    .ok_or_else(|| GatewayError::Other("Failed to parse plan".to_string()))?;
                 Ok::<(Model, Plan), GatewayError>((model, plan))
             });
         }
@@ -997,10 +999,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // Step 2: Each model votes on the other models' plans
-        info!(
-            "Ensemble Step 2: Voting on {} plans",
-            candidates.len()
-        );
+        info!("Ensemble Step 2: Voting on {} plans", candidates.len());
         progress.on_ensemble_voting_start(candidates.len());
 
         // For each candidate, have other models vote on it
@@ -1944,7 +1943,9 @@ fn parse_vote_score(response: &str) -> f64 {
             return num.clamp(1.0, 10.0);
         }
         // Check for standalone number (1-10)
-        if let Ok(num) = word.trim_matches(|c: char| !c.is_ascii_digit()).parse::<f64>()
+        if let Ok(num) = word
+            .trim_matches(|c: char| !c.is_ascii_digit())
+            .parse::<f64>()
             && (1.0..=10.0).contains(&num)
         {
             return num;

@@ -664,11 +664,7 @@ impl EnsemblePlanResult {
     pub fn summary(&self) -> String {
         let mut summary = String::new();
         for (i, candidate) in self.candidates.iter().enumerate() {
-            let marker = if i == self.selected_index {
-                "→"
-            } else {
-                " "
-            };
+            let marker = if i == self.selected_index { "→" } else { " " };
             summary.push_str(&format!(
                 "{} Plan {} ({}): avg {:.1}/10\n",
                 marker,

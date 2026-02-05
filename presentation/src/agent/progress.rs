@@ -620,9 +620,6 @@ impl AgentProgressNotifier for SimpleAgentProgress {
     }
 
     fn on_ensemble_complete(&self, selected_model: &quorum_domain::Model, score: f64) {
-        println!(
-            "  ✓ Selected: {} (score: {:.1}/10)",
-            selected_model, score
-        );
+        println!("  ✓ Selected: {} (score: {:.1}/10)", selected_model, score);
     }
 }
