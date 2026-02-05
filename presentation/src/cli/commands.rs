@@ -35,14 +35,21 @@ impl From<CliOutputFormat> for OutputFormat {
 #[command(long_about = r#"
 Copilot Quorum is an AI Agent that executes tasks with quorum-based safety reviews.
 
-By default, it starts an interactive Agent REPL. Provide a task to run it directly.
+By default, it starts in Solo mode (single model, quick execution).
+Use --ensemble for multi-model Ensemble mode.
+
+MODES:
+  Solo (default)     Single model driven, quick execution
+                     Use /discuss for ad-hoc multi-model consultation
+  Ensemble           Multi-model driven, for complex decisions
+                     All queries go through Quorum Discussion
 
 The agent will:
 1. Gather context about your project
 2. Create a plan (reviewed by quorum)
 3. Execute tasks (high-risk operations reviewed by quorum)
 
-Use /council in the REPL to consult multiple models on a question.
+Use /discuss in the REPL to consult multiple models on a question.
 
 Configuration files are loaded from (in priority order):
 1. --config <path>     Explicit config file
@@ -50,15 +57,34 @@ Configuration files are loaded from (in priority order):
 3. ~/.config/copilot-quorum/config.toml   Global config
 
 Example:
-  copilot-quorum                         # Start Agent REPL (default)
-  copilot-quorum "Fix the bug in login.rs"  # Run single task
-  copilot-quorum --no-quorum "Show README"  # Skip quorum review (faster)
+  copilot-quorum                           # Start Solo mode REPL (default)
+  copilot-quorum --ensemble                # Start Ensemble mode REPL
+  copilot-quorum "Fix the bug in login.rs" # Run single task (Solo)
+  copilot-quorum --ensemble "Design the auth system"  # Multi-model discussion
+  copilot-quorum --no-quorum "Show README" # Skip quorum review (faster)
   copilot-quorum -m claude-haiku-4.5 "Add tests"  # Use specific model
 "#)]
 pub struct Cli {
     /// The task/question to process (if not provided, starts Agent REPL)
     pub question: Option<String>,
 
+    // ==================== Mode Selection ====================
+    /// Start in Solo mode (default, single model driven)
+    ///
+    /// Solo mode uses a single model for quick execution.
+    /// Use /discuss for ad-hoc multi-model consultation.
+    #[arg(long, conflicts_with = "ensemble")]
+    pub solo: bool,
+
+    /// Start in Ensemble mode (multi-model driven)
+    ///
+    /// Ensemble mode uses multiple models for all decisions.
+    /// Inspired by ML ensemble learning - combines perspectives
+    /// for improved accuracy and reliability.
+    #[arg(long, conflicts_with = "solo")]
+    pub ensemble: bool,
+
+    // ==================== Quorum Settings ====================
     /// Skip quorum review (plan review will be auto-approved)
     #[arg(long)]
     pub no_quorum: bool,

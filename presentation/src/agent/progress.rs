@@ -411,6 +411,41 @@ impl AgentProgressNotifier for AgentProgressReporter {
             max_revisions
         );
     }
+
+    // ==================== Ensemble Planning Callbacks ====================
+
+    fn on_ensemble_start(&self, model_count: usize) {
+        let pb = self.multi.add(ProgressBar::new(model_count as u64));
+        pb.set_style(Self::quorum_style());
+        pb.set_prefix("🎭  Ensemble Planning ");
+        pb.set_message(format!("{} models generating plans...", model_count));
+
+        *self.quorum_bar.lock().unwrap() = Some(pb);
+    }
+
+    fn on_ensemble_plan_generated(&self, model: &quorum_domain::Model) {
+        if let Some(pb) = self.quorum_bar.lock().unwrap().as_ref() {
+            pb.set_message(format!("{} generated plan", model).green().to_string());
+            pb.inc(1);
+        }
+    }
+
+    fn on_ensemble_voting_start(&self, plan_count: usize) {
+        if let Some(pb) = self.quorum_bar.lock().unwrap().as_ref() {
+            pb.set_message(format!("Voting on {} plans...", plan_count));
+        }
+    }
+
+    fn on_ensemble_complete(&self, selected_model: &quorum_domain::Model, score: f64) {
+        if let Some(pb) = self.quorum_bar.lock().unwrap().take() {
+            pb.finish_with_message(format!(
+                "{} {} (score: {:.1}/10)",
+                "Selected:".green().bold(),
+                selected_model.to_string().cyan(),
+                score
+            ));
+        }
+    }
 }
 
 /// Simple text-based progress (no spinners)
@@ -568,5 +603,23 @@ impl AgentProgressNotifier for SimpleAgentProgress {
             truncate(&task.description, 40)
         );
         println!("    Feedback: {}", truncate(feedback, 60));
+    }
+
+    // ==================== Ensemble Planning Callbacks ====================
+
+    fn on_ensemble_start(&self, model_count: usize) {
+        println!("  🎭 Ensemble Planning ({} models)", model_count);
+    }
+
+    fn on_ensemble_plan_generated(&self, model: &quorum_domain::Model) {
+        println!("    ✓ {} generated plan", model);
+    }
+
+    fn on_ensemble_voting_start(&self, plan_count: usize) {
+        println!("  🗳️  Voting on {} plans...", plan_count);
+    }
+
+    fn on_ensemble_complete(&self, selected_model: &quorum_domain::Model, score: f64) {
+        println!("  ✓ Selected: {} (score: {:.1}/10)", selected_model, score);
     }
 }

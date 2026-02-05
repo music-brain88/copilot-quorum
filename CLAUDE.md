@@ -2,6 +2,36 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Core Concepts
+
+### Quorum
+
+**Quorum** is the central concept, inspired by distributed systems consensus:
+
+- **Quorum Discussion**: Multi-model equal discussion (collecting perspectives)
+- **Quorum Consensus**: Voting-based approval/rejection for plans and actions
+- **Quorum Synthesis**: Merging multiple opinions, resolving contradictions
+
+### Solo / Ensemble Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **Solo** (default) | Single model driven, quick execution | Simple tasks, bug fixes |
+| **Ensemble** | Multi-model Quorum Discussion | Complex design, architecture decisions |
+
+```bash
+# Solo mode (default)
+cargo run -p copilot-quorum -- "Fix this bug"
+
+# Ensemble mode
+cargo run -p copilot-quorum -- --ensemble "Design the auth system"
+
+# REPL commands
+/solo     # Switch to Solo mode
+/ens      # Switch to Ensemble mode
+/discuss  # Run Quorum Discussion (works in any mode)
+```
+
 ## Build & Test Commands
 
 ```bash
@@ -29,6 +59,17 @@ cargo run -p copilot-quorum -- /init
 Project-level config: `quorum.toml` (or `~/.config/copilot-quorum/config.toml` for global)
 
 ```toml
+# Quorum settings (new unified configuration)
+[quorum]
+rule = "majority"        # "majority", "unanimous", "atleast:2", "75%"
+min_models = 2           # Minimum models for valid consensus
+
+[quorum.discussion]
+models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+moderator = "claude-opus-4.5"
+enable_peer_review = true
+
+# Legacy council settings (still supported)
 [council]
 models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
 moderator = "claude-opus-4.5"
@@ -38,6 +79,10 @@ enable_review = true
 
 [output]
 format = "synthesis"  # "full", "synthesis", or "json"
+
+[agent]
+planning_mode = "single"  # "single" (Solo) or "ensemble" (multi-model planning)
+hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
 ```
 
 ## Architecture
@@ -79,7 +124,8 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 ```
 domain/src/
 ├── core/           # Model, Question, Error
-├── orchestration/  # Phase, QuorumRun, QuorumResult (合議)
+├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
+├── orchestration/  # Phase, QuorumRun, QuorumResult (オーケストレーション)
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
