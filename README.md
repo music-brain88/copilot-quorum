@@ -13,9 +13,12 @@
 
 ## Features / 特徴
 
-- **Multi-Model Council** - 複数AIモデルによる合議制
+- **Multi-Model Quorum** - 複数AIモデルによる合議制 ([詳細](docs/features/quorum.md))
 - **Peer Review** - 匿名化された相互レビュー
 - **Synthesis** - モデレーターによる最終統合
+- **Agent System** - 自律タスク実行と合議ベースの安全性 ([詳細](docs/features/agent-system.md))
+- **Solo / Ensemble Modes** - 単一モデル高速実行 or マルチモデル計画生成 ([詳細](docs/features/ensemble-mode.md))
+- **Plugin Tools** - プラグインベースのツールアーキテクチャ ([詳細](docs/features/tool-system.md))
 - **Parallel Execution** - 非同期並列処理
 - **Fault Tolerant** - 一部失敗しても続行可能
 - **Pluggable Architecture** - DDD + オニオンアーキテクチャによる拡張性
@@ -158,6 +161,7 @@ infrastructure/ --> application/
 ```
 
 詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
+機能別ドキュメントは [docs/features/](docs/features/README.md) にまとまっています。
 
 ---
 

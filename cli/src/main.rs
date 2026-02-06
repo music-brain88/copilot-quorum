@@ -6,7 +6,7 @@
 use anyhow::{Result, bail};
 use clap::Parser;
 use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase};
-use quorum_domain::{AgentConfig, Model, OrchestrationMode, OutputFormat};
+use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
 };
@@ -169,8 +169,10 @@ async fn main() -> Result<()> {
         .with_max_plan_revisions(config.agent.max_plan_revisions)
         .with_hil_mode(config.agent.parse_hil_mode());
 
-    // Apply planning mode from config file
-    agent_config = agent_config.with_planning_mode(config.agent.parse_planning_mode());
+    // Apply consensus level and phase scope from config file
+    agent_config = agent_config
+        .with_consensus_level(config.agent.parse_consensus_level())
+        .with_phase_scope(config.agent.parse_phase_scope());
 
     // Apply --no-quorum flag
     if cli.no_quorum {
@@ -179,15 +181,13 @@ async fn main() -> Result<()> {
             .with_skip_plan_review();
     }
 
-    // Determine initial orchestration mode
+    // Determine initial consensus level
     // --ensemble flag overrides config file setting
-    let initial_mode = if cli.ensemble {
-        // When --ensemble is specified, also enable ensemble planning
-        agent_config = agent_config.with_ensemble_planning();
-        OrchestrationMode::Quorum
+    let initial_level = if cli.ensemble {
+        agent_config = agent_config.with_ensemble();
+        ConsensusLevel::Ensemble
     } else {
-        // Default to Solo (Agent) mode
-        OrchestrationMode::Agent
+        agent_config.consensus_level
     };
 
     // No question provided -> Start Agent REPL (default)
@@ -200,7 +200,7 @@ async fn main() -> Result<()> {
         )
         .with_verbose(cli.verbose > 0)
         .with_cancellation(cancellation_token.clone())
-        .with_mode(initial_mode);
+        .with_consensus_level(initial_level);
 
         // Set moderator from config
         repl = repl.with_moderator(config.council.moderator.clone());

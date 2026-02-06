@@ -81,7 +81,9 @@ enable_review = true
 format = "synthesis"  # "full", "synthesis", or "json"
 
 [agent]
-planning_mode = "single"  # "single" (Solo) or "ensemble" (multi-model planning)
+consensus_level = "solo"  # "solo" or "ensemble"
+phase_scope = "full"      # "full", "fast", "plan-only"
+strategy = "quorum"       # "quorum" or "debate"
 hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
 ```
 
@@ -105,7 +107,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 
 | Layer | Crate | Description |
 |-------|-------|-------------|
-| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall) |
+| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy) |
 | application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort) |
 | infrastructure | `quorum-infrastructure` | Copilot CLI adapter, LocalToolExecutor (file, command, search tools) |
 | presentation | `quorum-presentation` | CLI commands, ChatRepl, ConsoleFormatter, ProgressReporter |
@@ -117,6 +119,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 - `LlmSession` (application/ports) - Active session with an LLM
 - `ProgressNotifier` (application/ports) - Progress callback interface
 - `ToolExecutorPort` (application/ports) - Tool execution interface
+- `StrategyExecutor` (domain/orchestration) - Orchestration strategy execution interface
 - `ToolValidator` (domain/tool) - Tool call validation logic
 
 ### Domain Modules
@@ -125,7 +128,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 domain/src/
 ├── core/           # Model, Question, Error
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
-├── orchestration/  # Phase, QuorumRun, QuorumResult (オーケストレーション)
+├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
@@ -171,3 +174,15 @@ The agent system extends quorum to autonomous task execution with safety through
 - `infrastructure/tools/`: LocalToolExecutor implements ToolExecutorPort
 
 詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照。
+
+## Feature Documentation
+
+機能別の詳細ドキュメント（[docs/features/](docs/features/README.md)）:
+
+| Document | Description |
+|----------|-------------|
+| [quorum.md](docs/features/quorum.md) | Quorum Discussion & Consensus |
+| [agent-system.md](docs/features/agent-system.md) | Agent System + HiL |
+| [ensemble-mode.md](docs/features/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
+| [tool-system.md](docs/features/tool-system.md) | Tool System（プラグイン、リスク分類） |
+| [cli-and-configuration.md](docs/features/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |

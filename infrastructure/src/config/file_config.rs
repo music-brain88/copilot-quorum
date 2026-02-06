@@ -3,7 +3,7 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
-use quorum_domain::{HilMode, Model, OutputFormat, PlanningMode, QuorumRule};
+use quorum_domain::{ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, QuorumRule};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -97,7 +97,9 @@ impl Default for FileReplConfig {
 /// exploration_model = "claude-haiku-4.5"   # Context gathering + low-risk tools
 /// decision_model = "claude-sonnet-4.5"     # Planning + high-risk tool decisions
 /// review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]  # Reviews (quality)
-/// planning_mode = "single"                 # or "ensemble" for multi-model planning
+/// consensus_level = "solo"                 # "solo" or "ensemble"
+/// phase_scope = "full"                     # "full", "fast", "plan-only"
+/// strategy = "quorum"                      # "quorum" or "debate"
 /// ```
 ///
 /// All model fields are optional; defaults are defined in `AgentConfig`.
@@ -108,8 +110,12 @@ pub struct FileAgentConfig {
     pub max_plan_revisions: usize,
     /// Human-in-the-loop mode (interactive, auto_reject, auto_approve)
     pub hil_mode: String,
-    /// Planning mode: "single" (Solo) or "ensemble" (multi-model planning)
-    pub planning_mode: String,
+    /// Consensus level: "solo" or "ensemble"
+    pub consensus_level: String,
+    /// Phase scope: "full", "fast", "plan-only"
+    pub phase_scope: String,
+    /// Orchestration strategy: "quorum" or "debate"
+    pub strategy: String,
 
     // ==================== Role-based Model Configuration ====================
     /// Model for exploration: context gathering + low-risk tools (optional)
@@ -125,7 +131,9 @@ impl Default for FileAgentConfig {
         Self {
             max_plan_revisions: 3,
             hil_mode: "interactive".to_string(),
-            planning_mode: "single".to_string(),
+            consensus_level: "solo".to_string(),
+            phase_scope: "full".to_string(),
+            strategy: "quorum".to_string(),
             // Role-based defaults are None - will use AgentConfig defaults
             exploration_model: None,
             decision_model: None,
@@ -140,11 +148,28 @@ impl FileAgentConfig {
         self.hil_mode.parse().unwrap_or_default()
     }
 
-    /// Parse planning_mode string into PlanningMode enum
+    /// Parse consensus_level string into ConsensusLevel enum
     ///
-    /// Accepts: "single", "solo", "ensemble", "multi", "quorum"
-    pub fn parse_planning_mode(&self) -> PlanningMode {
-        self.planning_mode.parse().unwrap_or_default()
+    /// Accepts: "solo", "s", "ensemble", "ens", "e"
+    pub fn parse_consensus_level(&self) -> ConsensusLevel {
+        self.consensus_level.parse().unwrap_or_default()
+    }
+
+    /// Parse phase_scope string into PhaseScope enum
+    ///
+    /// Accepts: "full", "fast", "plan-only", "plan"
+    pub fn parse_phase_scope(&self) -> PhaseScope {
+        self.phase_scope.parse().unwrap_or_default()
+    }
+
+    /// Parse strategy string into strategy name
+    ///
+    /// Returns "quorum" or "debate". Used by CLI to configure OrchestrationStrategy.
+    pub fn parse_strategy(&self) -> &str {
+        match self.strategy.to_lowercase().as_str() {
+            "debate" => "debate",
+            _ => "quorum",
+        }
     }
 
     /// Parse exploration_model string into Model enum
@@ -710,7 +735,9 @@ args = ["-y", "@anthropic/mcp-server-filesystem"]
 [agent]
 max_plan_revisions = 5
 hil_mode = "auto_reject"
-planning_mode = "ensemble"
+consensus_level = "ensemble"
+phase_scope = "fast"
+strategy = "debate"
 exploration_model = "claude-haiku-4.5"
 decision_model = "claude-sonnet-4.5"
 review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
@@ -718,8 +745,14 @@ review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agent.max_plan_revisions, 5);
         assert_eq!(config.agent.hil_mode, "auto_reject");
-        assert_eq!(config.agent.planning_mode, "ensemble");
-        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Ensemble);
+        assert_eq!(config.agent.consensus_level, "ensemble");
+        assert_eq!(
+            config.agent.parse_consensus_level(),
+            ConsensusLevel::Ensemble
+        );
+        assert_eq!(config.agent.phase_scope, "fast");
+        assert_eq!(config.agent.parse_phase_scope(), PhaseScope::Fast);
+        assert_eq!(config.agent.parse_strategy(), "debate");
         assert_eq!(
             config.agent.exploration_model,
             Some("claude-haiku-4.5".to_string())
@@ -738,40 +771,48 @@ review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
     }
 
     #[test]
-    fn test_agent_config_planning_mode_deserialize() {
-        // Test "single" (default)
+    fn test_agent_config_consensus_level_deserialize() {
+        // Test "solo" (default)
         let toml_str = r#"
 [agent]
-planning_mode = "single"
+consensus_level = "solo"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agent.planning_mode, "single");
-        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Single);
+        assert_eq!(config.agent.consensus_level, "solo");
+        assert_eq!(config.agent.parse_consensus_level(), ConsensusLevel::Solo);
 
         // Test "ensemble"
         let toml_str = r#"
 [agent]
-planning_mode = "ensemble"
+consensus_level = "ensemble"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agent.planning_mode, "ensemble");
-        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Ensemble);
+        assert_eq!(config.agent.consensus_level, "ensemble");
+        assert_eq!(
+            config.agent.parse_consensus_level(),
+            ConsensusLevel::Ensemble
+        );
 
-        // Test alias "solo" -> Single
+        // Test alias "ens" -> Ensemble
         let toml_str = r#"
 [agent]
-planning_mode = "solo"
+consensus_level = "ens"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Single);
+        assert_eq!(
+            config.agent.parse_consensus_level(),
+            ConsensusLevel::Ensemble
+        );
+    }
 
-        // Test alias "quorum" -> Ensemble
+    #[test]
+    fn test_agent_config_phase_scope_deserialize() {
         let toml_str = r#"
 [agent]
-planning_mode = "quorum"
+phase_scope = "plan-only"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agent.parse_planning_mode(), PlanningMode::Ensemble);
+        assert_eq!(config.agent.parse_phase_scope(), PhaseScope::PlanOnly);
     }
 
     #[test]

@@ -1,105 +1,125 @@
+//! Consensus level definitions for the Quorum system.
+//!
+//! Defines [`ConsensusLevel`] which determines the level of multi-model consensus:
+//! - Solo: Single primary model, consensus only when needed
+//! - Ensemble: Multiple models always participate in discussion and consensus
+//!
+//! Inspired by Cassandra's ConsistencyLevel:
+//! - `ConsistencyLevel::ONE` → `ConsensusLevel::Solo`
+//! - `ConsistencyLevel::QUORUM` → `ConsensusLevel::Ensemble`
+
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Orchestration mode for the Quorum system
+/// Consensus level for the Quorum system — the single user-facing mode axis.
 ///
 /// # Solo vs Ensemble
 ///
-/// The primary mode distinction is between Solo and Ensemble:
+/// - **Solo** (default): Single model driven, quick execution.
+///   Uses `/discuss` for ad-hoc multi-model consultation.
+///   Quorum Consensus is used only for plan/action review.
 ///
-/// - **Solo** (Agent): Single model driven, quick execution
-///   - Uses `/discuss` for ad-hoc multi-model consultation
-///   - Default mode for simple tasks
+/// - **Ensemble**: Multi-model driven for all decisions.
+///   Multiple models generate plans independently and vote.
+///   Inspired by ML ensemble learning for improved accuracy.
 ///
-/// - **Ensemble** (Quorum): Multi-model driven for all decisions
-///   - Inspired by ML ensemble learning
-///   - Combines perspectives for improved accuracy
-///   - Best for complex design and architecture decisions
+/// # Cassandra Analogy
 ///
-/// # Mode Aliases
-///
-/// - `solo` = `agent` (single model, autonomous task execution)
-/// - `ensemble` = `quorum` (multi-model discussion)
-/// - `ens` = `ensemble` (short form)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OrchestrationMode {
-    /// Solo mode: Single model driven, autonomous task execution
-    /// (Plan -> Review -> Execute)
+/// Just as Cassandra's ConsistencyLevel controls how many replicas must
+/// acknowledge a read/write, ConsensusLevel controls how many models
+/// participate in decision-making.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ConsensusLevel {
+    /// Solo: Single model driven, consensus only when needed
+    /// (Plan → Review → Execute)
     #[default]
-    Agent,
-    /// Ensemble mode: Multi-model consensus for all decisions
-    Quorum,
-    /// Fast mode: Single model, no review (high speed)
-    Fast,
-    /// Debate mode: Inter-model discussion
-    Debate,
-    /// Plan mode: Plan creation only, no execution
-    Plan,
+    Solo,
+    /// Ensemble: Multi-model driven, always Discussion + Consensus
+    Ensemble,
 }
 
-impl OrchestrationMode {
-    /// Check if this is a solo-style mode (single primary model)
-    pub fn is_solo(&self) -> bool {
-        matches!(self, OrchestrationMode::Agent | OrchestrationMode::Fast)
-    }
-
-    /// Check if this is an ensemble-style mode (multiple models)
-    pub fn is_ensemble(&self) -> bool {
-        matches!(self, OrchestrationMode::Quorum | OrchestrationMode::Debate)
-    }
-}
-
-impl fmt::Display for OrchestrationMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ConsensusLevel {
+    /// Derive the planning approach from this consensus level.
+    ///
+    /// - Solo → Single (one model creates the plan)
+    /// - Ensemble → Ensemble (multiple models create plans + vote)
+    pub fn planning_approach(&self) -> PlanningApproach {
         match self {
-            OrchestrationMode::Agent => write!(f, "agent"),
-            OrchestrationMode::Quorum => write!(f, "quorum"),
-            OrchestrationMode::Fast => write!(f, "fast"),
-            OrchestrationMode::Debate => write!(f, "debate"),
-            OrchestrationMode::Plan => write!(f, "plan"),
+            ConsensusLevel::Solo => PlanningApproach::Single,
+            ConsensusLevel::Ensemble => PlanningApproach::Ensemble,
         }
     }
-}
 
-impl std::str::FromStr for OrchestrationMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            // Solo modes
-            "agent" | "a" | "solo" | "s" => Ok(OrchestrationMode::Agent),
-            "fast" | "f" => Ok(OrchestrationMode::Fast),
-            // Ensemble modes
-            "quorum" | "q" | "ensemble" | "ens" | "e" => Ok(OrchestrationMode::Quorum),
-            "debate" | "d" => Ok(OrchestrationMode::Debate),
-            // Other
-            "plan" | "p" => Ok(OrchestrationMode::Plan),
-            _ => Err(format!("Invalid OrchestrationMode: {}", s)),
-        }
-    }
-}
-
-impl OrchestrationMode {
-    /// Get a human-readable description of this mode
+    /// Get a human-readable description of this level
     pub fn description(&self) -> &'static str {
         match self {
-            OrchestrationMode::Agent => {
-                "Solo: Autonomous task execution (Plan -> Review -> Execute)"
-            }
-            OrchestrationMode::Quorum => "Ensemble: Multi-model Quorum Discussion",
-            OrchestrationMode::Fast => "Solo: Single model immediate response (No review)",
-            OrchestrationMode::Debate => "Ensemble: Inter-model debate discussion",
-            OrchestrationMode::Plan => "Plan creation only (No execution)",
+            ConsensusLevel::Solo => "Solo: Single model driven (Plan → Review → Execute)",
+            ConsensusLevel::Ensemble => "Ensemble: Multi-model ensemble planning + voting",
         }
     }
 
     /// Get a short description for display
     pub fn short_description(&self) -> &'static str {
         match self {
-            OrchestrationMode::Agent => "Solo mode",
-            OrchestrationMode::Quorum => "Ensemble mode",
-            OrchestrationMode::Fast => "Fast mode",
-            OrchestrationMode::Debate => "Debate mode",
-            OrchestrationMode::Plan => "Plan mode",
+            ConsensusLevel::Solo => "Solo mode",
+            ConsensusLevel::Ensemble => "Ensemble mode",
+        }
+    }
+
+    /// Check if this is ensemble level
+    pub fn is_ensemble(&self) -> bool {
+        matches!(self, ConsensusLevel::Ensemble)
+    }
+}
+
+impl fmt::Display for ConsensusLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConsensusLevel::Solo => write!(f, "solo"),
+            ConsensusLevel::Ensemble => write!(f, "ensemble"),
+        }
+    }
+}
+
+impl std::str::FromStr for ConsensusLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "solo" | "s" => Ok(ConsensusLevel::Solo),
+            "ensemble" | "ens" | "e" => Ok(ConsensusLevel::Ensemble),
+            _ => Err(format!("Invalid ConsensusLevel: {}", s)),
+        }
+    }
+}
+
+/// Planning approach derived from [`ConsensusLevel`].
+///
+/// This is not user-facing — it is automatically determined by the consensus level.
+///
+/// - `Single`: One model (decision_model) creates the plan
+/// - `Ensemble`: Multiple models (review_models) create plans independently, then vote
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlanningApproach {
+    /// Single model generates the plan (derived from Solo)
+    #[default]
+    Single,
+    /// Multiple models generate plans independently, then vote (derived from Ensemble)
+    Ensemble,
+}
+
+impl PlanningApproach {
+    /// Check if this is ensemble planning
+    pub fn is_ensemble(&self) -> bool {
+        matches!(self, PlanningApproach::Ensemble)
+    }
+}
+
+impl fmt::Display for PlanningApproach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlanningApproach::Single => write!(f, "single"),
+            PlanningApproach::Ensemble => write!(f, "ensemble"),
         }
     }
 }
@@ -110,62 +130,61 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", OrchestrationMode::Agent), "agent");
-        assert_eq!(format!("{}", OrchestrationMode::Quorum), "quorum");
+        assert_eq!(format!("{}", ConsensusLevel::Solo), "solo");
+        assert_eq!(format!("{}", ConsensusLevel::Ensemble), "ensemble");
     }
 
     #[test]
-    fn test_from_str_legacy() {
-        assert_eq!(
-            "agent".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Agent)
-        );
-        assert_eq!(
-            "a".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Agent)
-        );
-        assert_eq!(
-            "Quorum".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Quorum)
-        );
-        assert!("unknown".parse::<OrchestrationMode>().is_err());
+    fn test_default() {
+        assert_eq!(ConsensusLevel::default(), ConsensusLevel::Solo);
     }
 
     #[test]
-    fn test_from_str_solo_ensemble() {
-        // Solo aliases
+    fn test_from_str() {
         assert_eq!(
-            "solo".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Agent)
+            "solo".parse::<ConsensusLevel>().ok(),
+            Some(ConsensusLevel::Solo)
         );
         assert_eq!(
-            "s".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Agent)
+            "s".parse::<ConsensusLevel>().ok(),
+            Some(ConsensusLevel::Solo)
         );
+        assert_eq!(
+            "ensemble".parse::<ConsensusLevel>().ok(),
+            Some(ConsensusLevel::Ensemble)
+        );
+        assert_eq!(
+            "ens".parse::<ConsensusLevel>().ok(),
+            Some(ConsensusLevel::Ensemble)
+        );
+        assert_eq!(
+            "e".parse::<ConsensusLevel>().ok(),
+            Some(ConsensusLevel::Ensemble)
+        );
+        assert!("unknown".parse::<ConsensusLevel>().is_err());
+    }
 
-        // Ensemble aliases
+    #[test]
+    fn test_is_ensemble() {
+        assert!(!ConsensusLevel::Solo.is_ensemble());
+        assert!(ConsensusLevel::Ensemble.is_ensemble());
+    }
+
+    #[test]
+    fn test_planning_approach() {
         assert_eq!(
-            "ensemble".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Quorum)
+            ConsensusLevel::Solo.planning_approach(),
+            PlanningApproach::Single
         );
         assert_eq!(
-            "ens".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Quorum)
-        );
-        assert_eq!(
-            "e".parse::<OrchestrationMode>().ok(),
-            Some(OrchestrationMode::Quorum)
+            ConsensusLevel::Ensemble.planning_approach(),
+            PlanningApproach::Ensemble
         );
     }
 
     #[test]
-    fn test_is_solo_ensemble() {
-        assert!(OrchestrationMode::Agent.is_solo());
-        assert!(OrchestrationMode::Fast.is_solo());
-        assert!(!OrchestrationMode::Quorum.is_solo());
-
-        assert!(OrchestrationMode::Quorum.is_ensemble());
-        assert!(OrchestrationMode::Debate.is_ensemble());
-        assert!(!OrchestrationMode::Agent.is_ensemble());
+    fn test_planning_approach_is_ensemble() {
+        assert!(!PlanningApproach::Single.is_ensemble());
+        assert!(PlanningApproach::Ensemble.is_ensemble());
     }
 }
