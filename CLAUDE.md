@@ -171,3 +171,15 @@ The agent system extends quorum to autonomous task execution with safety through
 - `infrastructure/tools/`: LocalToolExecutor implements ToolExecutorPort
 
 詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照。
+
+## Feature Documentation
+
+機能別の詳細ドキュメント（[docs/features/](docs/features/README.md)）:
+
+| Document | Description |
+|----------|-------------|
+| [quorum.md](docs/features/quorum.md) | Quorum Discussion & Consensus |
+| [agent-system.md](docs/features/agent-system.md) | Agent System + HiL |
+| [ensemble-mode.md](docs/features/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
+| [tool-system.md](docs/features/tool-system.md) | Tool System（プラグイン、リスク分類） |
+| [cli-and-configuration.md](docs/features/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |

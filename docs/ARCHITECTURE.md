@@ -617,6 +617,8 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 
 ## Agent System / エージェントシステム
 
+> 詳細は [features/agent-system.md](./features/agent-system.md) を参照してください。
+
 エージェントシステムは、Quorumの概念を自律タスク実行に拡張したものです。
 Solo モードで動作し、重要なポイントでは Quorum Consensus によるレビューを行います。
 
@@ -711,6 +713,8 @@ UseCase (Application層)
 ---
 
 ## Tool Provider System / ツールプロバイダーシステム
+
+> 詳細は [features/tool-system.md](./features/tool-system.md) を参照してください。
 
 ツールプロバイダーシステムは、**プラグインベースのオーケストレーション**アーキテクチャを採用しています。
 Quorum はツールの呼び出し・連携に専念し、実際のツール実装は外部プロバイダーに委譲します。
