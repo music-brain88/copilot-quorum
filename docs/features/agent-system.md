@@ -196,6 +196,20 @@ agent-hil>
 
 ## Configuration / 設定
 
+### Three Orthogonal Axes / 3つの直交する設定軸
+
+`AgentConfig` のオーケストレーション設定は、3 つの独立した軸で構成されています：
+
+| 軸 | 型 | 役割 |
+|----|------|------|
+| **ConsensusLevel** | Enum (`Solo`, `Ensemble`) | 参加モデル数を制御 |
+| **PhaseScope** | Enum (`Full`, `Fast`, `PlanOnly`) | 実行フェーズの範囲を制御 |
+| **OrchestrationStrategy** | Enum (`Quorum(QuorumConfig)`, `Debate(DebateConfig)`) | 議論の進め方を選択 |
+
+`OrchestrationStrategy` はバリアントごとに設定を保持する **enum** です。
+一方、`StrategyExecutor` は戦略の実行ロジックを定義する **trait** です。
+enum が「何を使うか」を、trait が「どう実行するか」を担います。
+
 ### AgentConfig
 
 ```rust

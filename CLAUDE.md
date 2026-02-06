@@ -107,7 +107,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 
 | Layer | Crate | Description |
 |-------|-------|-------------|
-| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall) |
+| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy) |
 | application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort) |
 | infrastructure | `quorum-infrastructure` | Copilot CLI adapter, LocalToolExecutor (file, command, search tools) |
 | presentation | `quorum-presentation` | CLI commands, ChatRepl, ConsoleFormatter, ProgressReporter |
@@ -119,6 +119,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 - `LlmSession` (application/ports) - Active session with an LLM
 - `ProgressNotifier` (application/ports) - Progress callback interface
 - `ToolExecutorPort` (application/ports) - Tool execution interface
+- `StrategyExecutor` (domain/orchestration) - Orchestration strategy execution interface
 - `ToolValidator` (domain/tool) - Tool call validation logic
 
 ### Domain Modules
@@ -127,7 +128,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 domain/src/
 ├── core/           # Model, Question, Error
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
-├── orchestration/  # Phase, QuorumRun, QuorumResult (オーケストレーション)
+├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate

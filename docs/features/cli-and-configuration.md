@@ -12,6 +12,9 @@ copilot-quorum は CLI ツールとして動作し、ワンショット実行と
 設定は TOML ファイル（`quorum.toml`）で管理され、プロジェクトレベルとグローバルレベルの
 2 段階で設定できます。`/init` コマンドによるプロジェクトコンテキストの自動生成も可能です。
 
+エージェントの動作は 3 つの直交する軸（`ConsensusLevel`, `PhaseScope`, `OrchestrationStrategy`）で構成され、
+それぞれ独立して設定・切り替えが可能です。
+
 ---
 
 ## Quick Start / クイックスタート

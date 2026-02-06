@@ -1,6 +1,6 @@
 //! Phase scope definitions for the Quorum system.
 //!
-//! [`PhaseScope`] is an orthogonal option to [`ConsensusLevel`] that controls
+//! [`PhaseScope`] is an orthogonal option to [`ConsensusLevel`](super::mode::ConsensusLevel) that controls
 //! which phases of execution are included in a run.
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use std::fmt;
 
 /// Phase scope — controls which execution phases are included.
 ///
-/// This is orthogonal to [`ConsensusLevel`]: you can combine any scope with
+/// This is orthogonal to [`ConsensusLevel`](super::mode::ConsensusLevel): you can combine any scope with
 /// any consensus level. For example, `Solo + Fast` skips reviews for speed,
 /// while `Ensemble + PlanOnly` generates multi-model plans without executing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
