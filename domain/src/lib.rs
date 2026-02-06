@@ -12,10 +12,10 @@
 //! - **Quorum Discussion**: Multiple models participate in equal discussion
 //! - **Quorum Consensus**: Voting-based approval/rejection for plans and actions
 //!
-//! ## Solo / Ensemble Modes
+//! ## Solo / Ensemble (ConsensusLevel)
 //!
-//! - **Solo Mode**: Single model (Agent) driven, quick execution (default)
-//! - **Ensemble Mode**: Multi-model (Quorum) driven, for complex decisions
+//! - **Solo** (default): Single model driven, quick execution
+//! - **Ensemble**: Multi-model driven, for complex decisions
 
 pub mod agent;
 pub mod config;
@@ -31,7 +31,7 @@ pub mod tool;
 pub use agent::{
     entities::{
         AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
-        Plan, PlanCandidate, PlanningMode, ReviewRound, Task, TaskStatus,
+        Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
     },
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
@@ -40,8 +40,9 @@ pub use context::{KnownContextFile, LoadedContextFile, ProjectContext};
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
     entities::{Phase, QuorumRun},
-    mode::OrchestrationMode,
-    strategy::OrchestrationStrategy,
+    mode::{ConsensusLevel, PlanningApproach},
+    scope::PhaseScope,
+    strategy::{DebateConfig, DebateIntensity, OrchestrationStrategy, StrategyExecutor},
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
 pub use prompt::{AgentPromptTemplate, PromptTemplate};

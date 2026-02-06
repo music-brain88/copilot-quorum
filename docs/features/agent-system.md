@@ -205,8 +205,10 @@ pub struct AgentConfig {
     pub decision_model: Model,         // 計画作成・高リスクツール判断用（デフォルト: Sonnet）
     pub review_models: Vec<Model>,     // Quorum レビュー投票用
 
-    // ---- Planning Configuration ----
-    pub planning_mode: PlanningMode,   // Single (Solo) or Ensemble
+    // ---- Orchestration Configuration ----
+    pub consensus_level: ConsensusLevel,             // Solo or Ensemble
+    pub phase_scope: PhaseScope,                     // Full, Fast, PlanOnly
+    pub orchestration_strategy: OrchestrationStrategy, // Quorum or Debate
 
     // ---- Behavior Configuration ----
     pub require_plan_review: bool,     // 常に true（計画レビューは必須）
@@ -235,7 +237,9 @@ pub struct AgentConfig {
 [agent]
 max_plan_revisions = 3         # 人間介入までの最大修正回数（デフォルト: 3）
 hil_mode = "interactive"       # "interactive", "auto_reject", "auto_approve"
-planning_mode = "single"       # "single" (Solo) or "ensemble"
+consensus_level = "solo"       # "solo" or "ensemble"
+phase_scope = "full"           # "full", "fast", "plan-only"
+strategy = "quorum"            # "quorum" or "debate"
 exploration_model = "claude-haiku-4.5"
 decision_model = "claude-sonnet-4.5"
 review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
@@ -379,4 +383,4 @@ pub enum HumanDecision {
 - [Tool System](./tool-system.md) - エージェントが使用するツールの詳細
 - [CLI & Configuration](./cli-and-configuration.md) - エージェントの設定と REPL コマンド
 
-<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。主要ファイルは domain/src/agent/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->
+<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。AgentConfig は ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）の3つの直交軸で設定。主要ファイルは domain/src/agent/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->

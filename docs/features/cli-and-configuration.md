@@ -58,9 +58,12 @@ REPL（対話モード）で使用できるスラッシュコマンド一覧:
 | Command | Aliases | Description |
 |---------|---------|-------------|
 | `/help` | `/h`, `/?` | ヘルプを表示 |
-| `/mode <mode>` | | モードを変更 (solo, ensemble, fast, debate, plan) |
+| `/mode <mode>` | | 合意レベルを変更 (solo, ensemble) |
 | `/solo` | | Solo モードに切り替え（単一モデル、高速実行） |
 | `/ens` | `/ensemble` | Ensemble モードに切り替え（マルチモデル計画生成） |
+| `/fast` | | PhaseScope を Fast に切り替え（レビュースキップ） |
+| `/scope <scope>` | | フェーズスコープを変更 (full, fast, plan-only) |
+| `/strategy <strategy>` | | 戦略を変更 (quorum, debate) |
 | `/discuss <question>` | `/council` | Quorum Discussion を実行（複数モデルに相談） |
 | `/init [--force]` | | プロジェクトコンテキストを初期化 |
 | `/config` | | 現在の設定を表示 |
@@ -68,34 +71,48 @@ REPL（対話モード）で使用できるスラッシュコマンド一覧:
 | `/verbose` | | Verbose モードの状態を表示 |
 | `/quit` | `/exit`, `/q` | 終了 |
 
-### Orchestration Modes / オーケストレーションモード
+### Consensus Level / 合意レベル
 
-REPL では 5 つのモードが利用可能です。`/mode <mode>` または各モードのエイリアスコマンドで切り替えられます。
+REPL では 2 つの合意レベルが利用可能です。`/mode <level>` または各モードのエイリアスコマンドで切り替えられます。
 
-| Mode | Aliases | Category | Description |
-|------|---------|----------|-------------|
-| **Solo** (default) | `/solo`, `/mode solo`, `/mode agent` | Solo 系 | 単一モデルによる自律タスク実行（Plan → Review → Execute） |
-| **Ensemble** | `/ens`, `/mode ensemble`, `/mode quorum` | Ensemble 系 | マルチモデル Quorum Discussion（複数モデルで計画生成 + 投票） |
-| **Fast** | `/mode fast` | Solo 系 | 単一モデル即時応答、レビューなし（高速） |
-| **Debate** | `/mode debate` | Ensemble 系 | モデル間の討論形式による議論 |
-| **Plan** | `/mode plan` | — | 計画作成のみ、実行は行わない |
+| Level | Aliases | Description |
+|-------|---------|-------------|
+| **Solo** (default) | `/solo`, `/mode solo` | 単一モデルによる自律タスク実行（Plan → Review → Execute） |
+| **Ensemble** | `/ens`, `/mode ensemble` | マルチモデル Quorum Discussion（複数モデルで計画生成 + 投票） |
 
-- **Solo 系** (`is_solo() == true`): 主に単一モデルが処理を駆動する
-- **Ensemble 系** (`is_ensemble() == true`): 複数モデルが協調して処理する
+定義ファイル: `domain/src/orchestration/mode.rs`（`ConsensusLevel` enum）
 
-定義ファイル: `domain/src/orchestration/mode.rs`（`OrchestrationMode` enum）
+### Phase Scope / フェーズスコープ
+
+合意レベルとは直交するオプションで、実行範囲を制御します。
+
+| Scope | Command | Description |
+|-------|---------|-------------|
+| **Full** (default) | `/scope full` | 全フェーズ実行（レビュー含む） |
+| **Fast** | `/fast`, `/scope fast` | レビューフェーズをスキップ（高速実行） |
+| **PlanOnly** | `/scope plan-only` | 計画のみ生成、実行は行わない |
+
+定義ファイル: `domain/src/orchestration/scope.rs`（`PhaseScope` enum）
+
+### Orchestration Strategy / オーケストレーション戦略
+
+議論の進め方を選択します。
+
+| Strategy | Command | Description |
+|----------|---------|-------------|
+| **Quorum** (default) | `/strategy quorum` | 対等な議論 → レビュー → 統合 |
+| **Debate** | `/strategy debate` | 対立的議論 → 合意形成 |
+
+定義ファイル: `domain/src/orchestration/strategy.rs`（`OrchestrationStrategy` enum）
 
 ### Prompt Display / プロンプト表示
 
 REPL のプロンプトは現在のモードに応じて色が変わります:
 
-| Mode | Prompt | Color |
-|------|--------|-------|
+| Consensus Level | Prompt | Color |
+|-----------------|--------|-------|
 | Solo | `solo>` | Green |
 | Ensemble | `ensemble>` | Magenta |
-| Fast | `fast>` | Yellow |
-| Debate | `debate>` | Blue |
-| Plan | `plan>` | Cyan |
 
 ### Context Management / コンテキスト管理
 
@@ -155,7 +172,9 @@ moderator = "claude-sonnet-4.5"
 # Agent Settings / エージェント設定
 # ============================================================
 [agent]
-planning_mode = "single"                  # "single" (Solo) or "ensemble"
+consensus_level = "solo"                  # "solo" or "ensemble"
+phase_scope = "full"                      # "full", "fast", "plan-only"
+strategy = "quorum"                       # "quorum" or "debate"
 hil_mode = "interactive"                  # "interactive", "auto_reject", "auto_approve"
 max_plan_revisions = 3                    # 人間介入までの最大計画修正回数
 exploration_model = "claude-haiku-4.5"    # コンテキスト収集用（高速・低コスト）
@@ -257,4 +276,4 @@ CLI Arguments / REPL Input
 - [Ensemble Mode](./ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
 - [Tool System](./tool-system.md) - ツール設定の詳細
 
-<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /discuss, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。設定優先順位は CLI > project > global > defaults。主要ファイルは presentation/src/agent/repl.rs と infrastructure/src/config/。 -->
+<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /discuss, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。ConsensusLevel（Solo/Ensemble）が唯一のモード軸、PhaseScope と OrchestrationStrategy は直交オプション。設定優先順位は CLI > project > global > defaults。主要ファイルは presentation/src/agent/repl.rs と infrastructure/src/config/。 -->

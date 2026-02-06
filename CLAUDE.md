@@ -81,7 +81,9 @@ enable_review = true
 format = "synthesis"  # "full", "synthesis", or "json"
 
 [agent]
-planning_mode = "single"  # "single" (Solo) or "ensemble" (multi-model planning)
+consensus_level = "solo"  # "solo" or "ensemble"
+phase_scope = "full"      # "full", "fast", "plan-only"
+strategy = "quorum"       # "quorum" or "debate"
 hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
 ```
 

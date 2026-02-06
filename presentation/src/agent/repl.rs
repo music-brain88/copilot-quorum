@@ -10,7 +10,7 @@ use quorum_application::{
     ContextLoaderPort, InitContextInput, InitContextUseCase, LlmGateway, RunAgentInput,
     RunAgentUseCase, RunQuorumInput, RunQuorumUseCase, ToolExecutorPort,
 };
-use quorum_domain::{AgentConfig, Model, OrchestrationMode, OutputFormat, PlanningMode};
+use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, PhaseScope};
 use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
 use std::path::Path;
@@ -42,8 +42,8 @@ pub struct AgentRepl<
     working_dir: Option<String>,
     /// Conversation history for /council context
     conversation_history: Vec<HistoryEntry>,
-    /// Current orchestration mode
-    current_mode: OrchestrationMode,
+    /// Current consensus level (Solo or Ensemble)
+    consensus_level: ConsensusLevel,
     /// Cancellation token for graceful shutdown
     cancellation_token: Option<CancellationToken>,
 }
@@ -75,7 +75,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             verbose: false,
             working_dir: None,
             conversation_history: Vec::new(),
-            current_mode: OrchestrationMode::Agent,
+            consensus_level: ConsensusLevel::Solo,
             cancellation_token: None,
         }
     }
@@ -115,9 +115,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self
     }
 
-    /// Set initial orchestration mode (Solo or Ensemble)
-    pub fn with_mode(mut self, mode: OrchestrationMode) -> Self {
-        self.current_mode = mode;
+    /// Set initial consensus level (Solo or Ensemble)
+    pub fn with_consensus_level(mut self, level: ConsensusLevel) -> Self {
+        self.consensus_level = level;
+        self.config = self.config.with_consensus_level(level);
         self
     }
 
@@ -139,12 +140,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self.print_welcome();
 
         loop {
-            let prompt = match self.current_mode {
-                OrchestrationMode::Agent => format!("{} ", "solo>".green()),
-                OrchestrationMode::Quorum => format!("{} ", "ensemble>".magenta()),
-                OrchestrationMode::Fast => format!("{} ", "fast>".yellow()),
-                OrchestrationMode::Debate => format!("{} ", "debate>".blue()),
-                OrchestrationMode::Plan => format!("{} ", "plan>".cyan()),
+            let prompt = match self.consensus_level {
+                ConsensusLevel::Solo => format!("{} ", "solo>".green()),
+                ConsensusLevel::Ensemble => format!("{} ", "ensemble>".magenta()),
             };
 
             let readline = rl.readline(&prompt);
@@ -241,7 +239,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if let Some(ref dir) = self.working_dir {
             println!("{} {}", "Working Dir:".bold(), dir);
         }
-        println!("{} {}", "Mode:".bold(), self.current_mode);
+        println!("{} {}", "Mode:".bold(), self.consensus_level);
         println!();
         println!("{}", "The agent will:".dimmed());
         println!("{}", "  1. Gather context about your project".dimmed());
@@ -259,6 +257,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         println!(
             "  {} - Consult quorum (Quorum Discussion)",
             "/discuss".cyan()
+        );
+        println!("  {}    - Toggle fast mode (skip reviews)", "/fast".cyan());
+        println!(
+            "  {}   - Change phase scope (full, fast, plan)",
+            "/scope".cyan()
+        );
+        println!(
+            "  {}- Change strategy (quorum, debate)",
+            "/strategy ".cyan()
         );
         println!("  {}    - Initialize project context", "/init".cyan());
         println!("  {}  - Show current configuration", "/config".cyan());
@@ -284,11 +291,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!("  /help, /h, /?        - Show this help");
                 println!();
                 println!("{}", "Mode Commands:".bold().cyan());
-                println!(
-                    "  /mode <mode>         - Change mode (solo, ensemble, fast, debate, plan)"
-                );
+                println!("  /mode <level>        - Change consensus level (solo, ensemble)");
                 println!("  /solo                - Switch to Solo mode (single model, quick)");
                 println!("  /ens                 - Switch to Ensemble mode (multi-model)");
+                println!();
+                println!("{}", "Scope Commands:".bold().yellow());
+                println!("  /fast                - Toggle fast mode (skip reviews)");
+                println!("  /scope <scope>       - Change phase scope (full, fast, plan)");
+                println!();
+                println!("{}", "Strategy Commands:".bold().blue());
+                println!("  /strategy <s>        - Change strategy (quorum, debate)");
                 println!();
                 println!("{}", "Quorum Commands:".bold().magenta());
                 println!("  /discuss <question>  - Quorum Discussion (consult multiple models)");
@@ -301,61 +313,38 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 println!("  /verbose             - Toggle verbose mode");
                 println!("  /quit, /exit, /q     - Exit");
                 println!();
-                println!("{}", "Modes:".bold());
-                println!("  solo (agent)   - Single model driven, quick execution");
-                println!("  ensemble (ens) - Multi-model Quorum Discussion for all");
-                println!("  fast           - No review, immediate response");
-                println!("  debate         - Inter-model debate");
-                println!("  plan           - Plan only, no execution");
-                println!();
-                println!("{}", "Usage:".bold());
-                println!("  Type your request and press Enter.");
-                println!("  In Solo mode: Single model executes, /discuss for quorum");
-                println!("  In Ensemble mode: All queries go through Quorum Discussion");
-                println!();
-                println!("{}", "/discuss:".bold());
-                println!("  Use /discuss to trigger a Quorum Discussion.");
-                println!("  Multiple models provide perspectives and reach consensus.");
-                println!("  The conversation history provides context.");
-                println!();
-                println!("{}", "Examples:".bold());
-                println!("  - \"Fix the bug in login.rs\"");
-                println!("  - \"/discuss What's the best approach for auth?\"");
-                println!("  - \"/ens\" then \"Design the API\"");
-                println!("  - \"/init --force\"");
-                println!();
                 CommandResult::Continue
             }
             "/mode" => {
                 if args.is_empty() {
-                    println!("{} Usage: /mode <mode>", "Error:".red().bold());
-                    println!("Available modes: solo, ensemble, fast, debate, plan");
-                    println!("Aliases: agent=solo, quorum=ensemble, ens=ensemble");
+                    println!("{} Usage: /mode <level>", "Error:".red().bold());
+                    println!("Available levels: solo, ensemble");
                     println!(
-                        "Current mode: {} ({})",
-                        self.current_mode,
-                        self.current_mode.short_description()
+                        "Current level: {} ({})",
+                        self.consensus_level,
+                        self.consensus_level.short_description()
                     );
                     return CommandResult::Continue;
                 }
 
-                if let Ok(mode) = args.parse::<OrchestrationMode>() {
-                    self.current_mode = mode;
+                if let Ok(level) = args.parse::<ConsensusLevel>() {
+                    self.consensus_level = level;
+                    self.config = self.config.clone().with_consensus_level(level);
                     println!(
                         "Mode changed to: {} ({})",
-                        mode,
-                        mode.description().dimmed()
+                        level,
+                        level.description().dimmed()
                     );
                 } else {
                     println!("{} Unknown mode: {}", "Error:".red().bold(), args);
-                    println!("Available modes: solo, ensemble, fast, debate, plan");
+                    println!("Available levels: solo, ensemble");
                 }
                 CommandResult::Continue
             }
             // Solo mode shortcut
             "/solo" => {
-                self.current_mode = OrchestrationMode::Agent;
-                self.config = self.config.clone().with_planning_mode(PlanningMode::Single);
+                self.consensus_level = ConsensusLevel::Solo;
+                self.config = self.config.clone().with_consensus_level(ConsensusLevel::Solo);
                 println!(
                     "Switched to {} - {}",
                     "Solo mode".green().bold(),
@@ -369,17 +358,99 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
             // Ensemble mode shortcut
             "/ens" | "/ensemble" => {
-                self.current_mode = OrchestrationMode::Quorum;
+                self.consensus_level = ConsensusLevel::Ensemble;
                 self.config = self
                     .config
                     .clone()
-                    .with_planning_mode(PlanningMode::Ensemble);
+                    .with_consensus_level(ConsensusLevel::Ensemble);
                 println!(
                     "Switched to {} - {}",
                     "Ensemble mode".magenta().bold(),
                     "multi-model ensemble planning".dimmed()
                 );
                 println!("Plans will be generated by multiple models and voted on.");
+                CommandResult::Continue
+            }
+            // Fast mode toggle
+            "/fast" => {
+                let new_scope = if self.config.phase_scope == PhaseScope::Fast {
+                    PhaseScope::Full
+                } else {
+                    PhaseScope::Fast
+                };
+                self.config = self.config.clone().with_phase_scope(new_scope);
+                match new_scope {
+                    PhaseScope::Fast => println!(
+                        "Switched to {} - {}",
+                        "Fast scope".yellow().bold(),
+                        "reviews will be skipped".dimmed()
+                    ),
+                    _ => println!(
+                        "Switched to {} - {}",
+                        "Full scope".green().bold(),
+                        "all review phases enabled".dimmed()
+                    ),
+                }
+                CommandResult::Continue
+            }
+            // Phase scope command
+            "/scope" => {
+                if args.is_empty() {
+                    println!("{} Usage: /scope <scope>", "Error:".red().bold());
+                    println!("Available scopes: full, fast, plan");
+                    println!("Current scope: {}", self.config.phase_scope);
+                    return CommandResult::Continue;
+                }
+
+                if let Ok(scope) = args.parse::<PhaseScope>() {
+                    self.config = self.config.clone().with_phase_scope(scope);
+                    println!("Phase scope changed to: {}", scope);
+                } else {
+                    println!("{} Unknown scope: {}", "Error:".red().bold(), args);
+                    println!("Available scopes: full, fast, plan");
+                }
+                CommandResult::Continue
+            }
+            // Strategy command
+            "/strategy" => {
+                if args.is_empty() {
+                    println!("{} Usage: /strategy <strategy>", "Error:".red().bold());
+                    println!("Available strategies: quorum, debate");
+                    println!(
+                        "Current strategy: {}",
+                        self.config.orchestration_strategy
+                    );
+                    return CommandResult::Continue;
+                }
+
+                match args.split_whitespace().next().unwrap_or("") {
+                    "quorum" | "q" => {
+                        self.config = self.config.clone().with_orchestration_strategy(
+                            quorum_domain::OrchestrationStrategy::default(),
+                        );
+                        println!(
+                            "Strategy changed to: {} - {}",
+                            "quorum".bold(),
+                            "equal discussion + review + synthesis".dimmed()
+                        );
+                    }
+                    "debate" | "d" => {
+                        self.config = self.config.clone().with_orchestration_strategy(
+                            quorum_domain::OrchestrationStrategy::Debate(
+                                quorum_domain::DebateConfig::default(),
+                            ),
+                        );
+                        println!(
+                            "Strategy changed to: {} - {}",
+                            "debate".bold(),
+                            "adversarial discussion + consensus building".dimmed()
+                        );
+                    }
+                    other => {
+                        println!("{} Unknown strategy: {}", "Error:".red().bold(), other);
+                        println!("Available strategies: quorum, debate");
+                    }
+                }
                 CommandResult::Continue
             }
             // Quorum Discussion
@@ -421,13 +492,21 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     }
                 );
                 println!(
-                    "  Planning Mode:     {} {}",
-                    self.config.planning_mode,
-                    if self.config.planning_mode.is_ensemble() {
+                    "  Consensus Level:   {} {}",
+                    self.config.consensus_level,
+                    if self.config.consensus_level.is_ensemble() {
                         "(multi-model planning + voting)".dimmed()
                     } else {
                         "(single model planning)".dimmed()
                     }
+                );
+                println!(
+                    "  Phase Scope:       {}",
+                    self.config.phase_scope
+                );
+                println!(
+                    "  Strategy:          {}",
+                    self.config.orchestration_strategy
                 );
                 println!("  Plan Review:       {}", "Always required".green());
                 println!(
@@ -658,39 +737,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     async fn process_request(&mut self, request: &str) {
-        // Route based on mode
-        match self.current_mode {
-            // Solo mode: Single model driven, quick execution
-            OrchestrationMode::Agent => {
-                // Fall through to agent logic
-            }
-            // Ensemble mode: Multi-model driven, more thorough
-            // Uses the same agent flow but with ensemble flag for future enhancements
-            OrchestrationMode::Quorum => {
-                // For now, use the same agent flow
-                // TODO: Add multi-model planning discussion in Ensemble mode
-            }
-            OrchestrationMode::Fast | OrchestrationMode::Debate | OrchestrationMode::Plan => {
-                println!();
-                println!(
-                    "{} Mode '{}' is not yet implemented.",
-                    "⚠️".yellow(),
-                    self.current_mode
-                );
-                println!("Please switch back to 'solo' or 'ensemble' using /mode.");
-                println!();
-                return;
-            }
-        }
-
         println!();
-        let mode_label = if self.current_mode.is_ensemble() {
+        let mode_label = if self.consensus_level.is_ensemble() {
             "Ensemble Agent Starting".bold().magenta()
         } else {
             "Solo Agent Starting".bold().cyan()
         };
         println!("{} {}", "━".repeat(50).dimmed(), mode_label);
-        if self.current_mode.is_ensemble() {
+        if self.consensus_level.is_ensemble() {
             println!(
                 "{}",
                 "  (Multi-model mode: higher accuracy, more thorough)".dimmed()

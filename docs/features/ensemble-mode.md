@@ -35,7 +35,7 @@ ensemble> Design the payment integration  # 複数モデルで計画生成
 ```toml
 # quorum.toml でデフォルトを Ensemble に
 [agent]
-planning_mode = "ensemble"
+consensus_level = "ensemble"
 ```
 
 ---
@@ -185,7 +185,7 @@ copilot-quorum は **ensemble-after-inference** を採用。
 ```toml
 # quorum.toml
 [agent]
-planning_mode = "ensemble"   # "single" (Solo) or "ensemble"
+consensus_level = "ensemble"   # "solo" or "ensemble"
 
 [quorum.discussion]
 models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
@@ -212,7 +212,7 @@ REPL コマンド:
 
 | File | Description |
 |------|-------------|
-| `domain/src/agent/entities.rs` | `PlanningMode` enum (`Single`, `Ensemble`) |
+| `domain/src/orchestration/mode.rs` | `ConsensusLevel` enum (`Solo`, `Ensemble`) + `PlanningApproach` |
 | `domain/src/agent/entities.rs` | `PlanCandidate` struct（候補計画 + 投票スコア） |
 | `domain/src/agent/entities.rs` | `EnsemblePlanResult` struct（選択結果） |
 | `application/src/use_cases/run_agent.rs` | `generate_ensemble_plans()`, `vote_on_plans()`, `select_best_plan()` |
@@ -244,10 +244,16 @@ RunAgentUseCase (Ensemble mode)
 ### Key Data Structures / 主要データ構造
 
 ```rust
-/// Ensemble planning mode
-pub enum PlanningMode {
-    Single,    // Solo mode (default)
-    Ensemble,  // Multi-model planning
+/// Consensus level — the single user-facing mode axis
+pub enum ConsensusLevel {
+    Solo,      // Single model driven (default)
+    Ensemble,  // Multi-model driven
+}
+
+/// Planning approach — derived from ConsensusLevel
+pub enum PlanningApproach {
+    Single,    // Derived from Solo
+    Ensemble,  // Derived from Ensemble
 }
 
 /// A plan candidate from ensemble planning
@@ -311,4 +317,4 @@ impl EnsemblePlanResult {
 4. "Harnessing Multiple LLMs: A Survey on LLM Ensemble" (2025)
 5. "Multi-Agent Collaboration Mechanisms: A Survey" (2025)
 
-<!-- LLM Context: Ensemble モードは複数モデルが独立して計画を生成し、投票で最良の計画を選択する。ensemble-after-inference パラダイム。Solo モードとは Planning フェーズだけが異なり、実行フローは同じ。PlanningMode enum で切り替え。主要ファイルは domain/src/agent/entities.rs と application/src/use_cases/run_agent.rs。 -->
+<!-- LLM Context: Ensemble モードは複数モデルが独立して計画を生成し、投票で最良の計画を選択する。ensemble-after-inference パラダイム。Solo モードとは Planning フェーズだけが異なり、実行フローは同じ。ConsensusLevel enum（Solo/Ensemble）で切り替え、PlanningApproach は ConsensusLevel から自動導出。主要ファイルは domain/src/orchestration/mode.rs と application/src/use_cases/run_agent.rs。 -->

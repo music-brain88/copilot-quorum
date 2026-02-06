@@ -513,7 +513,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             state.set_phase(AgentPhase::Planning);
 
             // Branch based on planning mode
-            if input.config.planning_mode.is_ensemble() {
+            if input.config.planning_approach().is_ensemble() {
                 // ==================== Ensemble Planning ====================
                 // Multiple models create plans independently, then vote
                 info!(
