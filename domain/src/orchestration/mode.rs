@@ -53,12 +53,8 @@ impl ConsensusLevel {
     /// Get a human-readable description of this level
     pub fn description(&self) -> &'static str {
         match self {
-            ConsensusLevel::Solo => {
-                "Solo: Single model driven (Plan → Review → Execute)"
-            }
-            ConsensusLevel::Ensemble => {
-                "Ensemble: Multi-model ensemble planning + voting"
-            }
+            ConsensusLevel::Solo => "Solo: Single model driven (Plan → Review → Execute)",
+            ConsensusLevel::Ensemble => "Ensemble: Multi-model ensemble planning + voting",
         }
     }
 

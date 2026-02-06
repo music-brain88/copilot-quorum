@@ -1296,8 +1296,7 @@ mod tests {
         let solo_config = AgentConfig::default();
         assert!(!solo_config.planning_approach().is_ensemble());
 
-        let ensemble_config = AgentConfig::default()
-            .with_consensus_level(ConsensusLevel::Ensemble);
+        let ensemble_config = AgentConfig::default().with_consensus_level(ConsensusLevel::Ensemble);
         assert!(ensemble_config.planning_approach().is_ensemble());
     }
 

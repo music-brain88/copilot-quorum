@@ -344,7 +344,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // Solo mode shortcut
             "/solo" => {
                 self.consensus_level = ConsensusLevel::Solo;
-                self.config = self.config.clone().with_consensus_level(ConsensusLevel::Solo);
+                self.config = self
+                    .config
+                    .clone()
+                    .with_consensus_level(ConsensusLevel::Solo);
                 println!(
                     "Switched to {} - {}",
                     "Solo mode".green().bold(),
@@ -416,10 +419,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 if args.is_empty() {
                     println!("{} Usage: /strategy <strategy>", "Error:".red().bold());
                     println!("Available strategies: quorum, debate");
-                    println!(
-                        "Current strategy: {}",
-                        self.config.orchestration_strategy
-                    );
+                    println!("Current strategy: {}", self.config.orchestration_strategy);
                     return CommandResult::Continue;
                 }
 
@@ -500,10 +500,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         "(single model planning)".dimmed()
                     }
                 );
-                println!(
-                    "  Phase Scope:       {}",
-                    self.config.phase_scope
-                );
+                println!("  Phase Scope:       {}", self.config.phase_scope);
                 println!(
                     "  Strategy:          {}",
                     self.config.orchestration_strategy

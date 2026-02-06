@@ -80,14 +80,8 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        assert_eq!(
-            "full".parse::<PhaseScope>().ok(),
-            Some(PhaseScope::Full)
-        );
-        assert_eq!(
-            "fast".parse::<PhaseScope>().ok(),
-            Some(PhaseScope::Fast)
-        );
+        assert_eq!("full".parse::<PhaseScope>().ok(), Some(PhaseScope::Full));
+        assert_eq!("fast".parse::<PhaseScope>().ok(), Some(PhaseScope::Fast));
         assert_eq!(
             "plan-only".parse::<PhaseScope>().ok(),
             Some(PhaseScope::PlanOnly)

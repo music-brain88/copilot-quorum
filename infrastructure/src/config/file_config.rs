@@ -779,10 +779,7 @@ consensus_level = "solo"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agent.consensus_level, "solo");
-        assert_eq!(
-            config.agent.parse_consensus_level(),
-            ConsensusLevel::Solo
-        );
+        assert_eq!(config.agent.parse_consensus_level(), ConsensusLevel::Solo);
 
         // Test "ensemble"
         let toml_str = r#"
