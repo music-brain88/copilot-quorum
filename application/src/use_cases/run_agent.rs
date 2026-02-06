@@ -513,7 +513,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             state.set_phase(AgentPhase::Planning);
 
             // Branch based on planning mode
-            if input.config.planning_mode.is_ensemble() {
+            if input.config.planning_approach().is_ensemble() {
                 // ==================== Ensemble Planning ====================
                 // Multiple models create plans independently, then vote
                 info!(
@@ -989,7 +989,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     /// - "Multi-Agent Debate" (ICLR 2025): Debate leads to "degeneration of thought"
     /// - "Beyond Majority Voting" (NeurIPS 2024): Advanced aggregation methods
     ///
-    /// See `docs/ENSEMBLE_ARCHITECTURE.md` for detailed design rationale.
+    /// See `docs/features/ensemble-mode.md` for detailed design rationale.
     ///
     /// # Errors
     ///

@@ -52,7 +52,7 @@ impl std::fmt::Display for Phase {
 }
 
 /// Configuration for a Quorum run (Entity)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuorumConfig {
     /// Models to participate in the discussion
     pub models: Vec<Model>,

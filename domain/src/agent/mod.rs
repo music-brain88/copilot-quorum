@@ -5,14 +5,15 @@
 //!
 //! # Overview
 //!
-//! The agent system supports two planning modes:
+//! The agent system supports two consensus levels:
 //!
-//! - **Solo Mode** ([`PlanningMode::Single`]): A single model creates the plan,
-//!   which is then reviewed by multiple models (Quorum Consensus).
+//! - **Solo** ([`ConsensusLevel::Solo`](crate::orchestration::mode::ConsensusLevel::Solo)):
+//!   A single model creates the plan, which is then reviewed by multiple models
+//!   (Quorum Consensus).
 //!
-//! - **Ensemble Mode** ([`PlanningMode::Ensemble`]): Multiple models independently
-//!   create plans in parallel, then vote on each other's plans. The highest-scoring
-//!   plan is selected (see [`EnsemblePlanResult`]).
+//! - **Ensemble** ([`ConsensusLevel::Ensemble`](crate::orchestration::mode::ConsensusLevel::Ensemble)):
+//!   Multiple models independently create plans in parallel, then vote on each
+//!   other's plans. The highest-scoring plan is selected (see [`EnsemblePlanResult`]).
 //!
 //! # Agent Lifecycle
 //!
@@ -44,9 +45,8 @@
 //! # Key Types
 //!
 //! - [`AgentState`]: Tracks the complete state of an agent execution
-//! - [`AgentConfig`]: Configuration including model selection and planning mode
+//! - [`AgentConfig`]: Configuration including consensus level and orchestration
 //! - [`Plan`]: A plan consisting of [`Task`]s to execute
-//! - [`PlanningMode`]: Single (Solo) or Ensemble planning
 //! - [`EnsemblePlanResult`]: Result of ensemble planning with selected plan
 //!
 //! # Examples
@@ -54,19 +54,21 @@
 //! ## Solo Mode (Default)
 //!
 //! ```
-//! use quorum_domain::agent::{AgentConfig, PlanningMode};
+//! use quorum_domain::agent::AgentConfig;
+//! use quorum_domain::ConsensusLevel;
 //!
 //! let config = AgentConfig::default();
-//! assert_eq!(config.planning_mode, PlanningMode::Single);
+//! assert_eq!(config.consensus_level, ConsensusLevel::Solo);
 //! ```
 //!
 //! ## Ensemble Mode
 //!
 //! ```
-//! use quorum_domain::agent::{AgentConfig, PlanningMode};
+//! use quorum_domain::agent::AgentConfig;
+//! use quorum_domain::ConsensusLevel;
 //!
-//! let config = AgentConfig::default().with_ensemble_planning();
-//! assert_eq!(config.planning_mode, PlanningMode::Ensemble);
+//! let config = AgentConfig::default().with_ensemble();
+//! assert_eq!(config.consensus_level, ConsensusLevel::Ensemble);
 //! ```
 
 pub mod entities;
@@ -74,6 +76,6 @@ pub mod value_objects;
 
 pub use entities::{
     AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
-    Plan, PlanCandidate, PlanningMode, ReviewRound, Task, TaskStatus,
+    Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
 };
 pub use value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};

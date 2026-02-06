@@ -12,6 +12,21 @@
 |----------|-------------|
 | [README](../README.md) | プロジェクト概要・クイックスタート |
 | [ARCHITECTURE](./ARCHITECTURE.md) | DDD + オニオンアーキテクチャの詳細 |
+| [Features](./features/README.md) | 機能別ドキュメント |
+
+---
+
+## Features / 機能ドキュメント
+
+機能ごとの詳細ドキュメントは [features/](./features/README.md) にまとまっています：
+
+| Document | Description |
+|----------|-------------|
+| [Quorum Discussion & Consensus](./features/quorum.md) | 複数モデルによる議論と合意形成 |
+| [Agent System](./features/agent-system.md) | 自律タスク実行と Human-in-the-Loop |
+| [Ensemble Mode](./features/ensemble-mode.md) | 研究に基づいたマルチモデル計画生成 |
+| [Tool System](./features/tool-system.md) | プラグインベースのツールアーキテクチャ |
+| [CLI & Configuration](./features/cli-and-configuration.md) | REPL コマンド、設定、コンテキスト管理 |
 
 ---
 
@@ -20,13 +35,15 @@
 ### For Users / ユーザー向け
 
 1. **[README](../README.md)** - インストールと基本的な使い方
-2. **[ARCHITECTURE](./ARCHITECTURE.md)** - 仕組みを理解したい場合
+2. **[CLI & Configuration](./features/cli-and-configuration.md)** - REPL コマンドと設定
+3. **[Features](./features/README.md)** - 各機能の詳細
 
 ### For Contributors / コントリビューター向け
 
 1. **[README](../README.md)** - プロジェクト概要
 2. **[ARCHITECTURE](./ARCHITECTURE.md)** - レイヤー構造とデータフロー
-3. **crate-level docs** - `cargo doc --open` で各crateのAPIドキュメント
+3. **[Features](./features/README.md)** - 機能別の設計と実装ガイド
+4. **crate-level docs** - `cargo doc --open` で各crateのAPIドキュメント
 
 ---
 

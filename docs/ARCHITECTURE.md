@@ -17,11 +17,44 @@ copilot-quorum は **DDD (Domain-Driven Design) + オニオンアーキテクチ
 
 ### Quorum とは
 
-**Quorum** は分散システムにおける合意形成の概念を LLM に応用したものです：
+copilot-quorum は **分散システムの Quorum System** に着想を得たマルチ LLM オーケストレーションツールです。
 
-- **Quorum Discussion**: 複数モデルによる対等な議論（意見収集）
-- **Quorum Consensus**: 投票による合意形成（承認/却下の判定）
-- **Quorum Synthesis**: 複数意見の統合・矛盾解決
+分散データベースでは、複数ノードの過半数（quorum）が合意して初めて操作が確定します。
+copilot-quorum はこの仕組みを LLM に適用し、**複数モデルの合意によって判断の信頼性を高める**
+というアプローチを取っています。
+
+#### 分散システムとの概念マッピング
+
+| 分散システム | copilot-quorum | 対応関係 |
+|------------|----------------|----------|
+| Node (ノード) | Model (LLM) | 処理を担う個々のエンティティ |
+| Replication Factor | `QuorumConfig.models` | 参加するノード（モデル）の数 |
+| Quorum (定足数) | Quorum Consensus | 過半数の合意で操作を確定 |
+| Read/Write 操作 | Plan/Action Review | データ操作 → タスク操作 |
+| Consistency Level | `ConsensusLevel` | 何ノード（モデル）の応答を要求するか |
+
+#### Cassandra アナロジー
+
+分散データベース Cassandra の `ConsistencyLevel` との具体的な対応：
+
+| Cassandra | copilot-quorum | 意味 |
+|-----------|----------------|------|
+| `ConsistencyLevel.ONE` | `ConsensusLevel::Solo` | 1 ノード（モデル）の応答で十分 |
+| `ConsistencyLevel.QUORUM` | `ConsensusLevel::Ensemble` | 過半数のノード（モデル）が合意必要 |
+| Replication Factor | `QuorumConfig.models` | 参加するノード（モデル）の数 |
+| Read/Write | Plan/Action Review | データ操作 → タスク操作 |
+
+Cassandra が `ConsistencyLevel` を変えるだけで一貫性と可用性のトレードオフを制御できるように、
+copilot-quorum も `ConsensusLevel` を `Solo` ↔ `Ensemble` に切り替えるだけで
+速度と信頼性のトレードオフを制御できます。
+
+#### Quorum の 3 つの側面
+
+この概念を LLM の文脈で具体化すると、3 つの機能になります：
+
+- **Quorum Discussion**: 複数モデルによる対等な議論（意見収集）— Read Quorum に相当
+- **Quorum Consensus**: 投票による合意形成（承認/却下の判定）— Write Quorum に相当
+- **Quorum Synthesis**: 複数意見の統合・矛盾解決 — Conflict Resolution に相当
 
 ### Solo / Ensemble モード
 
@@ -45,6 +78,52 @@ copilot-quorum は **DDD (Domain-Driven Design) + オニオンアーキテクチ
 **ML 的アナロジー**:
 - Solo = 単一モデルの予測
 - Ensemble = 複数モデルを組み合わせて精度・信頼性を向上（アンサンブル学習）
+
+### 3 つの直交する設定軸
+
+Solo / Ensemble（`ConsensusLevel`）は、実行を制御する **3 つの独立した軸** のうちの 1 つです。
+これらは直交しており、任意の組み合わせが可能です。
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  3 Orthogonal Axes / 3 つの直交する設定軸                        │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  軸 1: ConsensusLevel ─ 「誰が参加するか」                      │
+│  ┌────────────┐   ┌──────────────┐                              │
+│  │    Solo     │   │   Ensemble   │                              │
+│  │  単一モデル │   │  複数モデル  │                              │
+│  └────────────┘   └──────────────┘                              │
+│                                                                  │
+│  軸 2: PhaseScope ─ 「どこまで実行するか」                      │
+│  ┌────────┐   ┌────────┐   ┌──────────┐                        │
+│  │  Full  │   │  Fast  │   │ PlanOnly │                        │
+│  │ 全工程 │   │ 高速   │   │ 計画のみ │                        │
+│  └────────┘   └────────┘   └──────────┘                        │
+│                                                                  │
+│  軸 3: OrchestrationStrategy ─ 「どう議論するか」               │
+│  ┌─────────────────────┐   ┌─────────────────────┐             │
+│  │  Quorum(QuorumConfig)│   │  Debate(DebateConfig)│             │
+│  │  対等な議論→統合     │   │  対立的議論→合意    │             │
+│  └─────────────────────┘   └─────────────────────┘             │
+│                                                                  │
+│  組み合わせ例:                                                   │
+│   Solo + Full + Quorum  = デフォルト（単一モデル、全工程）       │
+│   Ensemble + Fast + Debate = 複数モデルで高速ディベート          │
+│   Solo + PlanOnly + Quorum = 計画だけ生成して確認                │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**なぜ直交軸か？**
+
+当初は `Standard`, `Fast`, `PlanOnly`, `Ensemble`, `EnsembleFast` の 5 モード（`OrchestrationMode` enum）でしたが、
+モードの組み合わせが増えるたびにバリアントが爆発する問題がありました（例: `EnsemblePlanOnly` を追加するとさらに増える）。
+
+3 つの独立した軸に分解することで：
+- **組み合わせの自由度** — N × M × K 通りの構成を少ないバリアントで表現
+- **拡張容易性** — 新しい PhaseScope や Strategy を追加しても他の軸に影響しない
+- **設定の明確性** — 各軸が「何を制御するか」が一目瞭然
 
 ### Quorum Layers（将来ビジョン）
 
@@ -228,12 +307,12 @@ infrastructure/
 
 新しいオーケストレーション戦略追加:
 domain/src/orchestration/
-├── strategy.rs     # OrchestrationStrategy trait（既存）
+├── strategy.rs     # OrchestrationStrategy enum + StrategyExecutor trait（既存）
+├── mode.rs         # ConsensusLevel enum（既存）
+├── scope.rs        # PhaseScope enum（既存）
 └── strategies/     # 新規ディレクトリ
     ├── mod.rs
-    ├── three_phase.rs  # 既存: Initial → Review → Synthesis
-    ├── fast.rs         # 新規: Initial → Synthesis
-    └── debate.rs       # 新規: モデル同士が議論
+    └── new_strategy.rs  # 新規: impl StrategyExecutor
 
 新しいプレゼンテーション追加（例: HTTP API）:
 presentation/
@@ -250,7 +329,7 @@ presentation/
 | 原則 | 実装 | 効果 |
 |------|------|------|
 | **依存性逆転** | ドメイン層でtrait定義、インフラ層で実装 | 実装を差し替え可能 |
-| **統一インターフェース** | `LlmGateway`, `OrchestrationStrategy` | 新実装が既存コードと自動統合 |
+| **統一インターフェース** | `LlmGateway`, `StrategyExecutor` | 新実装が既存コードと自動統合 |
 | **DIによる疎結合** | `cli/main.rs` で組み立て | 実装の選択を1箇所に集約 |
 | **型によるコンパイル時検証** | ジェネリクス `RunQuorumUseCase<G>` | 不正な組み合わせをコンパイルエラーに |
 
@@ -352,6 +431,24 @@ Quorum（合意形成）に関する型を定義します。
 
 ### Orchestration Module
 
+#### 3つの直交する設定軸
+
+| 軸 | 型 | バリアント | 説明 |
+|----|------|-----------|------|
+| **ConsensusLevel** | Enum | `Solo` (default), `Ensemble` | 参加モデル数を制御（単一 or 複数） |
+| **PhaseScope** | Enum | `Full` (default), `Fast`, `PlanOnly` | 実行フェーズの範囲を制御 |
+| **OrchestrationStrategy** | Enum | `Quorum(QuorumConfig)`, `Debate(DebateConfig)` | 議論の進め方を選択 |
+
+これらは直交しており、任意の組み合わせが可能です（例: `Solo + Fast + Debate`）。
+
+#### 派生型
+
+| Type | Kind | Description |
+|------|------|-------------|
+| `PlanningApproach` | Enum (派生) | `ConsensusLevel` から自動導出（Solo→Single, Ensemble→Ensemble） |
+
+#### Quorum Discussion 型
+
 | Type | Kind | Description |
 |------|------|-------------|
 | `Phase` | Value Object | フェーズ（Initial, Review, Synthesis） |
@@ -361,7 +458,7 @@ Quorum（合意形成）に関する型を定義します。
 | `PeerReview` | Value Object | ピアレビュー結果 |
 | `SynthesisResult` | Value Object | 最終統合結果 |
 | `QuorumResult` | Value Object | 全フェーズの結果 |
-| `OrchestrationStrategy` | Trait | オーケストレーション戦略の抽象化 |
+| `StrategyExecutor` | Trait | オーケストレーション戦略の実行インターフェース |
 
 ### Prompt Module
 
@@ -617,6 +714,8 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 
 ## Agent System / エージェントシステム
 
+> 詳細は [features/agent-system.md](./features/agent-system.md) を参照してください。
+
 エージェントシステムは、Quorumの概念を自律タスク実行に拡張したものです。
 Solo モードで動作し、重要なポイントでは Quorum Consensus によるレビューを行います。
 
@@ -711,6 +810,8 @@ UseCase (Application層)
 ---
 
 ## Tool Provider System / ツールプロバイダーシステム
+
+> 詳細は [features/tool-system.md](./features/tool-system.md) を参照してください。
 
 ツールプロバイダーシステムは、**プラグインベースのオーケストレーション**アーキテクチャを採用しています。
 Quorum はツールの呼び出し・連携に専念し、実際のツール実装は外部プロバイダーに委譲します。
@@ -917,18 +1018,34 @@ impl LlmGateway for OllamaLlmGateway {
 
 ### Adding New Orchestration Strategy / 新しいオーケストレーション戦略の追加
 
-`domain/orchestration/` に新しい戦略を追加：
+新しい戦略の追加は 2 ステップで行います：
+
+**Step 1**: `OrchestrationStrategy` enum にバリアントを追加（`domain/src/orchestration/strategy.rs`）：
 
 ```rust
-// domain/src/orchestration/strategies/debate.rs
-pub struct DebateStrategy { ... }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OrchestrationStrategy {
+    Quorum(QuorumConfig),
+    Debate(DebateConfig),
+    NewStrategy(NewStrategyConfig),  // ← 新規バリアント追加
+}
+```
+
+**Step 2**: `StrategyExecutor` trait を実装する実行者を追加：
+
+```rust
+// domain/src/orchestration/strategies/new_strategy.rs
+pub struct NewStrategyExecutor { ... }
 
 #[async_trait]
-impl OrchestrationStrategy for DebateStrategy {
-    fn name(&self) -> &'static str { "debate" }
+impl StrategyExecutor for NewStrategyExecutor {
+    fn name(&self) -> &'static str { "new-strategy" }
     fn phases(&self) -> Vec<Phase> { /* ... */ }
-    async fn execute(&self, /* ... */) -> Result<QuorumResult, DomainError> {
-        // Models debate with each other
+    async fn execute<G: LlmGateway>(
+        &self, question: &Question, models: &[Model],
+        moderator: &Model, gateway: &G, notifier: &dyn ProgressNotifier,
+    ) -> Result<QuorumResult, DomainError> {
+        // Strategy-specific execution logic
     }
 }
 ```
