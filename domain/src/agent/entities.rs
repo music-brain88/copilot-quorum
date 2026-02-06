@@ -502,7 +502,7 @@ impl Plan {
 /// - "Multi-Agent Collaboration Mechanisms" (2025): Independent generation avoids
 ///   "degeneration of thought" where models converge on potentially wrong answers
 ///
-/// See `docs/ENSEMBLE_ARCHITECTURE.md` for detailed design rationale.
+/// See `docs/features/ensemble-mode.md` for detailed design rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PlanningMode {
     /// Single model generates the plan (Solo mode)

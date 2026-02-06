@@ -254,14 +254,25 @@ pub enum PlanningMode {
 pub struct PlanCandidate {
     pub model: Model,                    // 生成したモデル
     pub plan: Plan,                      // 生成された計画
-    pub votes: HashMap<Model, f64>,      // 他モデルからのスコア
+    pub votes: HashMap<String, f64>,     // 他モデルからのスコア (model name -> 1-10)
+}
+
+impl PlanCandidate {
+    pub fn average_score(&self) -> f64;  // 全投票の平均スコアを計算
+    pub fn vote_count(&self) -> usize;   // 投票数を取得
+    pub fn vote_summary(&self) -> String; // "GPT:8/10, Gemini:7/10" 形式の要約
 }
 
 /// Result of ensemble planning
 pub struct EnsemblePlanResult {
     pub candidates: Vec<PlanCandidate>,  // 全候補計画
-    pub selected: Plan,                   // 選択された計画
-    pub selected_by: Model,              // 選択された計画の生成モデル
+    pub selected_index: usize,           // 選択された計画のインデックス
+}
+
+impl EnsemblePlanResult {
+    pub fn select_best(candidates: Vec<PlanCandidate>) -> Self; // 最高平均スコアの計画を選択
+    pub fn selected(&self) -> Option<&PlanCandidate>;           // 選択された候補への参照
+    pub fn into_selected(self) -> Option<PlanCandidate>;        // 選択された候補を所有権ごと取得
 }
 ```
 

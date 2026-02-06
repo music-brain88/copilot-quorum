@@ -187,7 +187,7 @@ Review History:
 Commands:
   /approve  - Execute this plan as-is
   /reject   - Abort the agent
-  /edit     - Edit plan manually (coming soon)
+  /edit     - Edit plan manually (未実装)
 
 agent-hil>
 ```
@@ -200,12 +200,20 @@ agent-hil>
 
 ```rust
 pub struct AgentConfig {
-    pub primary_model: Model,          // エージェント実行の主モデル
-    pub quorum_models: Vec<Model>,     // 合議投票に使用するモデル群
+    // ---- Role-based Model Configuration ----
+    pub exploration_model: Model,      // コンテキスト収集用（デフォルト: Haiku）
+    pub decision_model: Model,         // 計画作成・高リスクツール判断用（デフォルト: Sonnet）
+    pub review_models: Vec<Model>,     // Quorum レビュー投票用
+
+    // ---- Planning Configuration ----
+    pub planning_mode: PlanningMode,   // Single (Solo) or Ensemble
+
+    // ---- Behavior Configuration ----
     pub require_plan_review: bool,     // 常に true（計画レビューは必須）
     pub require_final_review: bool,    // 最終レビューを有効化
     pub max_iterations: usize,         // 最大実行イテレーション数
     pub working_dir: Option<String>,   // ツール実行の作業ディレクトリ
+    pub max_tool_retries: usize,       // ツールバリデーションエラー時の最大リトライ数
     pub max_plan_revisions: usize,     // 人間介入までの最大計画修正回数
     pub hil_mode: HilMode,            // 人間介入モード
 }
@@ -277,7 +285,13 @@ RunAgentUseCase (Application層)
 
 ### Progress Notification / 進捗通知
 
-エージェントは「アクションと UI 通知の分離」パターンを採用しています：
+エージェントは「アクションと UI 通知の分離」パターンを採用しています。
+
+> **Note**: 進捗通知には 2 つの trait があります：
+> - `ProgressNotifier`（`domain/src/orchestration/strategy.rs`）— Quorum Discussion のフェーズ進行通知（ドメイン層）
+> - `AgentProgressNotifier`（`application/src/use_cases/run_agent.rs`）— エージェント実行全体の進捗通知（アプリケーション層）
+>
+> 両者は別の trait であり、`ProgressNotifier` は Quorum Discussion の各フェーズ（Initial Query → Peer Review → Synthesis）を、`AgentProgressNotifier` はエージェントの各フェーズ（Planning → Execution → Review 等）を通知します。
 
 | Layer | Responsibility |
 |-------|---------------|
@@ -296,8 +310,39 @@ pub trait AgentProgressNotifier: Send + Sync {
     fn on_quorum_start(&self, phase: &str, model_count: usize);
     fn on_quorum_model_complete(&self, model: &Model, approved: bool);
     fn on_quorum_complete(&self, phase: &str, approved: bool, feedback: Option<&str>);
+    // ... tool error/retry, plan revision, action retry,
+    //     quorum_complete_with_votes, human_intervention_required,
+    //     ensemble start/plan_generated/voting_start/complete
+    //     (全 18 メソッド — 詳細は application/src/use_cases/run_agent.rs 参照)
 }
 ```
+
+### ReviewRound & ModelVote
+
+`HumanInterventionPort::request_intervention` の `review_history` 引数や、HiL UI の `Review History` 表示に使われるデータ構造です。
+
+```rust
+/// A single model's vote in a quorum review
+pub struct ModelVote {
+    pub model: String,       // モデル識別子
+    pub approved: bool,      // 承認/拒否
+    pub reasoning: String,   // 理由・フィードバック
+}
+
+/// A record of a single review round in quorum voting
+pub struct ReviewRound {
+    pub round: usize,            // ラウンド番号（1-indexed）
+    pub approved: bool,          // このラウンドの結果
+    pub votes: Vec<ModelVote>,   // 個別投票
+    pub timestamp: u64,          // タイムスタンプ
+}
+
+impl ReviewRound {
+    pub fn vote_summary(&self) -> String; // "[●●○]" 形式の視覚的サマリー
+}
+```
+
+定義ファイル: `domain/src/agent/entities.rs`
 
 ### HumanInterventionPort
 

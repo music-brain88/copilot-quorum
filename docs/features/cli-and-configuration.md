@@ -68,6 +68,23 @@ REPL（対話モード）で使用できるスラッシュコマンド一覧:
 | `/verbose` | | Verbose モードの状態を表示 |
 | `/quit` | `/exit`, `/q` | 終了 |
 
+### Orchestration Modes / オーケストレーションモード
+
+REPL では 5 つのモードが利用可能です。`/mode <mode>` または各モードのエイリアスコマンドで切り替えられます。
+
+| Mode | Aliases | Category | Description |
+|------|---------|----------|-------------|
+| **Solo** (default) | `/solo`, `/mode solo`, `/mode agent` | Solo 系 | 単一モデルによる自律タスク実行（Plan → Review → Execute） |
+| **Ensemble** | `/ens`, `/mode ensemble`, `/mode quorum` | Ensemble 系 | マルチモデル Quorum Discussion（複数モデルで計画生成 + 投票） |
+| **Fast** | `/mode fast` | Solo 系 | 単一モデル即時応答、レビューなし（高速） |
+| **Debate** | `/mode debate` | Ensemble 系 | モデル間の討論形式による議論 |
+| **Plan** | `/mode plan` | — | 計画作成のみ、実行は行わない |
+
+- **Solo 系** (`is_solo() == true`): 主に単一モデルが処理を駆動する
+- **Ensemble 系** (`is_ensemble() == true`): 複数モデルが協調して処理する
+
+定義ファイル: `domain/src/orchestration/mode.rs`（`OrchestrationMode` enum）
+
 ### Prompt Display / プロンプト表示
 
 REPL のプロンプトは現在のモードに応じて色が変わります:

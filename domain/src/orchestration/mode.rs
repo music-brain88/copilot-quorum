@@ -1,3 +1,10 @@
+//! Orchestration mode definitions for the Quorum system.
+//!
+//! Defines [`OrchestrationMode`] which determines how queries are processed:
+//! Solo modes (Agent, Fast) use a single primary model, while Ensemble modes
+//! (Quorum, Debate) use multiple models for collaborative decision-making.
+//! The Plan mode creates plans without execution.
+
 use std::fmt;
 
 /// Orchestration mode for the Quorum system

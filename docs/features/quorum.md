@@ -231,6 +231,36 @@ RunQuorumUseCase
 
 非同期処理は `tokio` ランタイム上で `JoinSet` を使って並列化されています。
 
+### OrchestrationStrategy
+
+Quorum Discussion の実行フローはプラグイン可能な戦略パターンで実装されています。
+`OrchestrationStrategy` trait を実装することで、新しい議論戦略を追加できます。
+
+```rust
+/// Trait for orchestration strategies (domain/src/orchestration/strategy.rs)
+#[async_trait]
+pub trait OrchestrationStrategy: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn phases(&self) -> Vec<Phase>;
+    async fn execute<G: LlmGateway>(
+        &self,
+        question: &Question,
+        models: &[Model],
+        moderator: &Model,
+        gateway: &G,
+        notifier: &dyn ProgressNotifier,
+    ) -> Result<QuorumResult, DomainError>;
+}
+```
+
+| Strategy | Phases | Description |
+|----------|--------|-------------|
+| `ThreePhaseStrategy` | Initial → Review → Synthesis | 標準の 3 フェーズ議論（デフォルト） |
+| `FastStrategy` | Initial → Synthesis | レビューをスキップした高速モード |
+| `DebateStrategy` | モデル間の議論 | インターモデル討論 |
+
+定義ファイル: `domain/src/orchestration/strategy.rs`
+
 ---
 
 ## Related Features / 関連機能
