@@ -17,6 +17,7 @@ pub use progress::reporter::{ProgressReporter, SimpleProgress};
 
 // Agent-related exports
 pub use agent::human_intervention::InteractiveHumanIntervention;
+pub use agent::presenter::ReplPresenter;
 pub use agent::progress::{AgentProgressReporter, SimpleAgentProgress};
 pub use agent::repl::AgentRepl;
 pub use agent::thought::{ThoughtStream, format_thoughts, summarize_thoughts};

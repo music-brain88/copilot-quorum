@@ -7,6 +7,7 @@
 //! - Human intervention UI for plan revision limits
 
 pub mod human_intervention;
+pub mod presenter;
 pub mod progress;
 pub mod repl;
 pub mod thought;

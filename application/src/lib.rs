@@ -28,3 +28,12 @@ pub use use_cases::run_agent::{
     RunAgentOutput, RunAgentUseCase,
 };
 pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
+
+// UI event types (output port for presentation layer)
+pub use ports::ui_event::{
+    AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
+    UiEvent, WelcomeInfo,
+};
+
+// Agent controller
+pub use use_cases::agent_controller::{AgentController, CommandAction};
