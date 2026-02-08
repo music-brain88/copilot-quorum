@@ -5,6 +5,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use quorum_application::{AgentProgressNotifier, ErrorCategory};
 use quorum_domain::core::string::truncate;
 use quorum_domain::{AgentPhase, Model, Task, Thought};
+use std::io::Write;
 use std::sync::Mutex;
 
 /// Reports progress during Agent execution with fancy UI
@@ -186,15 +187,13 @@ impl AgentProgressNotifier for AgentProgressReporter {
     }
 
     fn on_tool_call(&self, tool_name: &str, args: &str) {
-        if self.verbose {
-            let args_display = truncate(args, 50);
-            println!(
-                "      {} {} {}",
-                "🔧".dimmed(),
-                tool_name.cyan(),
-                args_display.dimmed()
-            );
-        }
+        let args_display = truncate(args, 50);
+        println!(
+            "      {} {} {}",
+            "🔧".dimmed(),
+            tool_name.cyan(),
+            args_display.dimmed()
+        );
 
         // Update phase bar
         if let Some(pb) = self.phase_bar.lock().unwrap().as_ref() {
@@ -203,22 +202,20 @@ impl AgentProgressNotifier for AgentProgressReporter {
     }
 
     fn on_tool_result(&self, tool_name: &str, success: bool) {
-        if self.verbose {
-            if success {
-                println!(
-                    "      {} {} {}",
-                    "✓".green(),
-                    tool_name.green(),
-                    "OK".dimmed()
-                );
-            } else {
-                println!(
-                    "      {} {} {}",
-                    "✗".red(),
-                    tool_name.red(),
-                    "FAILED".dimmed()
-                );
-            }
+        if success {
+            println!(
+                "      {} {} {}",
+                "✓".green(),
+                tool_name.green(),
+                "OK".dimmed()
+            );
+        } else {
+            println!(
+                "      {} {} {}",
+                "✗".red(),
+                tool_name.red(),
+                "FAILED".dimmed()
+            );
         }
     }
 
@@ -446,6 +443,31 @@ impl AgentProgressNotifier for AgentProgressReporter {
             ));
         }
     }
+
+    // ==================== LLM Streaming Callbacks ====================
+
+    fn on_llm_chunk(&self, chunk: &str) {
+        // Suspend spinner so streaming text isn't interleaved
+        if let Some(pb) = self.phase_bar.lock().unwrap().as_ref() {
+            pb.suspend(|| {
+                print!("{}", chunk);
+                let _ = std::io::stdout().flush();
+            });
+        } else {
+            print!("{}", chunk);
+            let _ = std::io::stdout().flush();
+        }
+    }
+
+    fn on_llm_stream_start(&self, purpose: &str) {
+        if self.verbose && !purpose.is_empty() {
+            println!("  {} Streaming: {}", "📡".dimmed(), purpose.dimmed());
+        }
+    }
+
+    fn on_llm_stream_end(&self) {
+        println!(); // newline after streaming output
+    }
 }
 
 /// Simple text-based progress (no spinners)
@@ -621,5 +643,22 @@ impl AgentProgressNotifier for SimpleAgentProgress {
 
     fn on_ensemble_complete(&self, selected_model: &quorum_domain::Model, score: f64) {
         println!("  ✓ Selected: {} (score: {:.1}/10)", selected_model, score);
+    }
+
+    // ==================== LLM Streaming Callbacks ====================
+
+    fn on_llm_chunk(&self, chunk: &str) {
+        print!("{}", chunk);
+        let _ = std::io::stdout().flush();
+    }
+
+    fn on_llm_stream_start(&self, purpose: &str) {
+        if self.verbose && !purpose.is_empty() {
+            println!("  📡 Streaming: {}", purpose);
+        }
+    }
+
+    fn on_llm_stream_end(&self) {
+        println!();
     }
 }
