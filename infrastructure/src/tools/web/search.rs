@@ -93,30 +93,30 @@ fn format_search_results(query: &str, data: &serde_json::Value) -> String {
     sections.push(format!("## Search Results for: {}", query));
 
     // Abstract (main answer)
-    if let Some(abstract_text) = data["AbstractText"].as_str() {
-        if !abstract_text.is_empty() {
-            let source = data["AbstractSource"].as_str().unwrap_or("Unknown");
-            let url = data["AbstractURL"].as_str().unwrap_or("");
-            sections.push(format!(
-                "### Summary ({})\n{}\nSource: {}",
-                source, abstract_text, url
-            ));
-        }
+    if let Some(abstract_text) = data["AbstractText"].as_str()
+        && !abstract_text.is_empty()
+    {
+        let source = data["AbstractSource"].as_str().unwrap_or("Unknown");
+        let url = data["AbstractURL"].as_str().unwrap_or("");
+        sections.push(format!(
+            "### Summary ({})\n{}\nSource: {}",
+            source, abstract_text, url
+        ));
     }
 
     // Answer (instant answer)
-    if let Some(answer) = data["Answer"].as_str() {
-        if !answer.is_empty() {
-            sections.push(format!("### Instant Answer\n{}", answer));
-        }
+    if let Some(answer) = data["Answer"].as_str()
+        && !answer.is_empty()
+    {
+        sections.push(format!("### Instant Answer\n{}", answer));
     }
 
     // Definition
-    if let Some(definition) = data["Definition"].as_str() {
-        if !definition.is_empty() {
-            let source = data["DefinitionSource"].as_str().unwrap_or("Unknown");
-            sections.push(format!("### Definition ({})\n{}", source, definition));
-        }
+    if let Some(definition) = data["Definition"].as_str()
+        && !definition.is_empty()
+    {
+        let source = data["DefinitionSource"].as_str().unwrap_or("Unknown");
+        sections.push(format!("### Definition ({})\n{}", source, definition));
     }
 
     // Related Topics
@@ -145,10 +145,10 @@ fn format_search_results(query: &str, data: &serde_json::Value) -> String {
     }
 
     // Redirect (for !bang queries or similar)
-    if let Some(redirect) = data["Redirect"].as_str() {
-        if !redirect.is_empty() {
-            sections.push(format!("### Redirect\n{}", redirect));
-        }
+    if let Some(redirect) = data["Redirect"].as_str()
+        && !redirect.is_empty()
+    {
+        sections.push(format!("### Redirect\n{}", redirect));
     }
 
     if sections.len() == 1 {
