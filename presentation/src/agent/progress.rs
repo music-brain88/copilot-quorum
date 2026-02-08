@@ -244,6 +244,28 @@ impl AgentProgressNotifier for AgentProgressReporter {
         );
     }
 
+    fn on_tool_not_found(&self, tool_name: &str, available_tools: &[&str]) {
+        println!(
+            "      ⚠️ Tool {} {} [available: {}]",
+            tool_name.red(),
+            "not found, resolving...".yellow(),
+            available_tools.join(", ").dimmed()
+        );
+    }
+
+    fn on_tool_resolved(&self, original_name: &str, resolved_name: &str) {
+        println!(
+            "      {} {} {} {}",
+            "✓".green(),
+            original_name.dimmed().strikethrough(),
+            "→".green(),
+            resolved_name.cyan()
+        );
+        if let Some(pb) = self.phase_bar.lock().unwrap().as_ref() {
+            pb.set_message(format!("Running: {}", resolved_name));
+        }
+    }
+
     fn on_quorum_start(&self, phase: &str, model_count: usize) {
         let pb = self.multi.add(ProgressBar::new(model_count as u64));
         pb.set_style(Self::quorum_style());
@@ -542,6 +564,18 @@ impl AgentProgressNotifier for SimpleAgentProgress {
             max_retries,
             truncate(error, 40)
         );
+    }
+
+    fn on_tool_not_found(&self, tool_name: &str, available_tools: &[&str]) {
+        println!(
+            "    ⚠️ Tool {} not found [available: {}]",
+            tool_name,
+            available_tools.join(", ")
+        );
+    }
+
+    fn on_tool_resolved(&self, original_name: &str, resolved_name: &str) {
+        println!("    ✓ {} → {}", original_name, resolved_name);
     }
 
     fn on_quorum_start(&self, phase: &str, model_count: usize) {

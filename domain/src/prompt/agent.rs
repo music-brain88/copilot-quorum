@@ -458,9 +458,60 @@ Provide the corrected tool call:
   }},
   "reasoning": "Explanation of what was fixed"
 }}
-```"#,
+```
+
+IMPORTANT: Respond with ONLY the ```tool code block. Do NOT include any text outside the block."#,
             tool_name = tool_name,
             error_message = error_message,
+            args_json = args_json
+        )
+    }
+
+    /// Prompt for retrying when an unknown tool was called
+    ///
+    /// Unlike `tool_retry`, this provides the list of available tools
+    /// so the LLM can choose a valid tool instead of retrying the same one.
+    pub fn tool_not_found_retry(
+        tool_name: &str,
+        available_tools: &[&str],
+        previous_args: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> String {
+        let tools_list = available_tools
+            .iter()
+            .map(|t| format!("- `{}`", t))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let args_json = serde_json::to_string_pretty(previous_args).unwrap_or_default();
+
+        format!(
+            r#"## ERROR: Unknown Tool `{tool_name}`
+
+The tool `{tool_name}` does not exist and cannot be used.
+
+**Available tools:**
+{tools_list}
+
+**Your original arguments were:**
+```json
+{args_json}
+```
+
+## CRITICAL FORMAT REQUIREMENT
+
+You MUST respond with ONLY a ```tool code block.
+- Do NOT include ANY text before or after the code block.
+- Do NOT explain or apologize.
+- Start your response IMMEDIATELY with ```tool
+
+```tool
+{{
+  "tool": "<choose from available list>",
+  "args": {{ ... }},
+  "reasoning": "brief explanation"
+}}
+```"#,
+            tool_name = tool_name,
+            tools_list = tools_list,
             args_json = args_json
         )
     }
@@ -783,5 +834,51 @@ mod tests {
         assert!(prompt.contains("README.md"));
         assert!(prompt.contains("Tool Execution Failed"));
         assert!(prompt.contains("validation error"));
+    }
+
+    #[test]
+    fn test_tool_not_found_retry_prompt() {
+        let mut args = std::collections::HashMap::new();
+        args.insert("command".to_string(), serde_json::json!("cargo test"));
+
+        let available = vec![
+            "read_file",
+            "write_file",
+            "run_command",
+            "glob_search",
+            "grep_search",
+        ];
+        let prompt = AgentPromptTemplate::tool_not_found_retry("bash", &available, &args);
+
+        // Should mention the unknown tool
+        assert!(prompt.contains("bash"));
+        assert!(prompt.contains("Unknown Tool"));
+        // Should list available tools
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("run_command"));
+        assert!(prompt.contains("glob_search"));
+        // Should include previous args for context
+        assert!(prompt.contains("cargo test"));
+        // Should strongly instruct tool call format
+        assert!(prompt.contains("CRITICAL FORMAT REQUIREMENT"));
+        assert!(prompt.contains("Do NOT include ANY text"));
+        // Should NOT contain the unknown tool name in the example
+        assert!(!prompt.contains("\"tool\": \"bash\""));
+    }
+
+    #[test]
+    fn test_tool_not_found_retry_critical_format() {
+        let args = std::collections::HashMap::new();
+        let prompt = AgentPromptTemplate::tool_not_found_retry("bash", &["run_command"], &args);
+        assert!(prompt.contains("CRITICAL FORMAT REQUIREMENT"));
+        assert!(prompt.contains("Do NOT include ANY text"));
+    }
+
+    #[test]
+    fn test_tool_retry_format_instruction() {
+        let args = std::collections::HashMap::new();
+        let prompt = AgentPromptTemplate::tool_retry("read_file", "error", &args);
+        assert!(prompt.contains("ONLY"));
+        assert!(prompt.contains("tool code block"));
     }
 }
