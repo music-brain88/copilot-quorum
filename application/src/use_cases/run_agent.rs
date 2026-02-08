@@ -1442,8 +1442,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             };
 
             // Check if this is a high-risk tool that needs review (using resolved name)
-            let needs_review =
-                task.requires_review || self.is_high_risk_tool(&tool_call.tool_name);
+            let needs_review = task.requires_review || self.is_high_risk_tool(&tool_call.tool_name);
 
             if needs_review && !input.config.review_models.is_empty() {
                 let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
@@ -2432,9 +2431,10 @@ fn parse_tool_calls(response: &str) -> Vec<ToolCall> {
         } else if in_block && trimmed == "```" {
             in_block = false;
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&current_block)
-                && let Some(call) = parse_json_value(&parsed) {
-                    calls.push(call);
-                }
+                && let Some(call) = parse_json_value(&parsed)
+            {
+                calls.push(call);
+            }
         } else if in_block {
             current_block.push_str(line);
             current_block.push('\n');
@@ -2453,13 +2453,15 @@ fn parse_tool_calls(response: &str) -> Vec<ToolCall> {
             // If that fails, try to find the first '{' and last '}' to extract JSON
             if let Some(start) = response.find('{')
                 && let Some(end) = response.rfind('}')
-                    && end > start {
-                        let potential_json = &response[start..=end];
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(potential_json)
-                            && let Some(call) = parse_json_value(&parsed) {
-                                calls.push(call);
-                            }
-                    }
+                && end > start
+            {
+                let potential_json = &response[start..=end];
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(potential_json)
+                    && let Some(call) = parse_json_value(&parsed)
+                {
+                    calls.push(call);
+                }
+            }
         }
     }
 
@@ -2760,7 +2762,10 @@ Second tool:
 ```
 "#;
         let calls = parse_tool_calls(response);
-        assert!(calls.is_empty(), "Empty code block should result in empty parse");
+        assert!(
+            calls.is_empty(),
+            "Empty code block should result in empty parse"
+        );
     }
 
     #[test]
