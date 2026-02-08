@@ -1682,10 +1682,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // Use a specialized prompt for unknown tools that includes available tool list
             let retry_prompt = if error_code == "NOT_FOUND" {
                 let available = self.tool_executor.available_tools();
-                AgentPromptTemplate::tool_not_found_retry(
-                    &current_call.tool_name,
-                    &available,
-                )
+                AgentPromptTemplate::tool_not_found_retry(&current_call.tool_name, &available)
             } else {
                 AgentPromptTemplate::tool_retry(
                     &current_call.tool_name,

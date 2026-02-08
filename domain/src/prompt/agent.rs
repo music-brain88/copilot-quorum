@@ -469,10 +469,7 @@ Provide the corrected tool call:
     ///
     /// Unlike `tool_retry`, this provides the list of available tools
     /// so the LLM can choose a valid tool instead of retrying the same one.
-    pub fn tool_not_found_retry(
-        tool_name: &str,
-        available_tools: &[&str],
-    ) -> String {
+    pub fn tool_not_found_retry(tool_name: &str, available_tools: &[&str]) -> String {
         let tools_list = available_tools
             .iter()
             .map(|t| format!("- `{}`", t))
