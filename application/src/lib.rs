@@ -15,7 +15,7 @@ pub use ports::{
         AutoApproveIntervention, AutoRejectIntervention, HumanInterventionError,
         HumanInterventionPort,
     },
-    llm_gateway::LlmGateway,
+    llm_gateway::{LlmGateway, StreamHandle},
     progress::ProgressNotifier,
     tool_executor::ToolExecutorPort,
 };

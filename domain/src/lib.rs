@@ -46,7 +46,7 @@ pub use orchestration::{
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
 pub use prompt::{AgentPromptTemplate, PromptTemplate};
-pub use session::{entities::Message, repository::LlmSessionRepository};
+pub use session::{entities::Message, repository::LlmSessionRepository, stream::StreamEvent};
 pub use tool::{
     entities::{RiskLevel, ToolCall, ToolDefinition, ToolParameter, ToolSpec},
     traits::{DefaultToolValidator, ToolValidator},
