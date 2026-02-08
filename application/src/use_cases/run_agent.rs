@@ -16,7 +16,7 @@ use quorum_domain::core::string::truncate;
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
     HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
-    Task, TaskId, Thought, ToolCall,
+    StreamEvent, Task, TaskId, Thought, ToolCall,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -208,6 +208,17 @@ pub trait AgentProgressNotifier: Send + Sync {
 
     /// Called when retrying a tool call after an error
     fn on_tool_retry(&self, _tool_name: &str, _attempt: usize, _max_retries: usize, _error: &str) {}
+
+    // ==================== LLM Streaming Callbacks ====================
+
+    /// Called for each text chunk received during LLM streaming.
+    fn on_llm_chunk(&self, _chunk: &str) {}
+
+    /// Called when LLM streaming begins.
+    fn on_llm_stream_start(&self, _purpose: &str) {}
+
+    /// Called when LLM streaming ends.
+    fn on_llm_stream_end(&self) {}
 
     // ==================== Plan Revision Callbacks ====================
 
@@ -417,28 +428,60 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         Ok(())
     }
 
-    /// Send a prompt to LLM with cancellation support
+    /// Send a prompt to LLM with cancellation support and streaming.
+    ///
+    /// Uses `send_streaming()` to receive incremental chunks, forwarding each
+    /// to `progress.on_llm_chunk()` for real-time display.
     async fn send_with_cancellation(
         &self,
         session: &dyn LlmSession,
         prompt: &str,
+        progress: &dyn AgentProgressNotifier,
     ) -> Result<String, RunAgentError> {
-        if let Some(ref token) = self.cancellation_token {
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => {
-                    Err(RunAgentError::Cancelled)
+        let stream_handle = session
+            .send_streaming(prompt)
+            .await
+            .map_err(RunAgentError::GatewayError)?;
+        let mut receiver = stream_handle.receiver;
+        let mut full_text = String::new();
+
+        progress.on_llm_stream_start("");
+
+        loop {
+            let event = if let Some(ref token) = self.cancellation_token {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        progress.on_llm_stream_end();
+                        return Err(RunAgentError::Cancelled);
+                    }
+                    event = receiver.recv() => event,
                 }
-                result = session.send(prompt) => {
-                    result.map_err(RunAgentError::GatewayError)
+            } else {
+                receiver.recv().await
+            };
+
+            match event {
+                Some(StreamEvent::Delta(chunk)) => {
+                    progress.on_llm_chunk(&chunk);
+                    full_text.push_str(&chunk);
                 }
+                Some(StreamEvent::Completed(text)) => {
+                    if full_text.is_empty() {
+                        full_text = text;
+                    }
+                    break;
+                }
+                Some(StreamEvent::Error(e)) => {
+                    progress.on_llm_stream_end();
+                    return Err(RunAgentError::GatewayError(GatewayError::RequestFailed(e)));
+                }
+                None => break, // channel closed
             }
-        } else {
-            session
-                .send(prompt)
-                .await
-                .map_err(RunAgentError::GatewayError)
         }
+
+        progress.on_llm_stream_end();
+        Ok(full_text)
     }
 
     /// Execute the agent without progress reporting
@@ -895,7 +938,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Ask the model to gather context using tools
         let prompt = AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
 
-        let response = match self.send_with_cancellation(session, &prompt).await {
+        let response = match self.send_with_cancellation(session, &prompt, progress).await {
             Ok(response) => response,
             Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
             Err(e) => return Err(RunAgentError::ContextGatheringFailed(e.to_string())),
@@ -949,12 +992,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         request: &str,
         context: &AgentContext,
         previous_feedback: Option<&str>,
-        _progress: &dyn AgentProgressNotifier,
+        progress: &dyn AgentProgressNotifier,
     ) -> Result<Plan, RunAgentError> {
         let prompt =
             AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
 
-        let response = match self.send_with_cancellation(session, &prompt).await {
+        let response = match self.send_with_cancellation(session, &prompt, progress).await {
             Ok(response) => response,
             Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
             Err(e) => return Err(RunAgentError::PlanningFailed(e.to_string())),
@@ -1431,7 +1474,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Otherwise, ask the model to execute the task
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
 
-        let response = match self.send_with_cancellation(session, &prompt).await {
+        let response = match self.send_with_cancellation(session, &prompt, progress).await {
             Ok(response) => response,
             Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
             Err(e) => return Err(RunAgentError::TaskExecutionFailed(e.to_string())),
@@ -1633,7 +1676,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 &current_call.arguments,
             );
 
-            let response = match self.send_with_cancellation(session, &retry_prompt).await {
+            let response = match self.send_with_cancellation(session, &retry_prompt, progress).await {
                 Ok(response) => response,
                 Err(RunAgentError::Cancelled) => {
                     // Return the previous result if cancelled

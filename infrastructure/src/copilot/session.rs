@@ -7,9 +7,10 @@ use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{CreateSessionParams, JsonRpcRequest, SendParams};
 use crate::copilot::transport::StdioTransport;
 use async_trait::async_trait;
-use quorum_application::ports::llm_gateway::{GatewayError, LlmSession};
-use quorum_domain::Model;
+use quorum_application::ports::llm_gateway::{GatewayError, LlmSession, StreamHandle};
+use quorum_domain::{Model, StreamEvent};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -74,17 +75,33 @@ impl CopilotSession {
     where
         F: FnMut(&str),
     {
-        debug!("Sending to session {}: {}", self.session_id, content);
+        Self::ask_streaming_inner(&self.transport, &self.session_id, content, on_chunk).await
+    }
+
+    /// Static inner implementation that doesn't borrow `self`.
+    ///
+    /// This allows spawning streaming work in a `tokio::spawn` task
+    /// where `&self` cannot be sent across threads.
+    async fn ask_streaming_inner<F>(
+        transport: &StdioTransport,
+        session_id: &str,
+        content: &str,
+        on_chunk: F,
+    ) -> Result<String>
+    where
+        F: FnMut(&str),
+    {
+        debug!("Sending to session {}: {}", session_id, content);
 
         let params = SendParams {
-            session_id: self.session_id.clone(),
+            session_id: session_id.to_string(),
             prompt: content.to_string(),
         };
 
         let request = JsonRpcRequest::new("session.send", Some(serde_json::to_value(&params)?));
 
         // Send the request
-        let response = self.transport.request(&request).await?;
+        let response = transport.request(&request).await?;
 
         if let Some(error) = response.error {
             return Err(CopilotError::RpcError {
@@ -96,7 +113,7 @@ impl CopilotSession {
         debug!("session.send response: {:?}", response.result);
 
         // Read streaming notifications until session.idle
-        let content = self.transport.read_streaming(on_chunk).await?;
+        let content = transport.read_streaming(on_chunk).await?;
 
         Ok(content)
     }
@@ -167,5 +184,39 @@ impl LlmSession for CopilotSession {
         self.ask(content)
             .await
             .map_err(|e| GatewayError::RequestFailed(e.to_string()))
+    }
+
+    async fn send_streaming(
+        &self,
+        content: &str,
+    ) -> std::result::Result<StreamHandle, GatewayError> {
+        let (tx, rx) = mpsc::channel::<StreamEvent>(32);
+        let transport = self.transport.clone();
+        let session_id = self.session_id.clone();
+        let content = content.to_string();
+
+        tokio::spawn(async move {
+            let tx_for_cb = tx.clone();
+            let result = Self::ask_streaming_inner(
+                &transport,
+                &session_id,
+                &content,
+                move |chunk| {
+                    let _ = tx_for_cb.try_send(StreamEvent::Delta(chunk.to_string()));
+                },
+            )
+            .await;
+
+            match result {
+                Ok(full) => {
+                    let _ = tx.send(StreamEvent::Completed(full)).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                }
+            }
+        });
+
+        Ok(StreamHandle::new(rx))
     }
 }
