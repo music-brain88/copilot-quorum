@@ -938,7 +938,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Ask the model to gather context using tools
         let prompt = AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
 
-        let response = match self.send_with_cancellation(session, &prompt, progress).await {
+        let response = match self
+            .send_with_cancellation(session, &prompt, progress)
+            .await
+        {
             Ok(response) => response,
             Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
             Err(e) => return Err(RunAgentError::ContextGatheringFailed(e.to_string())),
@@ -997,7 +1000,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let prompt =
             AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
 
-        let response = match self.send_with_cancellation(session, &prompt, progress).await {
+        let response = match self
+            .send_with_cancellation(session, &prompt, progress)
+            .await
+        {
             Ok(response) => response,
             Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
             Err(e) => return Err(RunAgentError::PlanningFailed(e.to_string())),
@@ -1474,7 +1480,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Otherwise, ask the model to execute the task
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
 
-        let response = match self.send_with_cancellation(session, &prompt, progress).await {
+        let response = match self
+            .send_with_cancellation(session, &prompt, progress)
+            .await
+        {
             Ok(response) => response,
             Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
             Err(e) => return Err(RunAgentError::TaskExecutionFailed(e.to_string())),
@@ -1676,7 +1685,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 &current_call.arguments,
             );
 
-            let response = match self.send_with_cancellation(session, &retry_prompt, progress).await {
+            let response = match self
+                .send_with_cancellation(session, &retry_prompt, progress)
+                .await
+            {
                 Ok(response) => response,
                 Err(RunAgentError::Cancelled) => {
                     // Return the previous result if cancelled

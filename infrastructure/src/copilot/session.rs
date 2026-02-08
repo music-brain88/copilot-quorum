@@ -197,15 +197,11 @@ impl LlmSession for CopilotSession {
 
         tokio::spawn(async move {
             let tx_for_cb = tx.clone();
-            let result = Self::ask_streaming_inner(
-                &transport,
-                &session_id,
-                &content,
-                move |chunk| {
+            let result =
+                Self::ask_streaming_inner(&transport, &session_id, &content, move |chunk| {
                     let _ = tx_for_cb.try_send(StreamEvent::Delta(chunk.to_string()));
-                },
-            )
-            .await;
+                })
+                .await;
 
             match result {
                 Ok(full) => {
