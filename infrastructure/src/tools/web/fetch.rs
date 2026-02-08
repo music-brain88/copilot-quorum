@@ -22,9 +22,7 @@ pub fn web_fetch_definition() -> ToolDefinition {
         "Fetch a web page and extract its text content. Returns the readable text from the page.",
         RiskLevel::Low,
     )
-    .with_parameter(
-        ToolParameter::new("url", "The URL to fetch", true).with_type("string"),
-    )
+    .with_parameter(ToolParameter::new("url", "The URL to fetch", true).with_type("string"))
     .with_parameter(
         ToolParameter::new(
             "max_length",
@@ -36,10 +34,7 @@ pub fn web_fetch_definition() -> ToolDefinition {
 }
 
 /// Execute the web_fetch tool
-pub async fn execute_web_fetch(
-    client: &reqwest::Client,
-    call: &ToolCall,
-) -> ToolResult {
+pub async fn execute_web_fetch(client: &reqwest::Client, call: &ToolCall) -> ToolResult {
     let start = Instant::now();
 
     let url = match call.require_string("url") {
@@ -107,10 +102,7 @@ pub async fn execute_web_fetch(
             if b.len() > MAX_BODY_SIZE {
                 return ToolResult::failure(
                     WEB_FETCH,
-                    ToolError::execution_failed(format!(
-                        "Response too large: {} bytes",
-                        b.len()
-                    )),
+                    ToolError::execution_failed(format!("Response too large: {} bytes", b.len())),
                 );
             }
             b
@@ -126,8 +118,7 @@ pub async fn execute_web_fetch(
     let body_str = String::from_utf8_lossy(&body);
 
     // Extract text based on content type
-    let text = if content_type.contains("text/html") || content_type.contains("application/xhtml")
-    {
+    let text = if content_type.contains("text/html") || content_type.contains("application/xhtml") {
         html_to_text(&body_str)
     } else {
         // For non-HTML content (JSON, plain text, etc.), return as-is
@@ -183,9 +174,7 @@ pub fn html_to_text(html: &str) -> String {
 
     // Try to use <body>, fall back to the whole document
     let body_selector = Selector::parse("body").unwrap();
-    let root = document
-        .select(&body_selector)
-        .next();
+    let root = document.select(&body_selector).next();
 
     let mut text_parts: Vec<String> = Vec::new();
 

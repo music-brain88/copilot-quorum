@@ -19,16 +19,11 @@ pub fn web_search_definition() -> ToolDefinition {
         "Search the web using DuckDuckGo. Returns instant answers, abstracts, and related topics.",
         RiskLevel::Low,
     )
-    .with_parameter(
-        ToolParameter::new("query", "The search query", true).with_type("string"),
-    )
+    .with_parameter(ToolParameter::new("query", "The search query", true).with_type("string"))
 }
 
 /// Execute the web_search tool
-pub async fn execute_web_search(
-    client: &reqwest::Client,
-    call: &ToolCall,
-) -> ToolResult {
+pub async fn execute_web_search(client: &reqwest::Client, call: &ToolCall) -> ToolResult {
     let start = Instant::now();
 
     let query = match call.require_string("query") {
@@ -100,9 +95,7 @@ fn format_search_results(query: &str, data: &serde_json::Value) -> String {
     // Abstract (main answer)
     if let Some(abstract_text) = data["AbstractText"].as_str() {
         if !abstract_text.is_empty() {
-            let source = data["AbstractSource"]
-                .as_str()
-                .unwrap_or("Unknown");
+            let source = data["AbstractSource"].as_str().unwrap_or("Unknown");
             let url = data["AbstractURL"].as_str().unwrap_or("");
             sections.push(format!(
                 "### Summary ({})\n{}\nSource: {}",
@@ -121,9 +114,7 @@ fn format_search_results(query: &str, data: &serde_json::Value) -> String {
     // Definition
     if let Some(definition) = data["Definition"].as_str() {
         if !definition.is_empty() {
-            let source = data["DefinitionSource"]
-                .as_str()
-                .unwrap_or("Unknown");
+            let source = data["DefinitionSource"].as_str().unwrap_or("Unknown");
             sections.push(format!("### Definition ({})\n{}", source, definition));
         }
     }
@@ -149,10 +140,7 @@ fn format_search_results(query: &str, data: &serde_json::Value) -> String {
             .collect();
 
         if !topic_texts.is_empty() {
-            sections.push(format!(
-                "### Related Topics\n{}",
-                topic_texts.join("\n")
-            ));
+            sections.push(format!("### Related Topics\n{}", topic_texts.join("\n")));
         }
     }
 

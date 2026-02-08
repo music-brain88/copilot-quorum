@@ -121,10 +121,7 @@ impl LocalToolExecutor {
     /// Check if a tool call requires async execution (web tools)
     #[cfg(feature = "web-tools")]
     fn is_async_tool(name: &str) -> bool {
-        matches!(
-            name,
-            super::web::WEB_FETCH | super::web::WEB_SEARCH
-        )
+        matches!(name, super::web::WEB_FETCH | super::web::WEB_SEARCH)
     }
 
     /// Execute async tools (web tools)
@@ -150,12 +147,8 @@ impl LocalToolExecutor {
         }
 
         match call.tool_name.as_str() {
-            super::web::WEB_FETCH => {
-                super::web::execute_web_fetch(&self.http_client, call).await
-            }
-            super::web::WEB_SEARCH => {
-                super::web::execute_web_search(&self.http_client, call).await
-            }
+            super::web::WEB_FETCH => super::web::execute_web_fetch(&self.http_client, call).await,
+            super::web::WEB_SEARCH => super::web::execute_web_search(&self.http_client, call).await,
             _ => ToolResult::failure(
                 &call.tool_name,
                 ToolError::execution_failed(format!(

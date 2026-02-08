@@ -6,5 +6,5 @@
 mod fetch;
 mod search;
 
-pub use fetch::{execute_web_fetch, web_fetch_definition, WEB_FETCH};
-pub use search::{execute_web_search, web_search_definition, WEB_SEARCH};
+pub use fetch::{WEB_FETCH, execute_web_fetch, web_fetch_definition};
+pub use search::{WEB_SEARCH, execute_web_search, web_search_definition};

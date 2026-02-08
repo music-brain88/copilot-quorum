@@ -120,13 +120,20 @@ impl ToolSpec {
     }
 
     /// Register a single alias mapping (builder pattern)
-    pub fn register_alias(mut self, alias: impl Into<String>, canonical: impl Into<String>) -> Self {
+    pub fn register_alias(
+        mut self,
+        alias: impl Into<String>,
+        canonical: impl Into<String>,
+    ) -> Self {
         self.aliases.insert(alias.into(), canonical.into());
         self
     }
 
     /// Register multiple aliases at once (builder pattern)
-    pub fn register_aliases(mut self, mappings: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Self {
+    pub fn register_aliases(
+        mut self,
+        mappings: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
         for (alias, canonical) in mappings {
             self.aliases.insert(alias.into(), canonical.into());
         }
@@ -150,7 +157,8 @@ impl ToolSpec {
 
     /// Get tool definition by canonical name or alias
     pub fn get_resolved(&self, name: &str) -> Option<&ToolDefinition> {
-        self.resolve(name).and_then(|canonical| self.tools.get(canonical))
+        self.resolve(name)
+            .and_then(|canonical| self.tools.get(canonical))
     }
 
     pub fn get(&self, name: &str) -> Option<&ToolDefinition> {
@@ -275,8 +283,16 @@ mod tests {
     #[test]
     fn test_tool_spec_aliases() {
         let spec = ToolSpec::new()
-            .register(ToolDefinition::new("run_command", "Run command", RiskLevel::High))
-            .register(ToolDefinition::new("read_file", "Read file", RiskLevel::Low))
+            .register(ToolDefinition::new(
+                "run_command",
+                "Run command",
+                RiskLevel::High,
+            ))
+            .register(ToolDefinition::new(
+                "read_file",
+                "Read file",
+                RiskLevel::Low,
+            ))
             .register_alias("bash", "run_command")
             .register_alias("shell", "run_command")
             .register_alias("view", "read_file");
@@ -297,7 +313,10 @@ mod tests {
 
         // get_resolved returns tool definition via alias
         assert_eq!(spec.get_resolved("bash").unwrap().name, "run_command");
-        assert_eq!(spec.get_resolved("run_command").unwrap().name, "run_command");
+        assert_eq!(
+            spec.get_resolved("run_command").unwrap().name,
+            "run_command"
+        );
         assert!(spec.get_resolved("unknown").is_none());
     }
 
@@ -320,7 +339,11 @@ mod tests {
     fn test_canonical_name_takes_priority_over_alias() {
         // If a canonical name and alias collide, canonical wins in resolve()
         let spec = ToolSpec::new()
-            .register(ToolDefinition::new("read_file", "Read file", RiskLevel::Low))
+            .register(ToolDefinition::new(
+                "read_file",
+                "Read file",
+                RiskLevel::Low,
+            ))
             .register(ToolDefinition::new("view", "View tool", RiskLevel::Low))
             .register_alias("view", "read_file"); // alias points to read_file, but "view" is also a tool
 

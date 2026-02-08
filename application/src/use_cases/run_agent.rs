@@ -1658,7 +1658,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // Alias resolution → zero-cost correction without LLM call
-        if let Some(canonical) = self.tool_executor.tool_spec().resolve_alias(&tool_call.tool_name) {
+        if let Some(canonical) = self
+            .tool_executor
+            .tool_spec()
+            .resolve_alias(&tool_call.tool_name)
+        {
             debug!(
                 "Resolved tool alias '{}' → '{}'",
                 tool_call.tool_name, canonical
@@ -2567,14 +2571,14 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
 /// Resolve alias tool names in plan tasks to canonical names
 fn resolve_plan_aliases(plan: &mut Plan, tool_spec: &quorum_domain::tool::entities::ToolSpec) {
     for task in &mut plan.tasks {
-        if let Some(ref tool_name) = task.tool_name {
-            if let Some(canonical) = tool_spec.resolve_alias(tool_name) {
-                debug!(
-                    "Plan alias resolved: task '{}' tool '{}' → '{}'",
-                    task.id, tool_name, canonical
-                );
-                task.tool_name = Some(canonical.to_string());
-            }
+        if let Some(ref tool_name) = task.tool_name
+            && let Some(canonical) = tool_spec.resolve_alias(tool_name)
+        {
+            debug!(
+                "Plan alias resolved: task '{}' tool '{}' → '{}'",
+                task.id, tool_name, canonical
+            );
+            task.tool_name = Some(canonical.to_string());
         }
     }
 }
@@ -2969,9 +2973,8 @@ Here is my evaluation:
             .register(ToolDefinition::new("run_command", "Run", RiskLevel::High))
             .register_alias("bash", "run_command");
 
-        let mut plan = Plan::new("Test", "Testing").with_task(
-            Task::new("1", "Unknown tool").with_tool("nonexistent_tool"),
-        );
+        let mut plan = Plan::new("Test", "Testing")
+            .with_task(Task::new("1", "Unknown tool").with_tool("nonexistent_tool"));
 
         resolve_plan_aliases(&mut plan, &tool_spec);
 
