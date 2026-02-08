@@ -1,20 +1,44 @@
-//! Tool domain traits
+//! Tool domain traits — pure validation logic
 //!
-//! Contains pure domain logic traits for tool validation.
-//! The async ToolExecutorPort is defined in the application layer (ports).
+//! This module provides the **Tool Validation** component of the Tool System.
+//! [`ToolValidator`] ensures that every [`ToolCall`] conforms to
+//! its [`ToolDefinition`] before reaching the executor.
+//!
+//! Validation runs in the infrastructure layer's `LocalToolExecutor` after
+//! alias resolution but before actual execution, catching parameter errors
+//! early and enabling the retry mechanism.
+//!
+//! The async `ToolExecutorPort` is defined in the application layer (`ports`)
+//! to keep this module free of I/O dependencies.
 
 use super::entities::{ToolCall, ToolDefinition};
 
-/// Validator for tool calls
+/// Pure domain trait for validating [`ToolCall`]s against their [`ToolDefinition`]s.
 ///
-/// This is a pure domain trait that validates tool calls
-/// against their definitions without any I/O operations.
+/// Validation checks that:
+/// - All **required** parameters are present
+/// - No **unknown** parameters are supplied
+///
+/// This trait is part of the **Tool System's** safety pipeline:
+///
+/// ```text
+/// resolve_tool_call() → ToolValidator::validate() → execute()
+/// ```
+///
+/// Validation errors produce `INVALID_ARGUMENT` errors, which are **retryable** —
+/// the agent gets a second chance to fix its tool call.
 pub trait ToolValidator {
-    /// Validate a tool call against its definition
+    /// Validate a tool call against its definition.
+    ///
+    /// Returns `Ok(())` if valid, or `Err(message)` describing the validation failure.
     fn validate(&self, call: &ToolCall, definition: &ToolDefinition) -> Result<(), String>;
 }
 
-/// Default implementation of ToolValidator
+/// Default implementation of [`ToolValidator`] with required-parameter and
+/// unknown-parameter checks.
+///
+/// Used by `LocalToolExecutor` in the infrastructure layer for all tool
+/// invocations (file, command, search, and web tools).
 #[derive(Debug, Clone, Default)]
 pub struct DefaultToolValidator;
 

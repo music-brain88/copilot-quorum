@@ -130,7 +130,7 @@ domain/src/
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
 ├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
-├── tool/           # ToolDefinition, ToolCall, ToolResult (ツール)
+├── tool/           # ToolDefinition, ToolCall, ToolSpec (with aliases), ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
 ├── session/        # Message, LlmSessionRepository
 ├── context/        # ProjectContext, KnownContextFile (/init用)
@@ -143,9 +143,17 @@ domain/src/
 - New orchestration strategy: Add to `domain/orchestration/`
 - New output format: Add to `presentation/output/`
 - New model: Add variant to `domain/src/core/model.rs` Model enum
-- New tool: Add to `infrastructure/tools/`, register in `default_tool_spec()`
+- New tool: Add to `infrastructure/tools/`, register in `default_tool_spec()`, add aliases in same file
 - New agent capability: Extend `domain/agent/` and `RunAgentUseCase`
 - New context file type: Add to `domain/context/` KnownContextFile enum
+
+### Tool Name Alias System
+
+LLM のツール名間違い（`bash` → `run_command` 等）を API 呼び出しなしで自動解決する仕組み。
+- `ToolSpec::register_alias()` / `register_aliases()` でエイリアス登録
+- `resolve_tool_call()` でエイリアスファストパス（LLM に聞く前に解決）
+- `resolve_plan_aliases()` で Plan 段階のツール名も自動変換
+- `has_tool()` / `get()` は正規名のみ（exact match）— executor のルーティングを壊さない
 
 ### Tool Output Format Specification
 
@@ -188,7 +196,7 @@ The agent system extends quorum to autonomous task execution with safety through
 
 **Flow**: Context Gathering → Planning → Quorum Plan Review → Task Execution → (Optional) Final Review
 
-**Tools**: `read_file`, `write_file`, `run_command`, `glob_search`, `grep_search`
+**Tools**: `read_file`, `write_file`, `run_command`, `glob_search`, `grep_search`, `web_fetch`, `web_search` (web-tools feature)
 - Low-risk (read-only): Direct execution
 - High-risk (write/command): Requires quorum review before execution
 

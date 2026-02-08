@@ -295,6 +295,9 @@ mod tests {
 
         let stats = registry.stats();
         assert_eq!(stats.total_providers, 1);
+        #[cfg(feature = "web-tools")]
+        assert_eq!(stats.total_tools, 7); // 5 builtin + 2 web tools
+        #[cfg(not(feature = "web-tools"))]
         assert_eq!(stats.total_tools, 5); // 5 builtin tools
         assert!(stats.tools_per_provider.contains_key("builtin"));
     }
