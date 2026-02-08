@@ -469,40 +469,47 @@ Provide the corrected tool call:
     ///
     /// Unlike `tool_retry`, this provides the list of available tools
     /// so the LLM can choose a valid tool instead of retrying the same one.
-    pub fn tool_not_found_retry(tool_name: &str, available_tools: &[&str]) -> String {
+    pub fn tool_not_found_retry(
+        tool_name: &str,
+        available_tools: &[&str],
+        previous_args: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> String {
         let tools_list = available_tools
             .iter()
             .map(|t| format!("- `{}`", t))
             .collect::<Vec<_>>()
             .join("\n");
+        let args_json = serde_json::to_string_pretty(previous_args).unwrap_or_default();
 
         format!(
-            r#"## Unknown Tool
+            r#"## ERROR: Unknown Tool `{tool_name}`
 
-The tool `{tool_name}` does not exist. You must use one of the available tools listed below.
+The tool `{tool_name}` does not exist and cannot be used.
 
-## Available Tools
-
+**Available tools:**
 {tools_list}
 
-## Instructions
+**Your original arguments were:**
+```json
+{args_json}
+```
 
-Choose an appropriate tool from the list above to accomplish the same goal.
-Do NOT use `{tool_name}` — it does not exist.
+**IMPORTANT:** You MUST respond with ONLY a tool call block. Do NOT include any explanation or text outside the tool call block.
 
-Provide a corrected tool call using one of the available tools:
+Choose the correct tool from the available list and respond with EXACTLY this format:
 
 ```tool
 {{
-  "tool": "<choose from available tools>",
+  "tool": "run_command",
   "args": {{
-    // Provide appropriate arguments for the chosen tool
+    "command": "your command here"
   }},
-  "reasoning": "Explanation of which tool was chosen and why"
+  "reasoning": "brief explanation"
 }}
 ```"#,
             tool_name = tool_name,
-            tools_list = tools_list
+            tools_list = tools_list,
+            args_json = args_json
         )
     }
 
@@ -824,5 +831,28 @@ mod tests {
         assert!(prompt.contains("README.md"));
         assert!(prompt.contains("Tool Execution Failed"));
         assert!(prompt.contains("validation error"));
+    }
+
+    #[test]
+    fn test_tool_not_found_retry_prompt() {
+        let mut args = std::collections::HashMap::new();
+        args.insert("command".to_string(), serde_json::json!("cargo test"));
+
+        let available = vec!["read_file", "write_file", "run_command", "glob_search", "grep_search"];
+        let prompt = AgentPromptTemplate::tool_not_found_retry("bash", &available, &args);
+
+        // Should mention the unknown tool
+        assert!(prompt.contains("bash"));
+        assert!(prompt.contains("Unknown Tool"));
+        // Should list available tools
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("run_command"));
+        assert!(prompt.contains("glob_search"));
+        // Should include previous args for context
+        assert!(prompt.contains("cargo test"));
+        // Should strongly instruct tool call format
+        assert!(prompt.contains("MUST respond with ONLY a tool call block"));
+        // Should NOT contain the unknown tool name in the example
+        assert!(!prompt.contains("\"tool\": \"bash\""));
     }
 }
