@@ -838,7 +838,13 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert("command".to_string(), serde_json::json!("cargo test"));
 
-        let available = vec!["read_file", "write_file", "run_command", "glob_search", "grep_search"];
+        let available = vec![
+            "read_file",
+            "write_file",
+            "run_command",
+            "glob_search",
+            "grep_search",
+        ];
         let prompt = AgentPromptTemplate::tool_not_found_retry("bash", &available, &args);
 
         // Should mention the unknown tool
