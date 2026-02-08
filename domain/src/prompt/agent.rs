@@ -465,6 +465,50 @@ Provide the corrected tool call:
         )
     }
 
+    /// Prompt for retrying when an unknown tool was called
+    ///
+    /// Unlike `tool_retry`, this provides the list of available tools
+    /// so the LLM can choose a valid tool instead of retrying the same one.
+    pub fn tool_not_found_retry(
+        tool_name: &str,
+        available_tools: &[&str],
+    ) -> String {
+        let tools_list = available_tools
+            .iter()
+            .map(|t| format!("- `{}`", t))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!(
+            r#"## Unknown Tool
+
+The tool `{tool_name}` does not exist. You must use one of the available tools listed below.
+
+## Available Tools
+
+{tools_list}
+
+## Instructions
+
+Choose an appropriate tool from the list above to accomplish the same goal.
+Do NOT use `{tool_name}` — it does not exist.
+
+Provide a corrected tool call using one of the available tools:
+
+```tool
+{{
+  "tool": "<choose from available tools>",
+  "args": {{
+    // Provide appropriate arguments for the chosen tool
+  }},
+  "reasoning": "Explanation of which tool was chosen and why"
+}}
+```"#,
+            tool_name = tool_name,
+            tools_list = tools_list
+        )
+    }
+
     /// Prompt for analyzing project context (used in /init command)
     pub fn context_analysis(project_files: &str) -> String {
         format!(
