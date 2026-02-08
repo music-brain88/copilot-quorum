@@ -1,8 +1,26 @@
-//! Tool domain value objects - immutable result types
+//! Tool domain value objects — immutable result and error types
+//!
+//! These types form the **output side** of the Tool System pipeline.
+//! Every tool execution produces a [`ToolResult`] with optional
+//! [`ToolResultMetadata`] (timing, byte counts, paths, etc.).
+//!
+//! Error codes in [`ToolError`] drive the **retry strategy**:
+//! `INVALID_ARGUMENT` and `NOT_FOUND` are retryable (up to 2 attempts),
+//! while `EXECUTION_FAILED` and others terminate immediately.
 
 use serde::{Deserialize, Serialize};
 
-/// Error that occurred during tool execution
+/// Error that occurred during tool execution.
+///
+/// Error codes determine retry behavior in the agent execution loop:
+///
+/// | Code | Retryable? | Description |
+/// |------|-----------|-------------|
+/// | `INVALID_ARGUMENT` | Yes | Missing/wrong parameters — LLM can fix |
+/// | `NOT_FOUND` | Yes | Unknown tool or resource — LLM can correct |
+/// | `EXECUTION_FAILED` | No | Runtime failure (I/O error, HTTP error) |
+/// | `PERMISSION_DENIED` | No | Access denied |
+/// | `TIMEOUT` | No | Operation timed out |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolError {
     /// Error code (e.g., "NOT_FOUND", "PERMISSION_DENIED")
@@ -71,7 +89,13 @@ impl std::fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
-/// Result of a tool execution
+/// Result of a tool execution, carrying output or error information.
+///
+/// Produced by tool executors (file, command, search, web) and consumed
+/// by the agent loop for context injection and error handling.
+///
+/// The [`metadata`](Self::metadata) field provides structured execution data
+/// (timing, byte counts, paths) used for progress reporting and diagnostics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     /// Name of the tool that was executed
@@ -89,7 +113,19 @@ pub struct ToolResult {
     pub metadata: ToolResultMetadata,
 }
 
-/// Metadata about tool execution
+/// Structured metadata about tool execution.
+///
+/// Each tool populates the relevant fields:
+///
+/// | Tool | `duration_ms` | `bytes` | `path` | `exit_code` | `match_count` |
+/// |------|:---:|:---:|:---:|:---:|:---:|
+/// | `read_file` | - | yes | yes | - | - |
+/// | `write_file` | - | yes | yes | - | - |
+/// | `run_command` | yes | - | - | yes | - |
+/// | `glob_search` | yes | - | - | - | yes |
+/// | `grep_search` | yes | - | - | - | yes |
+/// | `web_fetch` | yes | yes | - | - | - |
+/// | `web_search` | yes | - | - | - | - |
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolResultMetadata {
     /// Duration of execution in milliseconds

@@ -1,4 +1,40 @@
-//! web_fetch tool: Fetch a URL and extract text content
+//! `web_fetch` tool — fetch a URL and extract readable text content.
+//!
+//! Part of the **Web Tools** feature (`web-tools`), this tool gives agents
+//! the ability to retrieve information from web pages and APIs.
+//!
+//! # How It Works
+//!
+//! ```text
+//! URL → reqwest GET → Content-Type check
+//!                       ├─ text/html → html_to_text() (scraper-based extraction)
+//!                       └─ other     → raw text pass-through
+//!                     → truncate to max_length
+//!                     → ToolResult with metadata
+//! ```
+//!
+//! # HTML Text Extraction
+//!
+//! [`html_to_text()`] uses the `scraper` crate to parse HTML and recursively
+//! extract text nodes, skipping `<script>`, `<style>`, `<noscript>`, and `<svg>`
+//! subtrees. The output is cleaned of excessive whitespace.
+//!
+//! # Parameters
+//!
+//! | Name | Type | Required | Default | Description |
+//! |------|------|:---:|---------|-------------|
+//! | `url` | string | Yes | — | The URL to fetch |
+//! | `max_length` | number | No | 51,200 (50 KB) | Max output text size in bytes |
+//!
+//! # Safety
+//!
+//! - **Risk level**: [`Low`](quorum_domain::tool::entities::RiskLevel::Low) — read-only, no Quorum review needed
+//! - **Max body size**: 5 MB (responses larger than this are rejected)
+//! - **Timeout**: 30 seconds (configured on the `reqwest::Client` in `LocalToolExecutor`)
+//!
+//! # Aliases
+//!
+//! `fetch`, `browse` → `web_fetch` (registered in [`default_tool_spec()`](super::super::default_tool_spec))
 
 use quorum_domain::tool::{
     entities::{RiskLevel, ToolCall, ToolDefinition, ToolParameter},
@@ -6,16 +42,20 @@ use quorum_domain::tool::{
 };
 use std::time::Instant;
 
-/// Tool name constant
+/// Canonical tool name for the web fetch tool.
 pub const WEB_FETCH: &str = "web_fetch";
 
-/// Maximum response body size (5 MB)
+/// Maximum response body size before rejection (5 MB).
 const MAX_BODY_SIZE: usize = 5 * 1024 * 1024;
 
-/// Default max output text size (50 KB)
+/// Default max output text size after extraction (50 KB).
 const DEFAULT_MAX_TEXT: usize = 50 * 1024;
 
-/// Get the tool definition for web_fetch
+/// Create the [`ToolDefinition`] for `web_fetch`.
+///
+/// Registered in [`default_tool_spec()`](super::super::default_tool_spec) and
+/// [`read_only_tool_spec()`](super::super::read_only_tool_spec) when the
+/// `web-tools` feature is enabled.
 pub fn web_fetch_definition() -> ToolDefinition {
     ToolDefinition::new(
         WEB_FETCH,
@@ -33,7 +73,13 @@ pub fn web_fetch_definition() -> ToolDefinition {
     )
 }
 
-/// Execute the web_fetch tool
+/// Execute the `web_fetch` tool — fetch a URL and extract text content.
+///
+/// Called by [`LocalToolExecutor::execute_async()`](super::super::LocalToolExecutor)
+/// when the agent invokes `web_fetch` (or its aliases `fetch`/`browse`).
+///
+/// The `client` is a shared `reqwest::Client` with a 30-second timeout,
+/// created once in `LocalToolExecutor::new()`.
 pub async fn execute_web_fetch(client: &reqwest::Client, call: &ToolCall) -> ToolResult {
     let start = Instant::now();
 
@@ -163,7 +209,14 @@ pub async fn execute_web_fetch(client: &reqwest::Client, call: &ToolCall) -> Too
     result
 }
 
-/// Extract readable text from HTML, stripping tags, scripts, and styles
+/// Extract readable text from HTML, stripping tags, scripts, and styles.
+///
+/// Uses `scraper` to parse HTML into a DOM tree and recursively walks
+/// the `<body>` element (or the root if no body is found), collecting
+/// text nodes while skipping `<script>`, `<style>`, `<noscript>`, and
+/// `<svg>` subtrees.
+///
+/// The result is cleaned of excessive whitespace via [`clean_whitespace()`].
 pub fn html_to_text(html: &str) -> String {
     use scraper::{Html, Selector};
 
@@ -193,7 +246,10 @@ pub fn html_to_text(html: &str) -> String {
     clean_whitespace(&raw)
 }
 
-/// Recursively collect text from an element, skipping elements matching skip_tags
+/// Recursively collect text nodes from an element subtree.
+///
+/// Skips elements whose tag name is in `skip_tags` (e.g. `script`, `style`).
+/// This is the core traversal for [`html_to_text()`].
 fn collect_element_text(element: scraper::ElementRef, skip_tags: &[&str]) -> Vec<String> {
     let tag_name = element.value().name();
     if skip_tags.contains(&tag_name) {
@@ -222,7 +278,7 @@ fn collect_element_text(element: scraper::ElementRef, skip_tags: &[&str]) -> Vec
     parts
 }
 
-/// Clean up excessive whitespace
+/// Clean up excessive whitespace — collapse runs of spaces and limit consecutive newlines to 2.
 fn clean_whitespace(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut prev_was_whitespace = false;

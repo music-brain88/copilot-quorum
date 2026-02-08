@@ -1,4 +1,41 @@
-//! web_search tool: Search the web using DuckDuckGo Instant Answer API
+//! `web_search` tool — search the web using DuckDuckGo Instant Answer API.
+//!
+//! Part of the **Web Tools** feature (`web-tools`), this tool provides agents
+//! with a zero-configuration web search capability.
+//!
+//! # DuckDuckGo Instant Answer API
+//!
+//! Uses the [DuckDuckGo Instant Answer API](https://api.duckduckgo.com/) which:
+//! - Requires **no API key** (no configuration burden)
+//! - Returns instant answers, abstracts, definitions, and related topics
+//! - Does not return full web search result listings (by design)
+//!
+//! For full search results, the agent can use `web_fetch` on specific URLs
+//! discovered through the instant answer.
+//!
+//! # Output Format
+//!
+//! Results are formatted as markdown with sections:
+//! - **Summary** — abstract text with source attribution
+//! - **Instant Answer** — direct factual answers
+//! - **Definition** — dictionary-style definitions
+//! - **Related Topics** — up to 10 related links
+//! - **Redirect** — for !bang-style queries
+//!
+//! # Parameters
+//!
+//! | Name | Type | Required | Description |
+//! |------|------|:---:|-------------|
+//! | `query` | string | Yes | The search query |
+//!
+//! # Safety
+//!
+//! - **Risk level**: [`Low`](quorum_domain::tool::entities::RiskLevel::Low) — read-only
+//! - **Timeout**: 30 seconds (from shared `reqwest::Client`)
+//!
+//! # Aliases
+//!
+//! `web` → `web_search` (registered in [`default_tool_spec()`](super::super::default_tool_spec))
 
 use quorum_domain::tool::{
     entities::{RiskLevel, ToolCall, ToolDefinition, ToolParameter},
@@ -6,13 +43,17 @@ use quorum_domain::tool::{
 };
 use std::time::Instant;
 
-/// Tool name constant
+/// Canonical tool name for the web search tool.
 pub const WEB_SEARCH: &str = "web_search";
 
-/// DuckDuckGo Instant Answer API endpoint
+/// DuckDuckGo Instant Answer API endpoint (no API key required).
 const DDG_API_URL: &str = "https://api.duckduckgo.com/";
 
-/// Get the tool definition for web_search
+/// Create the [`ToolDefinition`] for `web_search`.
+///
+/// Registered in [`default_tool_spec()`](super::super::default_tool_spec) and
+/// [`read_only_tool_spec()`](super::super::read_only_tool_spec) when the
+/// `web-tools` feature is enabled.
 pub fn web_search_definition() -> ToolDefinition {
     ToolDefinition::new(
         WEB_SEARCH,
@@ -22,7 +63,10 @@ pub fn web_search_definition() -> ToolDefinition {
     .with_parameter(ToolParameter::new("query", "The search query", true).with_type("string"))
 }
 
-/// Execute the web_search tool
+/// Execute the `web_search` tool — query DuckDuckGo and format results.
+///
+/// Called by [`LocalToolExecutor::execute_async()`](super::super::LocalToolExecutor)
+/// when the agent invokes `web_search` (or its alias `web`).
 pub async fn execute_web_search(client: &reqwest::Client, call: &ToolCall) -> ToolResult {
     let start = Instant::now();
 
@@ -86,7 +130,11 @@ pub async fn execute_web_search(client: &reqwest::Client, call: &ToolCall) -> To
     result
 }
 
-/// Format DuckDuckGo API response into readable output
+/// Format DuckDuckGo API response into a readable markdown document.
+///
+/// Extracts and formats: AbstractText, Answer, Definition, RelatedTopics (up to 10),
+/// and Redirect sections. Falls back to a "no instant answer" message if no
+/// sections are populated.
 fn format_search_results(query: &str, data: &serde_json::Value) -> String {
     let mut sections: Vec<String> = Vec::new();
 

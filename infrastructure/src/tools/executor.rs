@@ -1,4 +1,31 @@
-//! Local tool executor that runs tools on the local machine
+//! Local tool executor — the concrete implementation of [`ToolExecutorPort`].
+//!
+//! [`LocalToolExecutor`] is the infrastructure-layer adapter that bridges the
+//! application layer's abstract [`ToolExecutorPort`] with actual system operations:
+//! file I/O, process execution, content search, and (optionally) web requests.
+//!
+//! # Execution Paths
+//!
+//! ```text
+//! ToolExecutorPort::execute()
+//!   ├─ is_async_tool?  → execute_async()   (web_fetch, web_search via reqwest)
+//!   └─ otherwise       → execute_internal() (file, command, search — synchronous)
+//!
+//! ToolExecutorPort::execute_sync()
+//!   ├─ is_async_tool?  → block_in_place(execute_async())  (tokio bridge)
+//!   └─ otherwise       → execute_internal()
+//! ```
+//!
+//! # Tool Name Alias System Integration
+//!
+//! The executor's routing uses **exact canonical names** via `match call.tool_name.as_str()`.
+//! Alias resolution happens upstream in `resolve_tool_call()` (application layer),
+//! so by the time a call reaches the executor, the `tool_name` is always canonical.
+//!
+//! # Web Tools (`web-tools` feature)
+//!
+//! When the `web-tools` feature is enabled, the executor holds a shared `reqwest::Client`
+//! (30s timeout) and routes `web_fetch`/`web_search` calls through the async path.
 
 use async_trait::async_trait;
 use quorum_application::ports::tool_executor::ToolExecutorPort;
@@ -9,9 +36,24 @@ use quorum_domain::tool::{
 
 use super::{command, file, search};
 
-/// Executor that runs tools on the local machine
+/// Executor that runs tools on the local machine.
 ///
-/// Implements the `ToolExecutorPort` trait from the application layer.
+/// Implements [`ToolExecutorPort`] from the application layer, providing the
+/// concrete tool execution for the agent system.
+///
+/// # Configurations
+///
+/// | Constructor | Tools | Use Case |
+/// |-------------|-------|----------|
+/// | [`new()`](Self::new) | All tools (5 + 2 web) | Full agent execution |
+/// | [`read_only()`](Self::read_only) | Read-only tools only | Context gathering phase |
+/// | [`with_tools()`](Self::with_tools) | Custom [`ToolSpec`] | Testing / specialized setups |
+///
+/// # Web Tools Integration
+///
+/// With the `web-tools` feature, the executor holds a shared [`reqwest::Client`]
+/// with a 30-second timeout. Web tool calls are routed through [`execute_async()`](Self)
+/// while all other tools use synchronous `execute_internal()`.
 #[derive(Debug, Clone)]
 pub struct LocalToolExecutor {
     /// Available tools
@@ -24,7 +66,10 @@ pub struct LocalToolExecutor {
 }
 
 impl LocalToolExecutor {
-    /// Create a new executor with all available tools
+    /// Create a new executor with all available tools and aliases.
+    ///
+    /// Uses [`default_tool_spec()`](super::default_tool_spec) which includes
+    /// all 5 core tools, their aliases, and (with `web-tools`) web tools.
     pub fn new() -> Self {
         Self {
             tool_spec: super::default_tool_spec(),
@@ -37,7 +82,10 @@ impl LocalToolExecutor {
         }
     }
 
-    /// Create an executor with only read-only tools
+    /// Create an executor with only read-only (low-risk) tools.
+    ///
+    /// Excludes `write_file`, `run_command`, and their aliases. Used during
+    /// the context gathering phase where state modification is not allowed.
     pub fn read_only() -> Self {
         Self {
             tool_spec: super::read_only_tool_spec(),
@@ -69,7 +117,10 @@ impl LocalToolExecutor {
         self
     }
 
-    /// Internal execute implementation for synchronous tools
+    /// Internal execute implementation for synchronous tools (file, command, search).
+    ///
+    /// Routes calls by exact canonical name. Alias resolution has already
+    /// occurred upstream in `resolve_tool_call()`.
     fn execute_internal(&self, call: &ToolCall) -> ToolResult {
         // Check if tool exists
         let definition = match self.tool_spec.get(&call.tool_name) {
@@ -118,13 +169,16 @@ impl LocalToolExecutor {
         }
     }
 
-    /// Check if a tool call requires async execution (web tools)
+    /// Check if a tool requires async execution (web tools using `reqwest`).
     #[cfg(feature = "web-tools")]
     fn is_async_tool(name: &str) -> bool {
         matches!(name, super::web::WEB_FETCH | super::web::WEB_SEARCH)
     }
 
-    /// Execute async tools (web tools)
+    /// Execute async web tools (`web_fetch`, `web_search`) via `reqwest`.
+    ///
+    /// Validates the call against the tool definition first, then dispatches
+    /// to the appropriate web tool executor.
     #[cfg(feature = "web-tools")]
     async fn execute_async(&self, call: &ToolCall) -> ToolResult {
         // Check if tool exists

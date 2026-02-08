@@ -1639,13 +1639,27 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
-    /// Pre-validate a tool call and resolve unknown tool names via LLM correction.
+    /// Pre-validate a tool call and resolve unknown tool names, supporting the
+    /// **Tool Name Alias System** and LLM-based correction as a fallback.
     ///
-    /// Called BEFORE action review and execution to avoid wasting API calls
-    /// on quorum review of nonexistent tools.
+    /// This is the central name resolution point in the agent execution pipeline,
+    /// called BEFORE Quorum review and execution to avoid wasting API calls on
+    /// nonexistent tools.
+    ///
+    /// # Resolution Strategy (3-tier)
+    ///
+    /// ```text
+    /// 1. Exact match    → has_tool(name)         → zero cost
+    /// 2. Alias resolve  → resolve_alias(name)    → zero cost, no LLM call
+    /// 3. LLM retry      → ask model to fix       → 1 API round-trip (fallback)
+    /// ```
+    ///
+    /// Tier 2 (alias resolution) eliminates the most common LLM mistakes
+    /// (`bash` → `run_command`, `grep` → `grep_search`, etc.) without any
+    /// additional API calls.
     ///
     /// Returns `Some(resolved_call)` if the tool exists or was successfully resolved,
-    /// `None` if the tool could not be resolved.
+    /// `None` if the tool could not be resolved after all tiers.
     async fn resolve_tool_call(
         &self,
         session: &dyn LlmSession,
@@ -2568,7 +2582,19 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
     Some(plan)
 }
 
-/// Resolve alias tool names in plan tasks to canonical names
+/// Resolve aliased tool names in plan tasks to their canonical names.
+///
+/// Part of the **Tool Name Alias System** — this function corrects
+/// LLM-hallucinated tool names at **plan time**, before the plan is
+/// submitted for Quorum review or task execution.
+///
+/// Called in both Solo and Ensemble planning paths, immediately before
+/// `state.set_plan()`.
+///
+/// # Example
+///
+/// If a plan task has `tool_name: Some("bash")`, this rewrites it to
+/// `tool_name: Some("run_command")` using [`ToolSpec::resolve_alias`].
 fn resolve_plan_aliases(plan: &mut Plan, tool_spec: &quorum_domain::tool::entities::ToolSpec) {
     for task in &mut plan.tasks {
         if let Some(ref tool_name) = task.tool_name
