@@ -209,6 +209,12 @@ pub trait AgentProgressNotifier: Send + Sync {
     /// Called when retrying a tool call after an error
     fn on_tool_retry(&self, _tool_name: &str, _attempt: usize, _max_retries: usize, _error: &str) {}
 
+    /// Called when a tool name is not found in the registry
+    fn on_tool_not_found(&self, _tool_name: &str, _available_tools: &[&str]) {}
+
+    /// Called when an unknown tool name has been resolved to a valid tool
+    fn on_tool_resolved(&self, _original_name: &str, _resolved_name: &str) {}
+
     // ==================== LLM Streaming Callbacks ====================
 
     /// Called for each text chunk received during LLM streaming.
@@ -1424,8 +1430,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 tool_call = tool_call.with_arg(key, value.clone());
             }
 
-            // Check if this is a high-risk tool that needs review
-            let needs_review = task.requires_review || self.is_high_risk_tool(tool_name);
+            // Pre-validate tool exists before review/execution
+            let tool_call = match self.resolve_tool_call(session, &tool_call, progress).await {
+                Some(resolved) => resolved,
+                None => {
+                    return Err(RunAgentError::TaskExecutionFailed(format!(
+                        "Unknown tool '{}' could not be resolved",
+                        tool_name
+                    )));
+                }
+            };
+
+            // Check if this is a high-risk tool that needs review (using resolved name)
+            let needs_review =
+                task.requires_review || self.is_high_risk_tool(&tool_call.tool_name);
 
             if needs_review && !input.config.review_models.is_empty() {
                 let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
@@ -1500,6 +1518,18 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let mut outputs = Vec::new();
 
         for call in tool_calls {
+            // Pre-validate tool exists before review/execution
+            let call = match self.resolve_tool_call(session, &call, progress).await {
+                Some(resolved) => resolved,
+                None => {
+                    warn!(
+                        "Tool '{}' not found and could not be resolved, skipping",
+                        call.tool_name
+                    );
+                    continue;
+                }
+            };
+
             // Check if this is a high-risk tool that needs review
             let needs_review = self.is_high_risk_tool(&call.tool_name);
 
@@ -1606,14 +1636,127 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
+    /// Pre-validate a tool call and resolve unknown tool names via LLM correction.
+    ///
+    /// Called BEFORE action review and execution to avoid wasting API calls
+    /// on quorum review of nonexistent tools.
+    ///
+    /// Returns `Some(resolved_call)` if the tool exists or was successfully resolved,
+    /// `None` if the tool could not be resolved.
+    async fn resolve_tool_call(
+        &self,
+        session: &dyn LlmSession,
+        tool_call: &ToolCall,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Option<ToolCall> {
+        // Tool exists → no correction needed
+        if self.tool_executor.has_tool(&tool_call.tool_name) {
+            return Some(tool_call.clone());
+        }
+
+        // Unknown tool → notify + ask LLM for correction
+        let available = self.tool_executor.available_tools();
+        progress.on_tool_not_found(&tool_call.tool_name, &available);
+
+        let retry_prompt = AgentPromptTemplate::tool_not_found_retry(
+            &tool_call.tool_name,
+            &available,
+            &tool_call.arguments,
+        );
+
+        let response = match self
+            .send_with_cancellation(session, &retry_prompt, progress)
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+
+        let corrected = parse_tool_calls(&response).into_iter().next()?;
+
+        // Verify corrected tool actually exists
+        if !self.tool_executor.has_tool(&corrected.tool_name) {
+            warn!(
+                "LLM suggested '{}' which also doesn't exist",
+                corrected.tool_name
+            );
+            return None;
+        }
+
+        progress.on_tool_resolved(&tool_call.tool_name, &corrected.tool_name);
+        Some(corrected)
+    }
+
     /// Execute a tool with retry on retryable errors
     ///
-    /// If the tool execution fails with a retryable error (INVALID_ARGUMENT, NOT_FOUND),
-    /// this method will:
-    /// 1. Notify progress of the retry attempt
-    /// 2. Send the error back to the LLM with the tool_retry prompt
-    /// 3. Parse the corrected tool call from the response
-    /// 4. Retry execution up to max_tool_retries times
+    /// This method provides automatic error recovery for tool execution failures
+    /// by leveraging the LLM to generate corrected tool calls.
+    ///
+    /// # Retry Strategy
+    ///
+    /// ## Retryable Errors
+    ///
+    /// Only the following error codes trigger retry attempts:
+    ///
+    /// - **`INVALID_ARGUMENT`**: Tool was called with invalid arguments
+    ///   - Sends [`AgentPromptTemplate::tool_retry`] with error details
+    ///   - LLM corrects the arguments based on error message
+    ///
+    /// - **`NOT_FOUND`**: Tool doesn't exist (e.g., `multi_tool_use.parallel`)
+    ///   - Sends [`AgentPromptTemplate::tool_not_found_retry`] with available tools
+    ///   - LLM selects a valid alternative tool
+    ///
+    /// ## Non-Retryable Errors
+    ///
+    /// All other errors (execution failures, permission errors, etc.) are returned
+    /// immediately without retry.
+    ///
+    /// ## Retry Limit
+    ///
+    /// - Maximum retries: `max_retries` (typically 2)
+    /// - Each retry involves:
+    ///   1. Progress notification via [`AgentProgressNotifier::on_tool_retry`]
+    ///   2. LLM query with specialized retry prompt
+    ///   3. Parse corrected tool call from response
+    ///   4. Execute corrected call
+    ///
+    /// ## Cancellation
+    ///
+    /// If a cancellation request occurs during retry:
+    /// - Returns the last ToolResult immediately
+    /// - Does not attempt further retries
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - LLM session for generating corrected tool calls
+    /// * `tool_call` - Initial tool call to execute
+    /// * `max_retries` - Maximum number of retry attempts (usually 2)
+    /// * `progress` - Progress notifier for UI feedback
+    ///
+    /// # Returns
+    ///
+    /// Returns the final [`quorum_domain::ToolResult`]:
+    /// - Success result if execution succeeds (any attempt)
+    /// - Error result if all retries exhausted or non-retryable error
+    ///
+    /// # Example Flow
+    ///
+    /// ```text
+    /// Attempt 1: execute(tool_call)
+    ///   → Error: NOT_FOUND (multi_tool_use.parallel)
+    ///   → progress.on_tool_retry("multi_tool_use.parallel", 1, 2, "...")
+    ///
+    /// Retry 1: Send tool_not_found_retry prompt
+    ///   → LLM responds with valid tool: "run_command"
+    ///   → execute(corrected_call)
+    ///   → Success!
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`is_retryable_error`] - Determines if an error should trigger retry
+    /// - [`AgentPromptTemplate::tool_retry`] - Retry prompt for argument errors
+    /// - [`AgentPromptTemplate::tool_not_found_retry`] - Retry prompt for unknown tools
     async fn execute_tool_with_retry(
         &self,
         session: &dyn LlmSession,
@@ -1714,6 +1857,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let corrected_calls = parse_tool_calls(&response);
 
             if let Some(corrected) = corrected_calls.into_iter().next() {
+                // Verify corrected tool exists before retrying
+                if !self.tool_executor.has_tool(&corrected.tool_name) {
+                    warn!(
+                        "LLM suggested '{}' which also doesn't exist",
+                        corrected.tool_name
+                    );
+                    return result;
+                }
                 debug!(
                     "LLM provided corrected tool call with args: {:?}",
                     corrected.arguments
@@ -2041,9 +2192,40 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
 /// Check if a ToolResult error is retryable
 ///
-/// Retryable errors include:
-/// - INVALID_ARGUMENT: The tool was called with invalid arguments
-/// - NOT_FOUND: The requested tool doesn't exist (e.g., multi_tool_use.parallel)
+/// Determines whether a tool execution error should trigger a retry attempt
+/// with LLM correction.
+///
+/// # Retryable Error Codes
+///
+/// | Error Code | Category | Retry Strategy |
+/// |------------|----------|---------------|
+/// | `INVALID_ARGUMENT` | ValidationError | Send error message to LLM for correction |
+/// | `NOT_FOUND` | UnknownTool | Provide available tool list to LLM |
+///
+/// # Non-Retryable Errors
+///
+/// All other error codes (e.g., execution failures, permission errors) are
+/// considered non-retryable and returned immediately to the caller.
+///
+/// # Retry Flow
+///
+/// When a retryable error is detected, [`execute_tool_with_retry`] will:
+/// 1. Send a retry prompt to the LLM with error details
+/// 2. Parse the corrected tool call from the response
+/// 3. Retry execution up to `max_tool_retries` times
+///
+/// # Example
+///
+/// ```ignore
+/// let result = tool_executor.execute(&tool_call).await;
+/// if is_retryable_error(&result) {
+///     // Send retry prompt to LLM
+///     // Parse corrected call
+///     // Retry execution
+/// } else {
+///     // Return error immediately
+/// }
+/// ```
 fn is_retryable_error(result: &quorum_domain::ToolResult) -> bool {
     result
         .error()
@@ -2148,39 +2330,136 @@ fn parse_vote_score(response: &str) -> f64 {
 }
 
 /// Parse tool calls from model response
+///
+/// Supports multiple response formats for robustness:
+///
+/// # Supported Formats
+///
+/// 1. **Markdown Code Blocks** (Preferred)
+///    - ` ```tool ` blocks containing JSON
+///    - ` ```json ` blocks containing JSON
+///    - **Multiple blocks are supported** - all are parsed sequentially
+///
+///    ```markdown
+///    \`\`\`tool
+///    {
+///      "tool": "read_file",
+///      "args": {"path": "/test/file.txt"},
+///      "reasoning": "Need to check the contents"
+///    }
+///    \`\`\`
+///    ```
+///
+/// 2. **Raw JSON** (Fallback)
+///    - Entire response is valid JSON
+///    - Only single tool call supported
+///
+/// 3. **Embedded JSON** (Heuristic Fallback)
+///    - JSON embedded in text
+///    - Extracts content between first `{` and last `}`
+///    - Only single tool call supported
+///
+/// # Not Supported
+///
+/// - **JSON arrays**: `[{...}, {...}]` format is not parsed
+///   - Use multiple code blocks instead
+/// - **YAML format**: No YAML parser implemented
+/// - **Plain text**: Must be valid JSON structure
+///
+/// # Return Value
+///
+/// Returns `Vec<ToolCall>`:
+/// - Empty vec if no valid tool calls found
+/// - One or more `ToolCall` objects for successful parses
+/// - Invalid JSON in code blocks is skipped silently
+///
+/// # Examples
+///
+/// ```ignore
+/// // Single code block
+/// let response = r#"
+/// \`\`\`tool
+/// {"tool": "read_file", "args": {"path": "test.txt"}}
+/// \`\`\`
+/// "#;
+/// let calls = parse_tool_calls(response);
+/// assert_eq!(calls.len(), 1);
+///
+/// // Multiple code blocks (sequential)
+/// let response = r#"
+/// \`\`\`tool
+/// {"tool": "read_file", "args": {"path": "a.txt"}}
+/// \`\`\`
+/// \`\`\`tool
+/// {"tool": "read_file", "args": {"path": "b.txt"}}
+/// \`\`\`
+/// "#;
+/// let calls = parse_tool_calls(response);
+/// assert_eq!(calls.len(), 2);
+/// ```
 fn parse_tool_calls(response: &str) -> Vec<ToolCall> {
     let mut calls = Vec::new();
 
-    // Look for ```tool ... ``` blocks
-    let mut in_tool_block = false;
+    // Helper to parse a JSON value into a ToolCall
+    let parse_json_value = |parsed: &serde_json::Value| -> Option<ToolCall> {
+        if let Some(tool_name) = parsed.get("tool").and_then(|v| v.as_str()) {
+            let mut call = ToolCall::new(tool_name);
+
+            if let Some(args) = parsed.get("args").and_then(|v| v.as_object()) {
+                for (key, value) in args {
+                    call = call.with_arg(key, value.clone());
+                }
+            }
+
+            if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
+                call = call.with_reasoning(reasoning);
+            }
+            Some(call)
+        } else {
+            None
+        }
+    };
+
+    // Look for ```tool ... ``` or ```json ... ``` blocks
+    let mut in_block = false;
     let mut current_block = String::new();
 
     for line in response.lines() {
-        if line.trim() == "```tool" {
-            in_tool_block = true;
+        let trimmed = line.trim();
+        if trimmed == "```tool" || trimmed == "```json" {
+            in_block = true;
             current_block.clear();
-        } else if in_tool_block && line.trim() == "```" {
-            in_tool_block = false;
+        } else if in_block && trimmed == "```" {
+            in_block = false;
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&current_block)
-                && let Some(tool_name) = parsed.get("tool").and_then(|v| v.as_str())
-            {
-                let mut call = ToolCall::new(tool_name);
-
-                if let Some(args) = parsed.get("args").and_then(|v| v.as_object()) {
-                    for (key, value) in args {
-                        call = call.with_arg(key, value.clone());
-                    }
+                && let Some(call) = parse_json_value(&parsed) {
+                    calls.push(call);
                 }
-
-                if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
-                    call = call.with_reasoning(reasoning);
-                }
-
-                calls.push(call);
-            }
-        } else if in_tool_block {
+        } else if in_block {
             current_block.push_str(line);
             current_block.push('\n');
+        }
+    }
+
+    // If no calls found in blocks, try parsing the whole response as JSON
+    // or try finding a JSON object in the text even if not in a block (simple heuristic)
+    if calls.is_empty() {
+        // First try the whole response
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(response) {
+            if let Some(call) = parse_json_value(&parsed) {
+                calls.push(call);
+            }
+        } else {
+            // If that fails, try to find the first '{' and last '}' to extract JSON
+            if let Some(start) = response.find('{')
+                && let Some(end) = response.rfind('}')
+                    && end > start {
+                        let potential_json = &response[start..=end];
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(potential_json)
+                            && let Some(call) = parse_json_value(&parsed) {
+                                calls.push(call);
+                            }
+                    }
         }
     }
 
@@ -2281,6 +2560,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_tool_calls_json_block() {
+        let response = r#"
+I'll use the correct tool now.
+```json
+{
+  "tool": "read_file",
+  "args": {
+    "path": "/test/file.txt"
+  },
+  "reasoning": "Checking file"
+}
+```
+"#;
+        let calls = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1, "Should parse json block");
+        assert_eq!(calls[0].tool_name, "read_file");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_raw_json() {
+        let response = r#"{
+  "tool": "read_file",
+  "args": {
+    "path": "/test/file.txt"
+  },
+  "reasoning": "Checking file"
+}"#;
+        let calls = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1, "Should parse raw json");
+        assert_eq!(calls[0].tool_name, "read_file");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_embedded_json() {
+        let response = r#"
+Sure, here is the correct tool call:
+{
+  "tool": "read_file",
+  "args": {
+    "path": "/test/file.txt"
+  },
+  "reasoning": "Checking file"
+}
+Hope this helps!
+"#;
+        let calls = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1, "Should parse embedded json");
+        assert_eq!(calls[0].tool_name, "read_file");
+    }
+
+    #[test]
     fn test_parse_tool_calls() {
         let response = r#"
 Let me read the file.
@@ -2345,6 +2675,128 @@ Here's my plan:
         let response = "Just some text without any tool calls.";
         let calls = parse_tool_calls(response);
         assert!(calls.is_empty());
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[test]
+    fn test_parse_tool_calls_array_not_supported() {
+        // Array format is currently NOT supported
+        let response = r#"
+```tool
+[
+  {
+    "tool": "read_file",
+    "args": {"path": "file1.txt"}
+  },
+  {
+    "tool": "read_file",
+    "args": {"path": "file2.txt"}
+  }
+]
+```
+"#;
+        let calls = parse_tool_calls(response);
+        // Should return empty because we only handle single objects
+        assert_eq!(
+            calls.len(),
+            0,
+            "Array format is not supported - should return empty"
+        );
+    }
+
+    #[test]
+    fn test_parse_tool_calls_multiple_blocks_all_parsed() {
+        // Multiple code blocks: ALL are parsed sequentially
+        let response = r#"
+First tool:
+```tool
+{
+  "tool": "read_file",
+  "args": {"path": "a.txt"}
+}
+```
+
+Second tool:
+```tool
+{
+  "tool": "write_file",
+  "args": {"path": "b.txt", "content": "test"}
+}
+```
+"#;
+        let calls = parse_tool_calls(response);
+        // Current implementation parses ALL code blocks
+        assert_eq!(calls.len(), 2, "Should parse all code blocks");
+        assert_eq!(calls[0].tool_name, "read_file");
+        assert_eq!(calls[0].get_string("path"), Some("a.txt"));
+        assert_eq!(calls[1].tool_name, "write_file");
+        assert_eq!(calls[1].get_string("path"), Some("b.txt"));
+    }
+
+    #[test]
+    fn test_parse_tool_calls_malformed_json_in_block() {
+        // Malformed JSON should be skipped
+        let response = r#"
+```tool
+{
+  "tool": "read_file",
+  "args": {"path": "test.txt"  // missing closing brace
+}
+```
+"#;
+        let calls = parse_tool_calls(response);
+        assert_eq!(
+            calls.len(),
+            0,
+            "Malformed JSON should result in empty parse"
+        );
+    }
+
+    #[test]
+    fn test_parse_tool_calls_empty_code_block() {
+        let response = r#"
+```tool
+```
+"#;
+        let calls = parse_tool_calls(response);
+        assert!(calls.is_empty(), "Empty code block should result in empty parse");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_missing_tool_field() {
+        // JSON without "tool" field should be rejected
+        let response = r#"
+```tool
+{
+  "args": {"path": "test.txt"},
+  "reasoning": "Missing tool field"
+}
+```
+"#;
+        let calls = parse_tool_calls(response);
+        assert_eq!(
+            calls.len(),
+            0,
+            "JSON without 'tool' field should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_parse_tool_calls_optional_fields() {
+        // "reasoning" is optional
+        let response = r#"
+```tool
+{
+  "tool": "read_file",
+  "args": {"path": "/test/file.txt"}
+}
+```
+"#;
+        let calls = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "read_file");
+        // No reasoning field, should still work
     }
 
     #[test]
@@ -2418,5 +2870,34 @@ Here is my evaluation:
         let error = RunAgentError::EnsemblePlanningFailed("test error".to_string());
         assert_eq!(error.to_string(), "Ensemble planning failed: test error");
         assert!(!error.is_cancelled());
+    }
+
+    // ==================== Tool Resolution Tests ====================
+
+    #[test]
+    fn test_is_retryable_not_found() {
+        let result = quorum_domain::ToolResult::failure(
+            "bash",
+            quorum_domain::ToolError::not_found("Unknown tool: bash"),
+        );
+        assert!(is_retryable_error(&result));
+    }
+
+    #[test]
+    fn test_is_retryable_invalid_argument() {
+        let result = quorum_domain::ToolResult::failure(
+            "read_file",
+            quorum_domain::ToolError::invalid_argument("missing path"),
+        );
+        assert!(is_retryable_error(&result));
+    }
+
+    #[test]
+    fn test_is_not_retryable_execution_failed() {
+        let result = quorum_domain::ToolResult::failure(
+            "read_file",
+            quorum_domain::ToolError::execution_failed("disk error"),
+        );
+        assert!(!is_retryable_error(&result));
     }
 }

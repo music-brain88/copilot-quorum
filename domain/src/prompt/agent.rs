@@ -458,7 +458,9 @@ Provide the corrected tool call:
   }},
   "reasoning": "Explanation of what was fixed"
 }}
-```"#,
+```
+
+IMPORTANT: Respond with ONLY the ```tool code block. Do NOT include any text outside the block."#,
             tool_name = tool_name,
             error_message = error_message,
             args_json = args_json
@@ -494,16 +496,17 @@ The tool `{tool_name}` does not exist and cannot be used.
 {args_json}
 ```
 
-**IMPORTANT:** You MUST respond with ONLY a tool call block. Do NOT include any explanation or text outside the tool call block.
+## CRITICAL FORMAT REQUIREMENT
 
-Choose the correct tool from the available list and respond with EXACTLY this format:
+You MUST respond with ONLY a ```tool code block.
+- Do NOT include ANY text before or after the code block.
+- Do NOT explain or apologize.
+- Start your response IMMEDIATELY with ```tool
 
 ```tool
 {{
-  "tool": "run_command",
-  "args": {{
-    "command": "your command here"
-  }},
+  "tool": "<choose from available list>",
+  "args": {{ ... }},
   "reasoning": "brief explanation"
 }}
 ```"#,
@@ -857,8 +860,25 @@ mod tests {
         // Should include previous args for context
         assert!(prompt.contains("cargo test"));
         // Should strongly instruct tool call format
-        assert!(prompt.contains("MUST respond with ONLY a tool call block"));
+        assert!(prompt.contains("CRITICAL FORMAT REQUIREMENT"));
+        assert!(prompt.contains("Do NOT include ANY text"));
         // Should NOT contain the unknown tool name in the example
         assert!(!prompt.contains("\"tool\": \"bash\""));
+    }
+
+    #[test]
+    fn test_tool_not_found_retry_critical_format() {
+        let args = std::collections::HashMap::new();
+        let prompt = AgentPromptTemplate::tool_not_found_retry("bash", &["run_command"], &args);
+        assert!(prompt.contains("CRITICAL FORMAT REQUIREMENT"));
+        assert!(prompt.contains("Do NOT include ANY text"));
+    }
+
+    #[test]
+    fn test_tool_retry_format_instruction() {
+        let args = std::collections::HashMap::new();
+        let prompt = AgentPromptTemplate::tool_retry("read_file", "error", &args);
+        assert!(prompt.contains("ONLY"));
+        assert!(prompt.contains("tool code block"));
     }
 }
