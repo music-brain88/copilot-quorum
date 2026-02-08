@@ -31,3 +31,7 @@ anyhow = { workspace = true }
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[features]
+default = ["web-tools"]
+web-tools = ["quorum-infrastructure/web-tools"]

@@ -18,6 +18,9 @@ pub struct LocalToolExecutor {
     tool_spec: ToolSpec,
     /// Working directory for commands (None = current directory)
     working_dir: Option<String>,
+    /// HTTP client for web tools (only available with web-tools feature)
+    #[cfg(feature = "web-tools")]
+    http_client: reqwest::Client,
 }
 
 impl LocalToolExecutor {
@@ -26,6 +29,11 @@ impl LocalToolExecutor {
         Self {
             tool_spec: super::default_tool_spec(),
             working_dir: None,
+            #[cfg(feature = "web-tools")]
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to create HTTP client"),
         }
     }
 
@@ -34,6 +42,11 @@ impl LocalToolExecutor {
         Self {
             tool_spec: super::read_only_tool_spec(),
             working_dir: None,
+            #[cfg(feature = "web-tools")]
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to create HTTP client"),
         }
     }
 
@@ -42,6 +55,11 @@ impl LocalToolExecutor {
         Self {
             tool_spec,
             working_dir: None,
+            #[cfg(feature = "web-tools")]
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to create HTTP client"),
         }
     }
 
@@ -51,7 +69,7 @@ impl LocalToolExecutor {
         self
     }
 
-    /// Internal execute implementation
+    /// Internal execute implementation for synchronous tools
     fn execute_internal(&self, call: &ToolCall) -> ToolResult {
         // Check if tool exists
         let definition = match self.tool_spec.get(&call.tool_name) {
@@ -99,6 +117,54 @@ impl LocalToolExecutor {
             ),
         }
     }
+
+    /// Check if a tool call requires async execution (web tools)
+    #[cfg(feature = "web-tools")]
+    fn is_async_tool(name: &str) -> bool {
+        matches!(
+            name,
+            super::web::WEB_FETCH | super::web::WEB_SEARCH
+        )
+    }
+
+    /// Execute async tools (web tools)
+    #[cfg(feature = "web-tools")]
+    async fn execute_async(&self, call: &ToolCall) -> ToolResult {
+        // Check if tool exists
+        let definition = match self.tool_spec.get(&call.tool_name) {
+            Some(d) => d,
+            None => {
+                return ToolResult::failure(
+                    &call.tool_name,
+                    ToolError::not_found(format!("Unknown tool: {}", call.tool_name)),
+                );
+            }
+        };
+
+        // Validate the call
+        let validator = quorum_domain::tool::traits::DefaultToolValidator;
+        if let Err(e) =
+            quorum_domain::tool::traits::ToolValidator::validate(&validator, call, definition)
+        {
+            return ToolResult::failure(&call.tool_name, ToolError::invalid_argument(e));
+        }
+
+        match call.tool_name.as_str() {
+            super::web::WEB_FETCH => {
+                super::web::execute_web_fetch(&self.http_client, call).await
+            }
+            super::web::WEB_SEARCH => {
+                super::web::execute_web_search(&self.http_client, call).await
+            }
+            _ => ToolResult::failure(
+                &call.tool_name,
+                ToolError::execution_failed(format!(
+                    "Tool '{}' is not an async tool",
+                    call.tool_name
+                )),
+            ),
+        }
+    }
 }
 
 impl Default for LocalToolExecutor {
@@ -114,12 +180,34 @@ impl ToolExecutorPort for LocalToolExecutor {
     }
 
     async fn execute(&self, call: &ToolCall) -> ToolResult {
-        // For now, execute synchronously
-        // In the future, we could make file I/O and command execution truly async
+        #[cfg(feature = "web-tools")]
+        {
+            if Self::is_async_tool(&call.tool_name) {
+                return self.execute_async(call).await;
+            }
+        }
         self.execute_internal(call)
     }
 
     fn execute_sync(&self, call: &ToolCall) -> ToolResult {
+        #[cfg(feature = "web-tools")]
+        {
+            if Self::is_async_tool(&call.tool_name) {
+                // Web tools need async runtime — use block_on from current runtime
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    return tokio::task::block_in_place(|| {
+                        handle.block_on(self.execute_async(call))
+                    });
+                } else {
+                    return ToolResult::failure(
+                        &call.tool_name,
+                        ToolError::execution_failed(
+                            "Web tools require an async runtime".to_string(),
+                        ),
+                    );
+                }
+            }
+        }
         self.execute_internal(call)
     }
 }
@@ -240,5 +328,21 @@ mod tests {
         assert!(tools.contains(&"run_command"));
         assert!(tools.contains(&"glob_search"));
         assert!(tools.contains(&"grep_search"));
+    }
+
+    #[cfg(feature = "web-tools")]
+    #[test]
+    fn test_executor_has_web_tools() {
+        let executor = LocalToolExecutor::new();
+        assert!(executor.has_tool("web_fetch"));
+        assert!(executor.has_tool("web_search"));
+    }
+
+    #[cfg(feature = "web-tools")]
+    #[test]
+    fn test_executor_read_only_has_web_tools() {
+        let executor = LocalToolExecutor::read_only();
+        assert!(executor.has_tool("web_fetch"));
+        assert!(executor.has_tool("web_search"));
     }
 }

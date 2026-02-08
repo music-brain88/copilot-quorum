@@ -102,18 +102,55 @@ impl ToolParameter {
 #[derive(Debug, Clone, Default)]
 pub struct ToolSpec {
     tools: HashMap<String, ToolDefinition>,
+    /// Alias → canonical name mapping (e.g. "bash" → "run_command")
+    aliases: HashMap<String, String>,
 }
 
 impl ToolSpec {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            aliases: HashMap::new(),
         }
     }
 
     pub fn register(mut self, tool: ToolDefinition) -> Self {
         self.tools.insert(tool.name.clone(), tool);
         self
+    }
+
+    /// Register a single alias mapping (builder pattern)
+    pub fn register_alias(mut self, alias: impl Into<String>, canonical: impl Into<String>) -> Self {
+        self.aliases.insert(alias.into(), canonical.into());
+        self
+    }
+
+    /// Register multiple aliases at once (builder pattern)
+    pub fn register_aliases(mut self, mappings: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Self {
+        for (alias, canonical) in mappings {
+            self.aliases.insert(alias.into(), canonical.into());
+        }
+        self
+    }
+
+    /// Resolve an alias to its canonical name (aliases only, not canonical names)
+    pub fn resolve_alias(&self, name: &str) -> Option<&str> {
+        self.aliases.get(name).map(|s| s.as_str())
+    }
+
+    /// Resolve a name: returns canonical name if it's a registered tool,
+    /// or resolves alias, or None if unknown
+    pub fn resolve<'a>(&'a self, name: &'a str) -> Option<&'a str> {
+        if self.tools.contains_key(name) {
+            Some(name)
+        } else {
+            self.resolve_alias(name)
+        }
+    }
+
+    /// Get tool definition by canonical name or alias
+    pub fn get_resolved(&self, name: &str) -> Option<&ToolDefinition> {
+        self.resolve(name).and_then(|canonical| self.tools.get(canonical))
     }
 
     pub fn get(&self, name: &str) -> Option<&ToolDefinition> {
@@ -233,6 +270,75 @@ mod tests {
 
         assert_eq!(spec.high_risk_tools().count(), 1);
         assert_eq!(spec.low_risk_tools().count(), 1);
+    }
+
+    #[test]
+    fn test_tool_spec_aliases() {
+        let spec = ToolSpec::new()
+            .register(ToolDefinition::new("run_command", "Run command", RiskLevel::High))
+            .register(ToolDefinition::new("read_file", "Read file", RiskLevel::Low))
+            .register_alias("bash", "run_command")
+            .register_alias("shell", "run_command")
+            .register_alias("view", "read_file");
+
+        // resolve_alias only resolves aliases, not canonical names
+        assert_eq!(spec.resolve_alias("bash"), Some("run_command"));
+        assert_eq!(spec.resolve_alias("shell"), Some("run_command"));
+        assert_eq!(spec.resolve_alias("view"), Some("read_file"));
+        assert_eq!(spec.resolve_alias("run_command"), None);
+        assert_eq!(spec.resolve_alias("unknown"), None);
+
+        // resolve returns canonical for both registered tools and aliases
+        assert_eq!(spec.resolve("run_command"), Some("run_command"));
+        assert_eq!(spec.resolve("bash"), Some("run_command"));
+        assert_eq!(spec.resolve("read_file"), Some("read_file"));
+        assert_eq!(spec.resolve("view"), Some("read_file"));
+        assert_eq!(spec.resolve("unknown"), None);
+
+        // get_resolved returns tool definition via alias
+        assert_eq!(spec.get_resolved("bash").unwrap().name, "run_command");
+        assert_eq!(spec.get_resolved("run_command").unwrap().name, "run_command");
+        assert!(spec.get_resolved("unknown").is_none());
+    }
+
+    #[test]
+    fn test_tool_spec_register_aliases_batch() {
+        let spec = ToolSpec::new()
+            .register(ToolDefinition::new("grep_search", "Grep", RiskLevel::Low))
+            .register_aliases([
+                ("grep", "grep_search"),
+                ("rg", "grep_search"),
+                ("search", "grep_search"),
+            ]);
+
+        assert_eq!(spec.resolve("grep"), Some("grep_search"));
+        assert_eq!(spec.resolve("rg"), Some("grep_search"));
+        assert_eq!(spec.resolve("search"), Some("grep_search"));
+    }
+
+    #[test]
+    fn test_canonical_name_takes_priority_over_alias() {
+        // If a canonical name and alias collide, canonical wins in resolve()
+        let spec = ToolSpec::new()
+            .register(ToolDefinition::new("read_file", "Read file", RiskLevel::Low))
+            .register(ToolDefinition::new("view", "View tool", RiskLevel::Low))
+            .register_alias("view", "read_file"); // alias points to read_file, but "view" is also a tool
+
+        // resolve should return "view" as canonical since it's a registered tool
+        assert_eq!(spec.resolve("view"), Some("view"));
+        // get_resolved should return the "view" tool, not "read_file"
+        assert_eq!(spec.get_resolved("view").unwrap().name, "view");
+    }
+
+    #[test]
+    fn test_get_is_not_affected_by_aliases() {
+        let spec = ToolSpec::new()
+            .register(ToolDefinition::new("run_command", "Run", RiskLevel::High))
+            .register_alias("bash", "run_command");
+
+        // get() is exact match only - aliases don't work
+        assert!(spec.get("run_command").is_some());
+        assert!(spec.get("bash").is_none());
     }
 
     #[test]

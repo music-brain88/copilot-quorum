@@ -164,6 +164,18 @@ Create a step-by-step plan with:
    - Expected outcome
    - Any dependencies on other tasks
 
+## IMPORTANT: Correct Tool Names
+
+You MUST use the exact tool names listed below. Common mistakes are shown for reference.
+
+| Correct Name    | Common Mistakes (DO NOT USE)              |
+|-----------------|-------------------------------------------|
+| `read_file`     | `view`, `cat`, `open`                     |
+| `write_file`    | `edit`, `save`, `create_file`             |
+| `run_command`   | `bash`, `shell`, `execute`, `terminal`    |
+| `glob_search`   | `glob`, `find`, `find_files`, `list`      |
+| `grep_search`   | `grep`, `rg`, `search`, `ripgrep`, `find_in_files` |
+
 Format your plan as:
 
 ```plan

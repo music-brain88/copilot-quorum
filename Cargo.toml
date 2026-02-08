@@ -46,6 +46,12 @@ colored = "2.1"
 # Async traits
 async-trait = "0.1"
 
+# HTTP client (optional, for web tools)
+reqwest = { version = "0.12", features = ["json"] }
+
+# HTML parsing (optional, for web tools)
+scraper = "0.22"
+
 # Workspace crates
 quorum-domain = { path = "domain" }
 quorum-application = { path = "application" }
