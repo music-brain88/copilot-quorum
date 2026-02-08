@@ -147,6 +147,31 @@ domain/src/
 - New agent capability: Extend `domain/agent/` and `RunAgentUseCase`
 - New context file type: Add to `domain/context/` KnownContextFile enum
 
+### Tool Output Format Specification
+
+**Supported LLM Response Formats** (for tool calls):
+
+| Format | Priority | Multi-Tool? | Example |
+|--------|----------|-------------|---------|
+| ` ```tool ` block | 1 (Highest) | ✅ Sequential | Preferred in prompts |
+| ` ```json ` block | 2 | ✅ Sequential | Alternative markdown |
+| Raw JSON | 3 | ❌ Single only | Whole response is JSON |
+| Embedded JSON | 4 (Lowest) | ❌ Single only | Heuristic fallback |
+
+**Multi-Tool Execution**:
+- Multiple ` ```tool ` or ` ```json ` blocks → All parsed & executed sequentially
+- JSON array `[{...}, {...}]` → **Not supported** (use multiple blocks instead)
+
+**Retry Strategy** (for tool execution failures):
+- **Retryable errors**: `INVALID_ARGUMENT`, `NOT_FOUND`
+- **Max retries**: 2 attempts with LLM correction
+- **Non-retryable**: Execution errors returned immediately
+
+See `application/src/use_cases/run_agent.rs` for implementation details.
+- New tool: Add to `infrastructure/tools/`, register in `default_tool_spec()`
+- New agent capability: Extend `domain/agent/` and `RunAgentUseCase`
+- New context file type: Add to `domain/context/` KnownContextFile enum
+
 ### Vertical Slicing Principle
 
 When adding features, maintain the same domain structure across all layers:

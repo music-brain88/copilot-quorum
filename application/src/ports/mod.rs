@@ -7,3 +7,4 @@ pub mod human_intervention;
 pub mod llm_gateway;
 pub mod progress;
 pub mod tool_executor;
+pub mod ui_event;
