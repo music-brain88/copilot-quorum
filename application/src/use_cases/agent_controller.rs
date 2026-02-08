@@ -6,6 +6,7 @@
 
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
+use crate::ports::progress::NoProgress;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
     AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
@@ -14,7 +15,6 @@ use crate::ports::ui_event::{
 use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::{AgentProgressNotifier, RunAgentInput, RunAgentUseCase};
 use crate::use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
-use crate::ports::progress::NoProgress;
 use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
@@ -363,9 +363,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         match args.split_whitespace().next().unwrap_or("") {
             "quorum" | "q" => {
-                self.config = self.config.clone().with_orchestration_strategy(
-                    quorum_domain::OrchestrationStrategy::default(),
-                );
+                self.config = self
+                    .config
+                    .clone()
+                    .with_orchestration_strategy(quorum_domain::OrchestrationStrategy::default());
                 let _ = self.tx.send(UiEvent::StrategyChanged {
                     strategy: "quorum".to_string(),
                     description: "equal discussion + review + synthesis".to_string(),
@@ -509,11 +510,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Process a user request (run agent)
-    pub async fn process_request(
-        &mut self,
-        request: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) {
+    pub async fn process_request(&mut self, request: &str, progress: &dyn AgentProgressNotifier) {
         let _ = self.tx.send(UiEvent::AgentStarting {
             mode: self.consensus_level,
         });
@@ -529,13 +526,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     summary: output.summary.clone(),
                 });
 
-                let _ = self.tx.send(UiEvent::AgentResult(Box::new(AgentResultEvent {
-                    success: output.success,
-                    summary: output.summary,
-                    state: output.state.clone(),
-                    verbose: self.verbose,
-                    thoughts: output.state.thoughts.clone(),
-                })));
+                let _ = self
+                    .tx
+                    .send(UiEvent::AgentResult(Box::new(AgentResultEvent {
+                        success: output.success,
+                        summary: output.summary,
+                        state: output.state.clone(),
+                        verbose: self.verbose,
+                        thoughts: output.state.thoughts.clone(),
+                    })));
             }
             Err(e) => {
                 let cancelled = e.is_cancelled();
@@ -653,11 +652,7 @@ mod tests {
             false
         }
 
-        fn write_context_file(
-            &self,
-            _project_root: &Path,
-            _content: &str,
-        ) -> std::io::Result<()> {
+        fn write_context_file(&self, _project_root: &Path, _content: &str) -> std::io::Result<()> {
             Ok(())
         }
     }

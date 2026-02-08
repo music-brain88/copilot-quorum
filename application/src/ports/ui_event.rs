@@ -4,7 +4,9 @@
 //! The presentation layer receives these events and renders them appropriately
 //! (e.g., ReplPresenter for CLI, TuiPresenter for TUI in Phase 2).
 
-use quorum_domain::{AgentState, ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, Thought};
+use quorum_domain::{
+    AgentState, ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, Thought,
+};
 
 /// Events emitted by AgentController for presentation layer to render
 #[derive(Debug, Clone)]
@@ -36,15 +38,11 @@ pub enum UiEvent {
     /// Conversation history cleared
     HistoryCleared,
     /// Verbose mode status display
-    VerboseStatus {
-        enabled: bool,
-    },
+    VerboseStatus { enabled: bool },
 
     // === Agent Execution ===
     /// Agent execution starting
-    AgentStarting {
-        mode: ConsensusLevel,
-    },
+    AgentStarting { mode: ConsensusLevel },
     /// Agent execution completed with results
     AgentResult(Box<AgentResultEvent>),
     /// Agent execution failed
@@ -56,33 +54,23 @@ pub enum UiEvent {
     /// Quorum discussion completed
     QuorumResult(QuorumResultEvent),
     /// Quorum discussion failed
-    QuorumError {
-        error: String,
-    },
+    QuorumError { error: String },
 
     // === Context Initialization ===
     /// Context initialization starting
-    ContextInitStarting {
-        model_count: usize,
-    },
+    ContextInitStarting { model_count: usize },
     /// Context initialization completed
     ContextInitResult(ContextInitResultEvent),
     /// Context initialization failed
-    ContextInitError {
-        error: String,
-    },
+    ContextInitError { error: String },
     /// Context file already exists
     ContextAlreadyExists,
 
     // === Errors & Control ===
     /// Command usage/validation error
-    CommandError {
-        message: String,
-    },
+    CommandError { message: String },
     /// Unknown command entered
-    UnknownCommand {
-        command: String,
-    },
+    UnknownCommand { command: String },
     /// Exit message
     Exit,
 }

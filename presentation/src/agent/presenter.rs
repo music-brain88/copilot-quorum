@@ -257,10 +257,7 @@ impl ReplPresenter {
             snapshot.working_dir.as_deref().unwrap_or("(current)")
         );
         println!("  Verbose:           {}", snapshot.verbose);
-        println!(
-            "  History:           {} entries",
-            snapshot.history_count
-        );
+        println!("  History:           {} entries", snapshot.history_count);
         println!();
     }
 
