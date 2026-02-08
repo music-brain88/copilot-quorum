@@ -16,6 +16,12 @@ use quorum_domain::{ConsensusLevel, PhaseScope};
 /// Renders UiEvents to the terminal for the REPL
 pub struct ReplPresenter;
 
+impl Default for ReplPresenter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReplPresenter {
     pub fn new() -> Self {
         Self
@@ -411,12 +417,11 @@ impl ReplPresenter {
                 );
 
                 // Show failure reason if task failed
-                if task.status == quorum_domain::TaskStatus::Failed {
-                    if let Some(task_result) = &task.result {
-                        if let Some(error) = &task_result.error {
-                            println!("       {} {}", "└─".dimmed(), error.red());
-                        }
-                    }
+                if task.status == quorum_domain::TaskStatus::Failed
+                    && let Some(task_result) = &task.result
+                    && let Some(error) = &task_result.error
+                {
+                    println!("       {} {}", "└─".dimmed(), error.red());
                 }
             }
         } else {
