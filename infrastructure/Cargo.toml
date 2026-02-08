@@ -41,6 +41,16 @@ regex = "1"
 # CLI tool detection
 which = "7"
 
+# HTTP client (optional, for web tools)
+reqwest = { workspace = true, optional = true }
+
+# HTML parsing (optional, for web tools)
+scraper = { workspace = true, optional = true }
+
+[features]
+default = []
+web-tools = ["dep:reqwest", "dep:scraper"]
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros"] }

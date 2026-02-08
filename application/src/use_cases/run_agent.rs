@@ -606,7 +606,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 // Log the summary
                 info!("Ensemble planning result:\n{}", ensemble_result.summary());
 
-                state.set_plan(selected.plan.clone());
+                let mut selected_plan = selected.plan.clone();
+                resolve_plan_aliases(&mut selected_plan, self.tool_executor.tool_spec());
+                state.set_plan(selected_plan);
 
                 // Ensemble mode: voting is already done during plan generation
                 // Skip the separate review phase and mark as approved
@@ -653,6 +655,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             };
 
+            let mut plan = plan;
+            resolve_plan_aliases(&mut plan, self.tool_executor.tool_spec());
             state.set_plan(plan);
 
             // Phase 3: Plan Review (Quorum) - REQUIRED for Solo mode
@@ -1635,13 +1639,27 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
-    /// Pre-validate a tool call and resolve unknown tool names via LLM correction.
+    /// Pre-validate a tool call and resolve unknown tool names, supporting the
+    /// **Tool Name Alias System** and LLM-based correction as a fallback.
     ///
-    /// Called BEFORE action review and execution to avoid wasting API calls
-    /// on quorum review of nonexistent tools.
+    /// This is the central name resolution point in the agent execution pipeline,
+    /// called BEFORE Quorum review and execution to avoid wasting API calls on
+    /// nonexistent tools.
+    ///
+    /// # Resolution Strategy (3-tier)
+    ///
+    /// ```text
+    /// 1. Exact match    → has_tool(name)         → zero cost
+    /// 2. Alias resolve  → resolve_alias(name)    → zero cost, no LLM call
+    /// 3. LLM retry      → ask model to fix       → 1 API round-trip (fallback)
+    /// ```
+    ///
+    /// Tier 2 (alias resolution) eliminates the most common LLM mistakes
+    /// (`bash` → `run_command`, `grep` → `grep_search`, etc.) without any
+    /// additional API calls.
     ///
     /// Returns `Some(resolved_call)` if the tool exists or was successfully resolved,
-    /// `None` if the tool could not be resolved.
+    /// `None` if the tool could not be resolved after all tiers.
     async fn resolve_tool_call(
         &self,
         session: &dyn LlmSession,
@@ -1651,6 +1669,22 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Tool exists → no correction needed
         if self.tool_executor.has_tool(&tool_call.tool_name) {
             return Some(tool_call.clone());
+        }
+
+        // Alias resolution → zero-cost correction without LLM call
+        if let Some(canonical) = self
+            .tool_executor
+            .tool_spec()
+            .resolve_alias(&tool_call.tool_name)
+        {
+            debug!(
+                "Resolved tool alias '{}' → '{}'",
+                tool_call.tool_name, canonical
+            );
+            progress.on_tool_resolved(&tool_call.tool_name, canonical);
+            let mut resolved = tool_call.clone();
+            resolved.tool_name = canonical.to_string();
+            return Some(resolved);
         }
 
         // Unknown tool → notify + ask LLM for correction
@@ -2548,6 +2582,33 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
     Some(plan)
 }
 
+/// Resolve aliased tool names in plan tasks to their canonical names.
+///
+/// Part of the **Tool Name Alias System** — this function corrects
+/// LLM-hallucinated tool names at **plan time**, before the plan is
+/// submitted for Quorum review or task execution.
+///
+/// Called in both Solo and Ensemble planning paths, immediately before
+/// `state.set_plan()`.
+///
+/// # Example
+///
+/// If a plan task has `tool_name: Some("bash")`, this rewrites it to
+/// `tool_name: Some("run_command")` using [`ToolSpec::resolve_alias`].
+fn resolve_plan_aliases(plan: &mut Plan, tool_spec: &quorum_domain::tool::entities::ToolSpec) {
+    for task in &mut plan.tasks {
+        if let Some(ref tool_name) = task.tool_name
+            && let Some(canonical) = tool_spec.resolve_alias(tool_name)
+        {
+            debug!(
+                "Plan alias resolved: task '{}' tool '{}' → '{}'",
+                task.id, tool_name, canonical
+            );
+            task.tool_name = Some(canonical.to_string());
+        }
+    }
+}
+
 /// Generate a simple timestamp-based ID
 fn chrono_lite_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2904,5 +2965,46 @@ Here is my evaluation:
             quorum_domain::ToolError::execution_failed("disk error"),
         );
         assert!(!is_retryable_error(&result));
+    }
+
+    #[test]
+    fn test_resolve_plan_aliases() {
+        use quorum_domain::tool::entities::{RiskLevel, ToolDefinition, ToolSpec};
+
+        let tool_spec = ToolSpec::new()
+            .register(ToolDefinition::new("run_command", "Run", RiskLevel::High))
+            .register(ToolDefinition::new("read_file", "Read", RiskLevel::Low))
+            .register_alias("bash", "run_command")
+            .register_alias("view", "read_file");
+
+        let mut plan = Plan::new("Test", "Testing aliases")
+            .with_task(Task::new("1", "Run tests").with_tool("bash"))
+            .with_task(Task::new("2", "View file").with_tool("view"))
+            .with_task(Task::new("3", "Already correct").with_tool("run_command"))
+            .with_task(Task::new("4", "No tool"));
+
+        resolve_plan_aliases(&mut plan, &tool_spec);
+
+        assert_eq!(plan.tasks[0].tool_name.as_deref(), Some("run_command"));
+        assert_eq!(plan.tasks[1].tool_name.as_deref(), Some("read_file"));
+        assert_eq!(plan.tasks[2].tool_name.as_deref(), Some("run_command"));
+        assert_eq!(plan.tasks[3].tool_name, None);
+    }
+
+    #[test]
+    fn test_resolve_plan_aliases_unknown_stays() {
+        use quorum_domain::tool::entities::{RiskLevel, ToolDefinition, ToolSpec};
+
+        let tool_spec = ToolSpec::new()
+            .register(ToolDefinition::new("run_command", "Run", RiskLevel::High))
+            .register_alias("bash", "run_command");
+
+        let mut plan = Plan::new("Test", "Testing")
+            .with_task(Task::new("1", "Unknown tool").with_tool("nonexistent_tool"));
+
+        resolve_plan_aliases(&mut plan, &tool_spec);
+
+        // Unknown tool stays as-is (resolve_alias returns None)
+        assert_eq!(plan.tasks[0].tool_name.as_deref(), Some("nonexistent_tool"));
     }
 }

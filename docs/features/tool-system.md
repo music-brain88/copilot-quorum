@@ -51,12 +51,16 @@ glob_search = "fd"    # fd を使用（デフォルト: find）
 | `run_command` | **High** | シェルコマンド実行 | `command` (必須), `working_dir`, `timeout_secs` |
 | `glob_search` | Low | パターンによるファイル検索 | `pattern` (必須), `base_dir`, `max_results` |
 | `grep_search` | Low | ファイル内容の正規表現検索 | `pattern` (必須), `path` (必須), `file_pattern`, `context_lines`, `case_insensitive` |
+| `web_fetch` | Low | Web ページ取得・テキスト抽出 | `url` (必須), `max_length` |
+| `web_search` | Low | DuckDuckGo で Web 検索 | `query` (必須) |
+
+> **Note**: `web_fetch` と `web_search` は `web-tools` feature flag が有効な場合のみ利用可能です。
 
 ### Risk Classification / リスク分類
 
 | Risk Level | Behavior | Examples |
 |------------|----------|----------|
-| **Low** | 直接実行（レビューなし） | `read_file`, `glob_search`, `grep_search` |
+| **Low** | 直接実行（レビューなし） | `read_file`, `glob_search`, `grep_search`, `web_fetch`, `web_search` |
 | **High** | Quorum Consensus レビュー後に実行 | `write_file`, `run_command` |
 
 高リスクツールの特性:
@@ -93,6 +97,47 @@ glob_search = "fd"    # fd を使用（デフォルト: find）
 | **CLI** | 50 | 実装済み | システム CLI ツールのラッパー（grep/rg, find/fd） |
 | **Script** | 75 | 将来 | ユーザー定義スクリプト |
 | **MCP** | 100 | 将来 | MCP サーバー経由のツール |
+
+### Tool Name Alias System / ツール名エイリアスシステム
+
+LLM がツール名を間違えて呼び出す問題（`bash` → `run_command` 等）を解決するエイリアスシステムです。
+エイリアスは `resolve_tool_call()` と `resolve_plan_aliases()` で自動的に正規名に変換されるため、
+LLM への再問い合わせなしでゼロコスト解決されます。
+
+| Alias | Canonical Name |
+|-------|---------------|
+| `bash`, `shell`, `execute` | `run_command` |
+| `view`, `cat`, `open` | `read_file` |
+| `edit`, `save` | `write_file` |
+| `glob`, `find`, `find_files` | `glob_search` |
+| `grep`, `rg`, `search`, `ripgrep` | `grep_search` |
+| `fetch`, `browse` | `web_fetch` |
+| `web` | `web_search` |
+
+エイリアスは `ToolSpec::register_alias()` / `register_aliases()` で登録されます。
+`has_tool()` と `get()` は正規名のみ（exact match）で動作し、
+`resolve()` / `resolve_alias()` / `get_resolved()` がエイリアス解決を行います。
+
+### Web Tools / Web ツール (`web-tools` feature)
+
+Web ツールは `web-tools` feature flag で有効化されます（CLI crate ではデフォルト有効）。
+
+**`web_fetch`**: URL からページを取得し、HTML をテキストに変換して返します。
+- `script`, `style`, `noscript`, `svg` タグは除外
+- デフォルト最大 50KB のテキストを返却（`max_length` パラメータで変更可能）
+- レスポンスの最大サイズは 5MB
+
+**`web_search`**: DuckDuckGo Instant Answer API を使用した Web 検索。API Key 不要。
+- 即座に使える検索結果（Abstract, Answer, Definition, Related Topics）を返却
+- より詳細な情報が必要な場合は `web_fetch` で直接 URL にアクセス
+
+```bash
+# web-tools feature 付きでビルド（CLI はデフォルト有効）
+cargo build -p copilot-quorum
+
+# feature なしでビルド
+cargo build -p quorum-infrastructure --no-default-features
+```
 
 ### CLI Tool Enhancement / CLI ツールの強化
 
@@ -155,6 +200,9 @@ args = ["-y", "@anthropic/mcp-server-filesystem", "/workspace"]
 | `infrastructure/src/tools/file.rs` | `read_file`, `write_file` 実装 |
 | `infrastructure/src/tools/command.rs` | `run_command` 実装 |
 | `infrastructure/src/tools/search.rs` | `glob_search`, `grep_search` 実装 |
+| `infrastructure/src/tools/web/mod.rs` | Web ツールモジュール (`web-tools` feature) |
+| `infrastructure/src/tools/web/fetch.rs` | `web_fetch` 実装 |
+| `infrastructure/src/tools/web/search.rs` | `web_search` 実装 |
 
 ### Data Flow / データフロー
 
@@ -269,4 +317,4 @@ let registry = ToolRegistry::new()
 - [Quorum Discussion & Consensus](./quorum.md) - 高リスクツールの Consensus レビュー
 - [CLI & Configuration](./cli-and-configuration.md) - ツール設定の詳細
 
-<!-- LLM Context: Tool System はプラグインベースのアーキテクチャ。5つの組み込みツール（read_file, write_file, run_command, glob_search, grep_search）。RiskLevel で Low/High に分類。ToolRegistry が優先度ベースでプロバイダーをルーティング。主要ファイルは domain/src/tool/、application/src/ports/tool_executor.rs、infrastructure/src/tools/。 -->
+<!-- LLM Context: Tool System はプラグインベースのアーキテクチャ。5つの組み込みツール（read_file, write_file, run_command, glob_search, grep_search）+ 2つの Web ツール（web_fetch, web_search、web-tools feature flag）。RiskLevel で Low/High に分類。ToolSpec にエイリアスシステムがあり、LLM のツール名間違いをゼロコストで解決（bash→run_command 等）。ToolRegistry が優先度ベースでプロバイダーをルーティング。主要ファイルは domain/src/tool/、application/src/ports/tool_executor.rs、infrastructure/src/tools/。 -->

@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.5"
+version = "0.5.6"
 edition = "2024"
 authors = ["music-brain88"]
 license = "MIT OR Apache-2.0"
@@ -45,6 +45,12 @@ colored = "2.1"
 
 # Async traits
 async-trait = "0.1"
+
+# HTTP client (optional, for web tools)
+reqwest = { version = "0.12", features = ["json"] }
+
+# HTML parsing (optional, for web tools)
+scraper = "0.22"
 
 # Workspace crates
 quorum-domain = { path = "domain" }
