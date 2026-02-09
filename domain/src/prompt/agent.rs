@@ -1,6 +1,7 @@
 //! Prompt templates for the Agent system
 
 use crate::agent::{AgentContext, Plan, Task};
+use serde_json::json;
 
 /// Templates for generating agent prompts
 pub struct AgentPromptTemplate;
@@ -37,6 +38,69 @@ Structure your responses with clear sections:
 When you need to use a tool, simply call it using the available tool functions.
 Do not wrap tool calls in code blocks."#
             .to_string()
+    }
+
+    /// JSON Schema for the `create_plan` virtual tool.
+    ///
+    /// This is passed to `send_with_tools()` so the LLM returns a structured
+    /// plan via Native Tool Use rather than free-text. The schema includes
+    /// nested `tasks` array with objects — which `ToolDefinition`/`ToolParameter`
+    /// cannot express, so we build raw JSON Schema directly.
+    ///
+    /// This tool is NOT registered in `ToolSpec` or executed by `LocalToolExecutor`.
+    /// It is a "virtual" tool used only during the planning phase to extract
+    /// structured data from the LLM.
+    pub fn plan_tool_schema() -> serde_json::Value {
+        json!({
+            "name": "create_plan",
+            "description": "Create an execution plan. You MUST call this tool to submit your plan.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "description": "What we're trying to accomplish"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Why this approach makes sense"
+                    },
+                    "tasks": {
+                        "type": "array",
+                        "description": "Ordered list of tasks to execute",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "Unique task identifier"
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "description": "What this task does"
+                                },
+                                "tool": {
+                                    "type": "string",
+                                    "description": "Tool name to use (or null if no tool needed)"
+                                },
+                                "args": {
+                                    "type": "object",
+                                    "description": "Arguments for the tool"
+                                },
+                                "depends_on": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "IDs of tasks this depends on"
+                                }
+                            },
+                            "required": ["id", "description"]
+                        }
+                    }
+                },
+                "required": ["objective", "reasoning", "tasks"]
+            }
+        })
     }
 
     /// Prompt for context gathering phase
@@ -138,25 +202,9 @@ You MUST use the exact tool names listed below. Common mistakes are shown for re
 | `glob_search`   | `glob`, `find`, `find_files`, `list`      |
 | `grep_search`   | `grep`, `rg`, `search`, `ripgrep`, `find_in_files` |
 
-Format your plan as:
+## Submitting Your Plan
 
-```plan
-{{
-  "objective": "What we're trying to accomplish",
-  "reasoning": "Why this approach makes sense",
-  "tasks": [
-    {{
-      "id": "1",
-      "description": "What this task does",
-      "tool": "tool_name or null",
-      "args": {{}},
-      "depends_on": []
-    }}
-  ]
-}}
-```
-
-Be thorough but focused. Don't include unnecessary steps."#,
+Use the `create_plan` tool to submit your plan. Be thorough but focused. Don't include unnecessary steps."#,
             context_info = context_info,
             request = request,
             feedback_section = feedback_section
@@ -644,6 +692,21 @@ mod tests {
         assert!(prompt.contains("rust"));
         assert!(prompt.contains("objective"));
         assert!(prompt.contains("tasks"));
+        // Should reference create_plan tool, not ```plan block
+        assert!(prompt.contains("create_plan"));
+        assert!(!prompt.contains("```plan"));
+    }
+
+    #[test]
+    fn test_plan_tool_schema() {
+        let schema = AgentPromptTemplate::plan_tool_schema();
+        assert_eq!(schema["name"], "create_plan");
+        assert_eq!(schema["input_schema"]["type"], "object");
+        let required = schema["input_schema"]["required"]
+            .as_array()
+            .expect("required should be array");
+        assert_eq!(required.len(), 3);
+        assert!(schema["input_schema"]["properties"]["tasks"]["minItems"] == 1);
     }
 
     #[test]
