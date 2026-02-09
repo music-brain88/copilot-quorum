@@ -81,6 +81,18 @@ impl RunAgentError {
     }
 }
 
+/// Result of the planning phase.
+///
+/// When the LLM determines a request doesn't need a plan (e.g., greetings,
+/// questions), it returns text without calling `create_plan`. This enum
+/// distinguishes that case from a successful plan creation.
+enum PlanningResult {
+    /// LLM created a structured plan
+    Plan(Plan),
+    /// LLM responded with text only (no plan needed)
+    TextResponse(String),
+}
+
 /// Input for the RunAgent use case
 #[derive(Debug, Clone)]
 pub struct RunAgentInput {
@@ -689,13 +701,23 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 )
                 .await
             {
-                Ok(plan) => {
+                Ok(PlanningResult::Plan(plan)) => {
                     state.add_thought(Thought::planning(format!(
                         "Created plan with {} tasks: {}",
                         plan.tasks.len(),
                         plan.objective
                     )));
                     plan
+                }
+                Ok(PlanningResult::TextResponse(text)) => {
+                    // LLM determined no plan is needed — return text response directly
+                    state.add_thought(Thought::observation("No plan needed for this request"));
+                    state.complete();
+                    return Ok(RunAgentOutput {
+                        summary: text,
+                        success: true,
+                        state,
+                    });
                 }
                 Err(e) => {
                     state.fail(format!("Planning failed: {}", e));
@@ -1152,7 +1174,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         context: &AgentContext,
         previous_feedback: Option<&str>,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<Plan, RunAgentError> {
+    ) -> Result<PlanningResult, RunAgentError> {
         let prompt =
             AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
         let plan_tool = AgentPromptTemplate::plan_tool_schema();
@@ -1166,10 +1188,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Err(e) => return Err(RunAgentError::PlanningFailed(e.to_string())),
         };
 
-        // Extract plan from tool use or fallback to text parsing
-        extract_plan_from_response(&response).ok_or_else(|| {
-            RunAgentError::PlanningFailed("Failed to parse plan from model response".to_string())
-        })
+        // Extract plan from tool use or fallback to text response
+        if let Some(plan) = extract_plan_from_response(&response) {
+            return Ok(PlanningResult::Plan(plan));
+        }
+
+        // No plan found — LLM responded with text only (e.g., greeting, question)
+        let text = response.text_content();
+        if !text.is_empty() {
+            return Ok(PlanningResult::TextResponse(text));
+        }
+
+        Err(RunAgentError::PlanningFailed(
+            "No plan or text response from model".to_string(),
+        ))
     }
 
     /// Create plans using ensemble approach (multiple models generate independently, then vote)
@@ -3320,51 +3352,69 @@ Here is my evaluation:
     // ==================== Plan Parse Failure Flow Tests ====================
 
     #[tokio::test]
-    async fn test_plain_text_plan_response_fails_gracefully() {
-        // LLM がテキストだけ返した時、"Completed 0/0 tasks" ではなく失敗するべき
+    async fn test_text_response_without_plan_succeeds() {
+        // LLM がプラン不要と判断してテキストだけ返した場合、正常終了するべき
         let (result, progress) = FlowTestBuilder::solo_fast()
             .with_plan_response(ScriptedResponse::Text(
-                "I'll organize the steps for you! Let me check the current state.".into(),
+                "Hello! How can I help you today?".into(),
             ))
             .execute()
             .await;
 
         let output = result.expect("should return output (not panic)");
         assert!(
-            !output.success,
-            "Agent should fail when plan has no tasks, got: {}",
+            output.success,
+            "Agent should succeed with text-only response, got: {}",
             output.summary
         );
+        assert_eq!(output.summary, "Hello! How can I help you today?");
         // Planning should have been attempted
         assert!(progress.has_phase(&AgentPhase::Planning));
-        // Execution should NOT have been reached
+        // Execution should NOT have been reached (no plan = no execution)
         assert!(
             !progress.has_phase(&AgentPhase::Executing),
-            "Should not reach execution with invalid plan"
+            "Should not reach execution with text-only response"
         );
+        // State should be completed
+        assert_eq!(output.state.phase, AgentPhase::Completed);
     }
 
     #[tokio::test]
-    async fn test_empty_tasks_plan_response_fails_gracefully() {
-        // タスク 0 個のプランでも同様に失敗するべき
-        let empty_plan = r#"```plan
-{
-  "objective": "Do something",
-  "reasoning": "because",
-  "tasks": []
-}
-```"#;
+    async fn test_empty_tasks_native_tool_use_falls_back_to_text() {
+        // Native Tool Use で create_plan を呼んだがタスク 0 個の場合、
+        // extract_plan_from_response が None → テキストフォールバック
+        let mut input = HashMap::new();
+        input.insert("objective".to_string(), serde_json::json!("Do something"));
+        input.insert("reasoning".to_string(), serde_json::json!("because"));
+        input.insert("tasks".to_string(), serde_json::json!([]));
+
+        // ToolUse with empty tasks + text content
+        let response = LlmResponse {
+            content: vec![
+                ContentBlock::Text("I'll help with that.".to_string()),
+                ContentBlock::ToolUse {
+                    id: "toolu_001".to_string(),
+                    name: "create_plan".to_string(),
+                    input,
+                },
+            ],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        };
+
         let (result, progress) = FlowTestBuilder::solo_fast()
-            .with_plan_response(ScriptedResponse::Text(empty_plan.into()))
+            .with_plan_response(ScriptedResponse::Response(response))
             .execute()
             .await;
 
         let output = result.expect("should return output (not panic)");
+        // Empty tasks → extract fails → text fallback → success
         assert!(
-            !output.success,
-            "Agent should fail when plan has empty tasks, got: {}",
+            output.success,
+            "Agent should succeed with text fallback, got: {}",
             output.summary
         );
+        assert_eq!(output.summary, "I'll help with that.");
         assert!(progress.has_phase(&AgentPhase::Planning));
         assert!(!progress.has_phase(&AgentPhase::Executing));
     }
