@@ -660,9 +660,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 {
                     Ok(EnsemblePlanningOutcome::Plans(result)) => result,
                     Ok(EnsemblePlanningOutcome::TextResponse(text)) => {
-                        state.add_thought(Thought::observation(
-                            "No plan needed for this request",
-                        ));
+                        state.add_thought(Thought::observation("No plan needed for this request"));
                         state.complete();
                         return Ok(RunAgentOutput {
                             summary: text,
@@ -1380,7 +1378,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if candidates.len() == 1 {
             // Only one plan succeeded, use it directly
             info!("Only one plan generated, selecting it directly");
-            return Ok(EnsemblePlanningOutcome::Plans(EnsemblePlanResult::new(candidates, 0)));
+            return Ok(EnsemblePlanningOutcome::Plans(EnsemblePlanResult::new(
+                candidates, 0,
+            )));
         }
 
         // Step 2: Each model votes on the other models' plans
@@ -3247,7 +3247,10 @@ Here is my evaluation:
         }
 
         /// Replace ensemble planning responses for all review models
-        fn with_ensemble_plan_responses(mut self, responses: Vec<(Model, ScriptedResponse)>) -> Self {
+        fn with_ensemble_plan_responses(
+            mut self,
+            responses: Vec<(Model, ScriptedResponse)>,
+        ) -> Self {
             let mut gateway = ScriptedGateway::new();
 
             // Context gathering session
