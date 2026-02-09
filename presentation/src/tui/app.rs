@@ -115,13 +115,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     // -- Builder methods (delegate to controller via commands) --
 
-    pub fn with_verbose(self, _verbose: bool) -> Self {
-        // TODO: send SetVerbose command to controller
+    pub fn with_verbose(self, verbose: bool) -> Self {
+        let _ = self.cmd_tx.send(TuiCommand::SetVerbose(verbose));
         self
     }
 
-    pub fn with_cancellation(self, _token: CancellationToken) -> Self {
-        // TODO: send cancellation to controller
+    pub fn with_cancellation(self, token: CancellationToken) -> Self {
+        let _ = self.cmd_tx.send(TuiCommand::SetCancellation(token));
         self
     }
 
@@ -707,6 +707,12 @@ async fn controller_task<
                     }
                     CommandAction::Continue => {}
                 }
+            }
+            TuiCommand::SetVerbose(verbose) => {
+                controller.set_verbose(verbose);
+            }
+            TuiCommand::SetCancellation(token) => {
+                controller.set_cancellation(token);
             }
             TuiCommand::Quit => {
                 break;

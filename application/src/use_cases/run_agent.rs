@@ -21,8 +21,8 @@ use quorum_domain::core::string::truncate;
 use quorum_domain::session::response::{ContentBlock, LlmResponse};
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
-    HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
-    StreamEvent, Task, TaskId, Thought,
+    HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, PromptTemplate,
+    ReviewRound, StreamEvent, Task, TaskId, Thought,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -101,6 +101,8 @@ enum PlanningResult {
 enum EnsemblePlanningOutcome {
     /// Multiple models generated plans, voted, and selected one
     Plans(EnsemblePlanResult),
+    /// All models returned text responses (no plan needed) — moderator-synthesized
+    TextResponse(String),
 }
 
 /// Input for the RunAgent use case
@@ -408,6 +410,23 @@ pub struct RunAgentUseCase<
     human_intervention: Option<Arc<dyn HumanInterventionPort>>,
 }
 
+impl<G, T, C> Clone for RunAgentUseCase<G, T, C>
+where
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            gateway: self.gateway.clone(),
+            tool_executor: self.tool_executor.clone(),
+            context_loader: self.context_loader.clone(),
+            cancellation_token: self.cancellation_token.clone(),
+            human_intervention: self.human_intervention.clone(),
+        }
+    }
+}
+
 /// No-op context loader for backwards compatibility
 pub struct NoContextLoader;
 
@@ -695,6 +714,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             selected.average_score()
                         )));
                         break; // Exit loop and proceed to Phase 4
+                    }
+                    Ok(EnsemblePlanningOutcome::TextResponse(text)) => {
+                        state.add_thought(Thought::observation(
+                            "No plan needed — ensemble text responses synthesized",
+                        ));
+                        state.complete();
+                        return Ok(RunAgentOutput {
+                            summary: text,
+                            success: true,
+                            state,
+                        });
                     }
                     Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
                     Err(e) => {
@@ -1310,8 +1340,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     )
                     .await
                     {
-                        Ok(PlanningResult::Plan(plan)) => return (model, Ok(Some(plan))),
-                        Ok(_) => return (model, Ok(None)), // text-only
+                        Ok(result @ PlanningResult::Plan(_)) => return (model, Ok(result)),
+                        Ok(result @ PlanningResult::TextResponse(_)) => return (model, Ok(result)),
                         Err(e) if attempt == 0 => {
                             warn!("Model {} attempt 1 failed, retrying: {}", model, e);
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1325,6 +1355,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         // Collect generated plans with cancellation support
         let mut candidates: Vec<PlanCandidate> = Vec::new();
+        let mut text_responses: Vec<(String, String)> = Vec::new();
         let mut failed_count = 0usize;
 
         loop {
@@ -1346,15 +1377,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             };
 
             match result {
-                Ok((model, Ok(Some(plan)))) => {
+                Ok((model, Ok(PlanningResult::Plan(plan)))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
                     progress.on_ensemble_plan_generated(&model);
                     candidates.push(PlanCandidate::new(model, plan));
                 }
-                Ok((model, Ok(None))) => {
-                    info!("Model {} returned text only (no plan)", model);
-                    progress.on_ensemble_model_failed(&model, "returned text only (no plan)");
-                    failed_count += 1;
+                Ok((model, Ok(PlanningResult::TextResponse(text)))) => {
+                    info!("Model {} returned text response (no plan)", model);
+                    text_responses.push((model.to_string(), text));
                 }
                 Ok((model, Err(e))) => {
                     warn!("Model {} failed to generate plan: {}", model, e);
@@ -1369,6 +1399,21 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         if candidates.is_empty() {
+            if !text_responses.is_empty() {
+                // All models returned text responses — synthesize via moderator
+                info!(
+                    "All models returned text responses ({} total), synthesizing via moderator",
+                    text_responses.len()
+                );
+                let synthesized = self
+                    .synthesize_text_responses(
+                        &input.request,
+                        &text_responses,
+                        &input.config.decision_model,
+                    )
+                    .await?;
+                return Ok(EnsemblePlanningOutcome::TextResponse(synthesized));
+            }
             return Err(RunAgentError::EnsemblePlanningFailed(format!(
                 "All {} models failed to generate plans",
                 failed_count
@@ -1466,6 +1511,34 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         Ok(EnsemblePlanningOutcome::Plans(result))
+    }
+
+    /// Synthesize text responses from multiple models using a moderator.
+    ///
+    /// Reuses the Quorum Discussion synthesis pattern
+    /// ([`PromptTemplate::synthesis_system`] + [`PromptTemplate::synthesis_prompt_no_reviews`]).
+    async fn synthesize_text_responses(
+        &self,
+        question: &str,
+        responses: &[(String, String)],
+        moderator: &Model,
+    ) -> Result<String, RunAgentError> {
+        let session = self
+            .gateway
+            .create_session_with_system_prompt(moderator, PromptTemplate::synthesis_system())
+            .await
+            .map_err(|e| {
+                RunAgentError::EnsemblePlanningFailed(format!(
+                    "Failed to create synthesis session: {}",
+                    e
+                ))
+            })?;
+
+        let prompt = PromptTemplate::synthesis_prompt_no_reviews(question, responses);
+
+        session.send(&prompt).await.map_err(|e| {
+            RunAgentError::EnsemblePlanningFailed(format!("Text synthesis failed: {}", e))
+        })
     }
 
     /// Determine the appropriate model for a task based on tool risk level
@@ -3295,8 +3368,14 @@ Here is my evaluation:
             );
 
             // Custom planning sessions for each model
+            // Error responses are duplicated so the retry attempt also gets an error
+            // (otherwise the retry would get a default text response from ScriptedSession)
             for (model, response) in responses {
-                gateway.add_session(&model.to_string(), vec![response]);
+                let responses = match &response {
+                    ScriptedResponse::Error(_) => vec![response.clone(), response],
+                    _ => vec![response],
+                };
+                gateway.add_session(&model.to_string(), responses);
             }
 
             self.gateway = gateway;
@@ -3600,8 +3679,8 @@ Here is my evaluation:
     // ==================== Ensemble Planning Flow Tests ====================
 
     #[tokio::test]
-    async fn test_ensemble_all_text_response_falls_back_to_solo() {
-        // 全モデルがテキストのみ返した場合、Solo フォールバックで成功するべき
+    async fn test_ensemble_all_text_response_synthesized() {
+        // 全モデルがテキストのみ返した場合、モデレーター合成で成功するべき
         let mut builder = FlowTestBuilder::ensemble_fast().with_ensemble_plan_responses(vec![
             (
                 Model::ClaudeHaiku45,
@@ -3613,32 +3692,32 @@ Here is my evaluation:
             ),
         ]);
 
-        // Solo fallback needs a planning session for decision_model
+        // Moderator synthesis session (decision_model = ClaudeSonnet45)
         builder.gateway.add_session(
             &Model::ClaudeSonnet45.to_string(),
-            vec![make_plan_response("Solo fallback plan")],
-        );
-        // Solo execution session
-        builder.gateway.add_session(
-            &Model::ClaudeSonnet45.to_string(),
-            vec![ScriptedResponse::Response(LlmResponse::from_text(
-                "Task completed",
-            ))],
+            vec![ScriptedResponse::Text(
+                "Synthesized: Both models offered to help.".into(),
+            )],
         );
 
         let (result, progress) = builder.execute().await;
 
-        let output = result.expect("should succeed via solo fallback");
+        let output = result.expect("should succeed via text synthesis");
         assert!(
             output.success,
-            "Should succeed via solo fallback, got: {}",
+            "Should succeed with synthesized text response, got: {}",
             output.summary
         );
         assert!(progress.has_phase(&AgentPhase::Planning));
-        // Solo fallback should create a plan
+        // No plan should be set — text responses don't generate plans
         assert!(
-            output.state.plan.is_some(),
-            "Plan should be set from solo fallback"
+            output.state.plan.is_none(),
+            "No plan should be set for text-only responses"
+        );
+        assert!(
+            output.summary.contains("Synthesized"),
+            "Summary should contain synthesized text, got: {}",
+            output.summary
         );
     }
 
