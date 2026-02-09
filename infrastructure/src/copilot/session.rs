@@ -10,11 +10,13 @@ use crate::copilot::protocol::{
 };
 use crate::copilot::transport::{StdioTransport, StreamingOutcome};
 use async_trait::async_trait;
-use quorum_application::ports::llm_gateway::{GatewayError, LlmSession, StreamHandle, ToolResultMessage};
+use quorum_application::ports::llm_gateway::{
+    GatewayError, LlmSession, StreamHandle, ToolResultMessage,
+};
 use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
 use quorum_domain::{Model, StreamEvent};
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -226,10 +228,13 @@ impl CopilotSession {
             tools: Some(copilot_tools),
         };
 
-        let request = JsonRpcRequest::new("session.create", Some(
-            serde_json::to_value(&params)
-                .map_err(|e| GatewayError::RequestFailed(e.to_string()))?,
-        ));
+        let request = JsonRpcRequest::new(
+            "session.create",
+            Some(
+                serde_json::to_value(&params)
+                    .map_err(|e| GatewayError::RequestFailed(e.to_string()))?,
+            ),
+        );
 
         self.transport
             .send_request(&request)
@@ -250,10 +255,13 @@ impl CopilotSession {
             prompt: content.to_string(),
         };
 
-        let send_request = JsonRpcRequest::new("session.send", Some(
-            serde_json::to_value(&send_params)
-                .map_err(|e| GatewayError::RequestFailed(e.to_string()))?,
-        ));
+        let send_request = JsonRpcRequest::new(
+            "session.send",
+            Some(
+                serde_json::to_value(&send_params)
+                    .map_err(|e| GatewayError::RequestFailed(e.to_string()))?,
+            ),
+        );
 
         let response = self
             .transport
@@ -326,9 +334,7 @@ impl CopilotSession {
 
                 // Parse arguments from the tool call
                 let input = if let Some(obj) = params.arguments.as_object() {
-                    obj.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
+                    obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
                 } else {
                     std::collections::HashMap::new()
                 };
@@ -413,9 +419,7 @@ impl LlmSession for CopilotSession {
             })?;
 
             let pending = state.pending_tool_call.take().ok_or_else(|| {
-                GatewayError::RequestFailed(
-                    "No pending tool call to respond to".to_string(),
-                )
+                GatewayError::RequestFailed("No pending tool call to respond to".to_string())
             })?;
 
             (pending.request_id, state.session_id.clone())

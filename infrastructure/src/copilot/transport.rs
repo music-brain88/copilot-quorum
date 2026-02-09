@@ -479,10 +479,7 @@ impl StdioTransport {
                                 )
                             })?;
 
-                        debug!(
-                            "Received tool.call: {} (id={})",
-                            params.tool_name, id
-                        );
+                        debug!("Received tool.call: {} (id={})", params.tool_name, id);
 
                         return Ok(StreamingOutcome::ToolCall {
                             text_so_far: full_content,
@@ -496,8 +493,8 @@ impl StdioTransport {
                     debug!("Skipping response in streaming: {}", body_str);
                 }
                 MessageKind::Notification => {
-                    let notification: JsonRpcNotification =
-                        serde_json::from_value(json_value).map_err(|e| {
+                    let notification: JsonRpcNotification = serde_json::from_value(json_value)
+                        .map_err(|e| {
                             warn!("Failed to parse notification: {}", body_str);
                             CopilotError::ParseError {
                                 error: e.to_string(),
@@ -508,8 +505,7 @@ impl StdioTransport {
                     if notification.method == "session.event"
                         && let Some(params) = notification.params
                         && let Some(event) = params.get("event")
-                        && let Some(event_type) =
-                            event.get("type").and_then(|t| t.as_str())
+                        && let Some(event_type) = event.get("type").and_then(|t| t.as_str())
                     {
                         match event_type {
                             "assistant.message.delta" => {
