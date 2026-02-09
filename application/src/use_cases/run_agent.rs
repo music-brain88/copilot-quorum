@@ -10,13 +10,14 @@
 
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
-use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
+use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::core::string::truncate;
+use quorum_domain::session::response::LlmResponse;
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
     HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
-    StreamEvent, Task, TaskId, Thought, ToolCall,
+    StreamEvent, Task, TaskId, Thought,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -482,12 +483,51 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     progress.on_llm_stream_end();
                     return Err(RunAgentError::GatewayError(GatewayError::RequestFailed(e)));
                 }
+                Some(StreamEvent::CompletedResponse(response)) => {
+                    let text = response.text_content();
+                    if full_text.is_empty() {
+                        full_text = text;
+                    }
+                    break;
+                }
+                Some(StreamEvent::ToolCallDelta { .. }) => {
+                    // Tool call deltas handled in Native path — skip in text collection
+                }
                 None => break, // channel closed
             }
         }
 
         progress.on_llm_stream_end();
         Ok(full_text)
+    }
+
+    /// Send a prompt with tools to the LLM with cancellation support (Native Tool Use path).
+    ///
+    /// Returns the full `LlmResponse` with structured content blocks.
+    /// This is the Native counterpart of `send_with_cancellation()`.
+    async fn send_with_tools_cancellable(
+        &self,
+        session: &dyn LlmSession,
+        prompt: &str,
+        tools: &[serde_json::Value],
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<LlmResponse, RunAgentError> {
+        self.check_cancelled()?;
+        progress.on_llm_stream_start("native_tool_use");
+
+        let response = session
+            .send_with_tools(prompt, tools)
+            .await
+            .map_err(RunAgentError::GatewayError)?;
+
+        // Forward any text content to progress
+        let text = response.text_content();
+        if !text.is_empty() {
+            progress.on_llm_chunk(&text);
+        }
+
+        progress.on_llm_stream_end();
+        Ok(response)
     }
 
     /// Execute the agent without progress reporting
@@ -511,7 +551,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let mut state = AgentState::new(agent_id, &input.request, input.config.clone());
 
         // Create system prompt (shared across phases)
-        let system_prompt = AgentPromptTemplate::agent_system(self.tool_executor.tool_spec());
+        let system_prompt = AgentPromptTemplate::agent_system();
 
         // ==================== Phase 1: Context Gathering ====================
         // Uses exploration_model (default: Haiku - cheap for info collection)
@@ -606,9 +646,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 // Log the summary
                 info!("Ensemble planning result:\n{}", ensemble_result.summary());
 
-                let mut selected_plan = selected.plan.clone();
-                resolve_plan_aliases(&mut selected_plan, self.tool_executor.tool_spec());
-                state.set_plan(selected_plan);
+                state.set_plan(selected.plan.clone());
 
                 // Ensemble mode: voting is already done during plan generation
                 // Skip the separate review phase and mark as approved
@@ -655,8 +693,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             };
 
-            let mut plan = plan;
-            resolve_plan_aliases(&mut plan, self.tool_executor.tool_spec());
             state.set_plan(plan);
 
             // Phase 3: Plan Review (Quorum) - REQUIRED for Solo mode
@@ -945,11 +981,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             context = context.with_project_root(working_dir);
         }
 
-        // Ask the model to gather context using tools
+        // Ask the model to gather context using tools (Native multi-turn loop)
         let prompt = AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
+        let tools = self.tool_executor.tool_spec().to_api_tools();
+        let max_turns = config.max_tool_turns;
+        let mut turn_count = 0;
+        let mut results = Vec::new();
 
-        let response = match self
-            .send_with_cancellation(session, &prompt, progress)
+        let mut response = match self
+            .send_with_tools_cancellable(session, &prompt, &tools, progress)
             .await
         {
             Ok(response) => response,
@@ -957,32 +997,71 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Err(e) => return Err(RunAgentError::ContextGatheringFailed(e.to_string())),
         };
 
-        // Parse tool calls from response and execute them
-        let tool_calls = parse_tool_calls(&response);
-        let mut results = Vec::new();
+        loop {
+            let tool_calls = response.tool_calls();
+            if tool_calls.is_empty() {
+                break;
+            }
 
-        for call in tool_calls {
-            progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+            turn_count += 1;
+            if turn_count > max_turns {
+                break;
+            }
 
-            let result = self.tool_executor.execute(&call).await;
-            let success = result.is_success();
+            self.check_cancelled()?;
 
-            progress.on_tool_result(&call.tool_name, success);
+            let mut tool_result_messages = Vec::new();
 
-            if success && let Some(output) = result.output() {
-                results.push((call.tool_name.clone(), output.to_string()));
+            for call in &tool_calls {
+                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
 
-                // Try to detect project type from common files
-                if call.tool_name == "glob_search" || call.tool_name == "read_file" {
-                    if output.contains("Cargo.toml") {
-                        context = context.with_project_type("rust");
-                    } else if output.contains("package.json") {
-                        context = context.with_project_type("nodejs");
-                    } else if output.contains("pyproject.toml") || output.contains("setup.py") {
-                        context = context.with_project_type("python");
+                let result = self.tool_executor.execute(call).await;
+                let success = result.is_success();
+                progress.on_tool_result(&call.tool_name, success);
+
+                let (is_error, output) = if success {
+                    let output = result.output().unwrap_or("").to_string();
+                    results.push((call.tool_name.clone(), output.clone()));
+
+                    // Try to detect project type from common files
+                    if call.tool_name == "glob_search" || call.tool_name == "read_file" {
+                        if output.contains("Cargo.toml") {
+                            context = context.with_project_type("rust");
+                        } else if output.contains("package.json") {
+                            context = context.with_project_type("nodejs");
+                        } else if output.contains("pyproject.toml") || output.contains("setup.py") {
+                            context = context.with_project_type("python");
+                        }
                     }
+
+                    (false, output)
+                } else {
+                    let msg = result
+                        .error()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    (true, msg)
+                };
+
+                if let Some(native_id) = call.native_id.clone() {
+                    tool_result_messages.push(ToolResultMessage {
+                        tool_use_id: native_id,
+                        tool_name: call.tool_name.clone(),
+                        output,
+                        is_error,
+                    });
+                } else {
+                    warn!(
+                        "Missing native_id for tool call '{}'; skipping result.",
+                        call.tool_name
+                    );
                 }
             }
+
+            response = session
+                .send_tool_results(&tool_result_messages)
+                .await
+                .map_err(|e| RunAgentError::ContextGatheringFailed(e.to_string()))?;
         }
 
         // Add gathered information to context
@@ -1408,7 +1487,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         ))
     }
 
-    /// Execute a single task
+    /// Execute a single task using the Native Tool Use API.
     async fn execute_single_task(
         &self,
         session: &dyn LlmSession,
@@ -1426,83 +1505,47 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         debug!("Executing task: {} - {}", task.id, task.description);
 
-        // If task has a predefined tool call, execute it directly
-        if let Some(tool_name) = &task.tool_name {
-            // Convert task args to tool call args
-            let mut tool_call = ToolCall::new(tool_name);
-            for (key, value) in &task.tool_args {
-                tool_call = tool_call.with_arg(key, value.clone());
-            }
+        // Always use Native Tool Use API
+        self.execute_task_native(session, input, state, task, previous_results, progress)
+            .await
+    }
 
-            // Pre-validate tool exists before review/execution
-            let tool_call = match self.resolve_tool_call(session, &tool_call, progress).await {
-                Some(resolved) => resolved,
-                None => {
-                    return Err(RunAgentError::TaskExecutionFailed(format!(
-                        "Unknown tool '{}' could not be resolved",
-                        tool_name
-                    )));
-                }
-            };
-
-            // Check if this is a high-risk tool that needs review (using resolved name)
-            let needs_review = task.requires_review || self.is_high_risk_tool(&tool_call.tool_name);
-
-            if needs_review && !input.config.review_models.is_empty() {
-                let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
-                    "tool": tool_name,
-                    "args": task.tool_args,
-                }))
-                .unwrap_or_default();
-
-                let review = self
-                    .review_action(input, state, task, &tool_call_json, progress)
-                    .await?;
-
-                // UI notification for action review result
-                progress.on_quorum_complete_with_votes(
-                    "action_review",
-                    review.approved,
-                    &review.votes,
-                    review.feedback.as_deref(),
-                );
-
-                if !review.approved {
-                    return Err(RunAgentError::ActionRejected(
-                        review
-                            .feedback
-                            .unwrap_or_else(|| "Action rejected by quorum".to_string()),
-                    ));
-                }
-            }
-
-            // Execute with retry for validation errors
-            let result = self
-                .execute_tool_with_retry(
-                    session,
-                    &tool_call,
-                    input.config.max_tool_retries,
-                    progress,
-                )
-                .await;
-
-            if result.is_success() {
-                return Ok(result.output().unwrap_or("").to_string());
-            } else {
-                return Err(RunAgentError::TaskExecutionFailed(
-                    result
-                        .error()
-                        .map(|e| e.message.clone())
-                        .unwrap_or_else(|| "Unknown error".to_string()),
-                ));
-            }
-        }
-
-        // Otherwise, ask the model to execute the task
+    /// Execute a task using the Native Tool Use API with multi-turn loop.
+    ///
+    /// Implements the standard Native Tool Use conversation loop:
+    /// ```text
+    /// send_with_tools(prompt, tools)
+    ///   → stop_reason == ToolUse?
+    ///     → yes: execute tool calls → send_tool_results() → loop
+    ///     → no: return text content (done)
+    /// ```
+    ///
+    /// Tool calls are extracted directly from the structured response — no
+    /// text parsing or alias resolution needed (the API guarantees valid names).
+    ///
+    /// # Parallel Execution
+    ///
+    /// Low-risk tool calls within the same turn are executed in parallel
+    /// using `futures::join_all`. High-risk tools are executed sequentially
+    /// to maintain quorum review ordering.
+    async fn execute_task_native(
+        &self,
+        session: &dyn LlmSession,
+        input: &RunAgentInput,
+        state: &AgentState,
+        task: &Task,
+        previous_results: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<String, RunAgentError> {
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
+        let tools = self.tool_executor.tool_spec().to_api_tools();
+        let max_turns = input.config.max_tool_turns;
+        let mut turn_count = 0;
+        let mut all_outputs = Vec::new();
 
-        let response = match self
-            .send_with_cancellation(session, &prompt, progress)
+        // Initial request
+        let mut response = match self
+            .send_with_tools_cancellable(session, &prompt, &tools, progress)
             .await
         {
             Ok(response) => response,
@@ -1510,72 +1553,181 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Err(e) => return Err(RunAgentError::TaskExecutionFailed(e.to_string())),
         };
 
-        // Parse and execute any tool calls in the response
-        let tool_calls = parse_tool_calls(&response);
+        loop {
+            // Collect any text from this turn
+            let text = response.text_content();
+            if !text.is_empty() {
+                all_outputs.push(text);
+            }
 
-        if tool_calls.is_empty() {
-            // No tool calls, the response itself is the result
-            return Ok(response);
-        }
+            // Extract tool calls
+            let tool_calls = response.tool_calls();
 
-        let mut outputs = Vec::new();
+            if tool_calls.is_empty() {
+                // No tool calls — model is done
+                break;
+            }
 
-        for call in tool_calls {
-            // Pre-validate tool exists before review/execution
-            let call = match self.resolve_tool_call(session, &call, progress).await {
-                Some(resolved) => resolved,
-                None => {
+            // Check turn limit
+            turn_count += 1;
+            if turn_count > max_turns {
+                warn!(
+                    "Native tool use loop exceeded max_tool_turns ({})",
+                    max_turns
+                );
+                break;
+            }
+
+            // Check cancellation
+            self.check_cancelled()?;
+
+            // Execute tool calls and collect results
+            let mut tool_result_messages = Vec::new();
+
+            // Separate into low-risk (can parallelize) and high-risk (sequential)
+            let mut low_risk_calls = Vec::new();
+            let mut high_risk_calls = Vec::new();
+
+            for call in &tool_calls {
+                if self.is_high_risk_tool(&call.tool_name) {
+                    high_risk_calls.push(call);
+                } else {
+                    low_risk_calls.push(call);
+                }
+            }
+
+            // Execute low-risk calls in parallel
+            if !low_risk_calls.is_empty() {
+                let mut futures = Vec::new();
+                for call in &low_risk_calls {
+                    progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+                    futures.push(self.tool_executor.execute(call));
+                }
+
+                let results: Vec<_> = futures::future::join_all(futures).await;
+
+                for (call, result) in low_risk_calls.iter().zip(results) {
+                    let is_error = !result.is_success();
+                    let output = if is_error {
+                        result
+                            .error()
+                            .map(|e| e.message.clone())
+                            .unwrap_or_else(|| "Unknown error".to_string())
+                    } else {
+                        result.output().unwrap_or("").to_string()
+                    };
+
+                    progress.on_tool_result(&call.tool_name, !is_error);
+
+                    if !is_error {
+                        all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
+                    }
+
+                    if let Some(native_id) = call.native_id.clone() {
+                        tool_result_messages.push(ToolResultMessage {
+                            tool_use_id: native_id,
+                            tool_name: call.tool_name.clone(),
+                            output,
+                            is_error,
+                        });
+                    } else {
+                        warn!(
+                            "Missing native_id for tool call '{}'; skipping result.",
+                            call.tool_name
+                        );
+                    }
+                }
+            }
+
+            // Execute high-risk calls sequentially (with quorum review)
+            for call in &high_risk_calls {
+                // Quorum review for high-risk operations
+                if !input.config.review_models.is_empty() {
+                    let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
+                        "tool": call.tool_name,
+                        "args": call.arguments,
+                    }))
+                    .unwrap_or_default();
+
+                    let review = self
+                        .review_action(input, state, task, &tool_call_json, progress)
+                        .await?;
+
+                    progress.on_quorum_complete_with_votes(
+                        "action_review",
+                        review.approved,
+                        &review.votes,
+                        review.feedback.as_deref(),
+                    );
+
+                    if !review.approved {
+                        warn!("Tool call {} rejected by quorum", call.tool_name);
+                        if let Some(native_id) = call.native_id.clone() {
+                            tool_result_messages.push(ToolResultMessage {
+                                tool_use_id: native_id,
+                                tool_name: call.tool_name.clone(),
+                                output: "Action rejected by quorum review".to_string(),
+                                is_error: true,
+                            });
+                        } else {
+                            warn!(
+                                "Missing native_id for tool call '{}'; skipping result.",
+                                call.tool_name
+                            );
+                        }
+                        continue;
+                    }
+                }
+
+                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+
+                let result = self.tool_executor.execute(call).await;
+                let is_error = !result.is_success();
+                let output = if is_error {
+                    result
+                        .error()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                } else {
+                    result.output().unwrap_or("").to_string()
+                };
+
+                progress.on_tool_result(&call.tool_name, !is_error);
+
+                if !is_error {
+                    all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
+                }
+
+                if let Some(native_id) = call.native_id.clone() {
+                    tool_result_messages.push(ToolResultMessage {
+                        tool_use_id: native_id,
+                        tool_name: call.tool_name.clone(),
+                        output,
+                        is_error,
+                    });
+                } else {
                     warn!(
-                        "Tool '{}' not found and could not be resolved, skipping",
+                        "Missing native_id for tool call '{}'; skipping result.",
                         call.tool_name
                     );
-                    continue;
-                }
-            };
-
-            // Check if this is a high-risk tool that needs review
-            let needs_review = self.is_high_risk_tool(&call.tool_name);
-
-            if needs_review && !input.config.review_models.is_empty() {
-                let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
-                    "tool": call.tool_name,
-                    "args": call.arguments,
-                }))
-                .unwrap_or_default();
-
-                let review = self
-                    .review_action(input, state, task, &tool_call_json, progress)
-                    .await?;
-
-                // UI notification for action review result
-                progress.on_quorum_complete_with_votes(
-                    "action_review",
-                    review.approved,
-                    &review.votes,
-                    review.feedback.as_deref(),
-                );
-
-                if !review.approved {
-                    warn!("Tool call {} rejected by quorum", call.tool_name);
-                    continue; // Skip this tool call
                 }
             }
 
-            // Execute with retry for validation errors
-            let result = self
-                .execute_tool_with_retry(session, &call, input.config.max_tool_retries, progress)
-                .await;
+            // Send tool results back to LLM for next turn
+            debug!(
+                "Native tool use turn {}/{}: sending {} tool results",
+                turn_count,
+                max_turns,
+                tool_result_messages.len()
+            );
 
-            if result.is_success() {
-                if let Some(output) = result.output() {
-                    outputs.push(output.to_string());
-                }
-            } else {
-                warn!("Tool {} failed: {:?}", call.tool_name, result.error());
-            }
+            response = session
+                .send_tool_results(&tool_result_messages)
+                .await
+                .map_err(RunAgentError::GatewayError)?;
         }
 
-        Ok(outputs.join("\n---\n"))
+        Ok(all_outputs.join("\n---\n"))
     }
 
     /// Handle human intervention when plan revision limit is exceeded
@@ -1636,277 +1788,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         } else {
             // Unknown tools are considered high-risk by default
             true
-        }
-    }
-
-    /// Pre-validate a tool call and resolve unknown tool names, supporting the
-    /// **Tool Name Alias System** and LLM-based correction as a fallback.
-    ///
-    /// This is the central name resolution point in the agent execution pipeline,
-    /// called BEFORE Quorum review and execution to avoid wasting API calls on
-    /// nonexistent tools.
-    ///
-    /// # Resolution Strategy (3-tier)
-    ///
-    /// ```text
-    /// 1. Exact match    → has_tool(name)         → zero cost
-    /// 2. Alias resolve  → resolve_alias(name)    → zero cost, no LLM call
-    /// 3. LLM retry      → ask model to fix       → 1 API round-trip (fallback)
-    /// ```
-    ///
-    /// Tier 2 (alias resolution) eliminates the most common LLM mistakes
-    /// (`bash` → `run_command`, `grep` → `grep_search`, etc.) without any
-    /// additional API calls.
-    ///
-    /// Returns `Some(resolved_call)` if the tool exists or was successfully resolved,
-    /// `None` if the tool could not be resolved after all tiers.
-    async fn resolve_tool_call(
-        &self,
-        session: &dyn LlmSession,
-        tool_call: &ToolCall,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Option<ToolCall> {
-        // Tool exists → no correction needed
-        if self.tool_executor.has_tool(&tool_call.tool_name) {
-            return Some(tool_call.clone());
-        }
-
-        // Alias resolution → zero-cost correction without LLM call
-        if let Some(canonical) = self
-            .tool_executor
-            .tool_spec()
-            .resolve_alias(&tool_call.tool_name)
-        {
-            debug!(
-                "Resolved tool alias '{}' → '{}'",
-                tool_call.tool_name, canonical
-            );
-            progress.on_tool_resolved(&tool_call.tool_name, canonical);
-            let mut resolved = tool_call.clone();
-            resolved.tool_name = canonical.to_string();
-            return Some(resolved);
-        }
-
-        // Unknown tool → notify + ask LLM for correction
-        let available = self.tool_executor.available_tools();
-        progress.on_tool_not_found(&tool_call.tool_name, &available);
-
-        let retry_prompt = AgentPromptTemplate::tool_not_found_retry(
-            &tool_call.tool_name,
-            &available,
-            &tool_call.arguments,
-        );
-
-        let response = match self
-            .send_with_cancellation(session, &retry_prompt, progress)
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return None,
-        };
-
-        let corrected = parse_tool_calls(&response).into_iter().next()?;
-
-        // Verify corrected tool actually exists
-        if !self.tool_executor.has_tool(&corrected.tool_name) {
-            warn!(
-                "LLM suggested '{}' which also doesn't exist",
-                corrected.tool_name
-            );
-            return None;
-        }
-
-        progress.on_tool_resolved(&tool_call.tool_name, &corrected.tool_name);
-        Some(corrected)
-    }
-
-    /// Execute a tool with retry on retryable errors
-    ///
-    /// This method provides automatic error recovery for tool execution failures
-    /// by leveraging the LLM to generate corrected tool calls.
-    ///
-    /// # Retry Strategy
-    ///
-    /// ## Retryable Errors
-    ///
-    /// Only the following error codes trigger retry attempts:
-    ///
-    /// - **`INVALID_ARGUMENT`**: Tool was called with invalid arguments
-    ///   - Sends [`AgentPromptTemplate::tool_retry`] with error details
-    ///   - LLM corrects the arguments based on error message
-    ///
-    /// - **`NOT_FOUND`**: Tool doesn't exist (e.g., `multi_tool_use.parallel`)
-    ///   - Sends [`AgentPromptTemplate::tool_not_found_retry`] with available tools
-    ///   - LLM selects a valid alternative tool
-    ///
-    /// ## Non-Retryable Errors
-    ///
-    /// All other errors (execution failures, permission errors, etc.) are returned
-    /// immediately without retry.
-    ///
-    /// ## Retry Limit
-    ///
-    /// - Maximum retries: `max_retries` (typically 2)
-    /// - Each retry involves:
-    ///   1. Progress notification via [`AgentProgressNotifier::on_tool_retry`]
-    ///   2. LLM query with specialized retry prompt
-    ///   3. Parse corrected tool call from response
-    ///   4. Execute corrected call
-    ///
-    /// ## Cancellation
-    ///
-    /// If a cancellation request occurs during retry:
-    /// - Returns the last ToolResult immediately
-    /// - Does not attempt further retries
-    ///
-    /// # Arguments
-    ///
-    /// * `session` - LLM session for generating corrected tool calls
-    /// * `tool_call` - Initial tool call to execute
-    /// * `max_retries` - Maximum number of retry attempts (usually 2)
-    /// * `progress` - Progress notifier for UI feedback
-    ///
-    /// # Returns
-    ///
-    /// Returns the final [`quorum_domain::ToolResult`]:
-    /// - Success result if execution succeeds (any attempt)
-    /// - Error result if all retries exhausted or non-retryable error
-    ///
-    /// # Example Flow
-    ///
-    /// ```text
-    /// Attempt 1: execute(tool_call)
-    ///   → Error: NOT_FOUND (multi_tool_use.parallel)
-    ///   → progress.on_tool_retry("multi_tool_use.parallel", 1, 2, "...")
-    ///
-    /// Retry 1: Send tool_not_found_retry prompt
-    ///   → LLM responds with valid tool: "run_command"
-    ///   → execute(corrected_call)
-    ///   → Success!
-    /// ```
-    ///
-    /// # See Also
-    ///
-    /// - [`is_retryable_error`] - Determines if an error should trigger retry
-    /// - [`AgentPromptTemplate::tool_retry`] - Retry prompt for argument errors
-    /// - [`AgentPromptTemplate::tool_not_found_retry`] - Retry prompt for unknown tools
-    async fn execute_tool_with_retry(
-        &self,
-        session: &dyn LlmSession,
-        tool_call: &ToolCall,
-        max_retries: usize,
-        progress: &dyn AgentProgressNotifier,
-    ) -> quorum_domain::ToolResult {
-        let mut current_call = tool_call.clone();
-        let mut attempts = 0;
-
-        loop {
-            progress.on_tool_call(
-                &current_call.tool_name,
-                &format!("{:?}", current_call.arguments),
-            );
-
-            let result = self.tool_executor.execute(&current_call).await;
-
-            progress.on_tool_result(&current_call.tool_name, result.is_success());
-
-            // If successful or not a retryable error, return immediately
-            if result.is_success() || !is_retryable_error(&result) {
-                // Report non-retryable errors
-                if !result.is_success()
-                    && let Some(err) = result.error()
-                {
-                    let category = ErrorCategory::from_error_code(&err.code);
-                    progress.on_tool_error(&current_call.tool_name, category, &err.message);
-                }
-                return result;
-            }
-
-            // Get error info for retry
-            let (error_code, error_message) = result
-                .error()
-                .map(|e| (e.code.clone(), e.message.clone()))
-                .unwrap_or_else(|| ("UNKNOWN".to_string(), "Unknown error".to_string()));
-
-            let category = ErrorCategory::from_error_code(&error_code);
-
-            // Check if we've exceeded retry limit
-            attempts += 1;
-            if attempts >= max_retries {
-                debug!(
-                    "Tool {} failed after {} retry attempts",
-                    current_call.tool_name, attempts
-                );
-                progress.on_tool_error(&current_call.tool_name, category, &error_message);
-                return result;
-            }
-
-            // Notify about retry attempt
-            progress.on_tool_retry(
-                &current_call.tool_name,
-                attempts,
-                max_retries,
-                &error_message,
-            );
-
-            info!(
-                "Tool {} error (attempt {}): {}. Requesting corrected call from LLM.",
-                current_call.tool_name, attempts, error_message
-            );
-
-            // Ask LLM to fix the tool call
-            // Use a specialized prompt for unknown tools that includes available tool list
-            let retry_prompt = if error_code == "NOT_FOUND" {
-                let available = self.tool_executor.available_tools();
-                AgentPromptTemplate::tool_not_found_retry(
-                    &current_call.tool_name,
-                    &available,
-                    &current_call.arguments,
-                )
-            } else {
-                AgentPromptTemplate::tool_retry(
-                    &current_call.tool_name,
-                    &error_message,
-                    &current_call.arguments,
-                )
-            };
-
-            let response = match self
-                .send_with_cancellation(session, &retry_prompt, progress)
-                .await
-            {
-                Ok(response) => response,
-                Err(RunAgentError::Cancelled) => {
-                    // Return the previous result if cancelled
-                    return result;
-                }
-                Err(e) => {
-                    warn!("Failed to get retry response from LLM: {}", e);
-                    return result;
-                }
-            };
-
-            // Parse the corrected tool call from the response
-            let corrected_calls = parse_tool_calls(&response);
-
-            if let Some(corrected) = corrected_calls.into_iter().next() {
-                // Verify corrected tool exists before retrying
-                if !self.tool_executor.has_tool(&corrected.tool_name) {
-                    warn!(
-                        "LLM suggested '{}' which also doesn't exist",
-                        corrected.tool_name
-                    );
-                    return result;
-                }
-                debug!(
-                    "LLM provided corrected tool call with args: {:?}",
-                    corrected.arguments
-                );
-                current_call = corrected;
-            } else {
-                warn!("LLM did not provide a valid corrected tool call");
-                return result;
-            }
         }
     }
 
@@ -2223,49 +2104,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 }
 
-/// Check if a ToolResult error is retryable
-///
-/// Determines whether a tool execution error should trigger a retry attempt
-/// with LLM correction.
-///
-/// # Retryable Error Codes
-///
-/// | Error Code | Category | Retry Strategy |
-/// |------------|----------|---------------|
-/// | `INVALID_ARGUMENT` | ValidationError | Send error message to LLM for correction |
-/// | `NOT_FOUND` | UnknownTool | Provide available tool list to LLM |
-///
-/// # Non-Retryable Errors
-///
-/// All other error codes (e.g., execution failures, permission errors) are
-/// considered non-retryable and returned immediately to the caller.
-///
-/// # Retry Flow
-///
-/// When a retryable error is detected, [`execute_tool_with_retry`] will:
-/// 1. Send a retry prompt to the LLM with error details
-/// 2. Parse the corrected tool call from the response
-/// 3. Retry execution up to `max_tool_retries` times
-///
-/// # Example
-///
-/// ```ignore
-/// let result = tool_executor.execute(&tool_call).await;
-/// if is_retryable_error(&result) {
-///     // Send retry prompt to LLM
-///     // Parse corrected call
-///     // Retry execution
-/// } else {
-///     // Return error immediately
-/// }
-/// ```
-fn is_retryable_error(result: &quorum_domain::ToolResult) -> bool {
-    result
-        .error()
-        .map(|e| matches!(e.code.as_str(), "INVALID_ARGUMENT" | "NOT_FOUND"))
-        .unwrap_or(false)
-}
-
 /// Parse a review response to extract approval status and feedback
 fn parse_review_response(response: &str) -> (bool, String) {
     let response_upper = response.to_uppercase();
@@ -2362,146 +2200,6 @@ fn parse_vote_score(response: &str) -> f64 {
     5.0
 }
 
-/// Parse tool calls from model response
-///
-/// Supports multiple response formats for robustness:
-///
-/// # Supported Formats
-///
-/// 1. **Markdown Code Blocks** (Preferred)
-///    - ` ```tool ` blocks containing JSON
-///    - ` ```json ` blocks containing JSON
-///    - **Multiple blocks are supported** - all are parsed sequentially
-///
-///    ```markdown
-///    \`\`\`tool
-///    {
-///      "tool": "read_file",
-///      "args": {"path": "/test/file.txt"},
-///      "reasoning": "Need to check the contents"
-///    }
-///    \`\`\`
-///    ```
-///
-/// 2. **Raw JSON** (Fallback)
-///    - Entire response is valid JSON
-///    - Only single tool call supported
-///
-/// 3. **Embedded JSON** (Heuristic Fallback)
-///    - JSON embedded in text
-///    - Extracts content between first `{` and last `}`
-///    - Only single tool call supported
-///
-/// # Not Supported
-///
-/// - **JSON arrays**: `[{...}, {...}]` format is not parsed
-///   - Use multiple code blocks instead
-/// - **YAML format**: No YAML parser implemented
-/// - **Plain text**: Must be valid JSON structure
-///
-/// # Return Value
-///
-/// Returns `Vec<ToolCall>`:
-/// - Empty vec if no valid tool calls found
-/// - One or more `ToolCall` objects for successful parses
-/// - Invalid JSON in code blocks is skipped silently
-///
-/// # Examples
-///
-/// ```ignore
-/// // Single code block
-/// let response = r#"
-/// \`\`\`tool
-/// {"tool": "read_file", "args": {"path": "test.txt"}}
-/// \`\`\`
-/// "#;
-/// let calls = parse_tool_calls(response);
-/// assert_eq!(calls.len(), 1);
-///
-/// // Multiple code blocks (sequential)
-/// let response = r#"
-/// \`\`\`tool
-/// {"tool": "read_file", "args": {"path": "a.txt"}}
-/// \`\`\`
-/// \`\`\`tool
-/// {"tool": "read_file", "args": {"path": "b.txt"}}
-/// \`\`\`
-/// "#;
-/// let calls = parse_tool_calls(response);
-/// assert_eq!(calls.len(), 2);
-/// ```
-fn parse_tool_calls(response: &str) -> Vec<ToolCall> {
-    let mut calls = Vec::new();
-
-    // Helper to parse a JSON value into a ToolCall
-    let parse_json_value = |parsed: &serde_json::Value| -> Option<ToolCall> {
-        if let Some(tool_name) = parsed.get("tool").and_then(|v| v.as_str()) {
-            let mut call = ToolCall::new(tool_name);
-
-            if let Some(args) = parsed.get("args").and_then(|v| v.as_object()) {
-                for (key, value) in args {
-                    call = call.with_arg(key, value.clone());
-                }
-            }
-
-            if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
-                call = call.with_reasoning(reasoning);
-            }
-            Some(call)
-        } else {
-            None
-        }
-    };
-
-    // Look for ```tool ... ``` or ```json ... ``` blocks
-    let mut in_block = false;
-    let mut current_block = String::new();
-
-    for line in response.lines() {
-        let trimmed = line.trim();
-        if trimmed == "```tool" || trimmed == "```json" {
-            in_block = true;
-            current_block.clear();
-        } else if in_block && trimmed == "```" {
-            in_block = false;
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&current_block)
-                && let Some(call) = parse_json_value(&parsed)
-            {
-                calls.push(call);
-            }
-        } else if in_block {
-            current_block.push_str(line);
-            current_block.push('\n');
-        }
-    }
-
-    // If no calls found in blocks, try parsing the whole response as JSON
-    // or try finding a JSON object in the text even if not in a block (simple heuristic)
-    if calls.is_empty() {
-        // First try the whole response
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(response) {
-            if let Some(call) = parse_json_value(&parsed) {
-                calls.push(call);
-            }
-        } else {
-            // If that fails, try to find the first '{' and last '}' to extract JSON
-            if let Some(start) = response.find('{')
-                && let Some(end) = response.rfind('}')
-                && end > start
-            {
-                let potential_json = &response[start..=end];
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(potential_json)
-                    && let Some(call) = parse_json_value(&parsed)
-                {
-                    calls.push(call);
-                }
-            }
-        }
-    }
-
-    calls
-}
-
 /// Parse a plan from model response
 fn parse_plan(response: &str) -> Option<Plan> {
     // Look for ```plan ... ``` blocks
@@ -2582,33 +2280,6 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
     Some(plan)
 }
 
-/// Resolve aliased tool names in plan tasks to their canonical names.
-///
-/// Part of the **Tool Name Alias System** — this function corrects
-/// LLM-hallucinated tool names at **plan time**, before the plan is
-/// submitted for Quorum review or task execution.
-///
-/// Called in both Solo and Ensemble planning paths, immediately before
-/// `state.set_plan()`.
-///
-/// # Example
-///
-/// If a plan task has `tool_name: Some("bash")`, this rewrites it to
-/// `tool_name: Some("run_command")` using [`ToolSpec::resolve_alias`].
-fn resolve_plan_aliases(plan: &mut Plan, tool_spec: &quorum_domain::tool::entities::ToolSpec) {
-    for task in &mut plan.tasks {
-        if let Some(ref tool_name) = task.tool_name
-            && let Some(canonical) = tool_spec.resolve_alias(tool_name)
-        {
-            debug!(
-                "Plan alias resolved: task '{}' tool '{}' → '{}'",
-                task.id, tool_name, canonical
-            );
-            task.tool_name = Some(canonical.to_string());
-        }
-    }
-}
-
 /// Generate a simple timestamp-based ID
 fn chrono_lite_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2621,81 +2292,6 @@ fn chrono_lite_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_tool_calls_json_block() {
-        let response = r#"
-I'll use the correct tool now.
-```json
-{
-  "tool": "read_file",
-  "args": {
-    "path": "/test/file.txt"
-  },
-  "reasoning": "Checking file"
-}
-```
-"#;
-        let calls = parse_tool_calls(response);
-        assert_eq!(calls.len(), 1, "Should parse json block");
-        assert_eq!(calls[0].tool_name, "read_file");
-    }
-
-    #[test]
-    fn test_parse_tool_calls_raw_json() {
-        let response = r#"{
-  "tool": "read_file",
-  "args": {
-    "path": "/test/file.txt"
-  },
-  "reasoning": "Checking file"
-}"#;
-        let calls = parse_tool_calls(response);
-        assert_eq!(calls.len(), 1, "Should parse raw json");
-        assert_eq!(calls[0].tool_name, "read_file");
-    }
-
-    #[test]
-    fn test_parse_tool_calls_embedded_json() {
-        let response = r#"
-Sure, here is the correct tool call:
-{
-  "tool": "read_file",
-  "args": {
-    "path": "/test/file.txt"
-  },
-  "reasoning": "Checking file"
-}
-Hope this helps!
-"#;
-        let calls = parse_tool_calls(response);
-        assert_eq!(calls.len(), 1, "Should parse embedded json");
-        assert_eq!(calls[0].tool_name, "read_file");
-    }
-
-    #[test]
-    fn test_parse_tool_calls() {
-        let response = r#"
-Let me read the file.
-
-```tool
-{
-  "tool": "read_file",
-  "args": {
-    "path": "/test/file.txt"
-  },
-  "reasoning": "Need to check the contents"
-}
-```
-
-Done!
-"#;
-
-        let calls = parse_tool_calls(response);
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].tool_name, "read_file");
-        assert_eq!(calls[0].get_string("path"), Some("/test/file.txt"));
-    }
 
     #[test]
     fn test_parse_plan() {
@@ -2731,138 +2327,6 @@ Here's my plan:
         assert_eq!(plan.tasks.len(), 2);
         assert_eq!(plan.tasks[0].tool_name, Some("read_file".to_string()));
         assert_eq!(plan.tasks[1].depends_on, vec![TaskId::new("1")]);
-    }
-
-    #[test]
-    fn test_parse_empty_tool_calls() {
-        let response = "Just some text without any tool calls.";
-        let calls = parse_tool_calls(response);
-        assert!(calls.is_empty());
-    }
-
-    // ==================== Edge Case Tests ====================
-
-    #[test]
-    fn test_parse_tool_calls_array_not_supported() {
-        // Array format is currently NOT supported
-        let response = r#"
-```tool
-[
-  {
-    "tool": "read_file",
-    "args": {"path": "file1.txt"}
-  },
-  {
-    "tool": "read_file",
-    "args": {"path": "file2.txt"}
-  }
-]
-```
-"#;
-        let calls = parse_tool_calls(response);
-        // Should return empty because we only handle single objects
-        assert_eq!(
-            calls.len(),
-            0,
-            "Array format is not supported - should return empty"
-        );
-    }
-
-    #[test]
-    fn test_parse_tool_calls_multiple_blocks_all_parsed() {
-        // Multiple code blocks: ALL are parsed sequentially
-        let response = r#"
-First tool:
-```tool
-{
-  "tool": "read_file",
-  "args": {"path": "a.txt"}
-}
-```
-
-Second tool:
-```tool
-{
-  "tool": "write_file",
-  "args": {"path": "b.txt", "content": "test"}
-}
-```
-"#;
-        let calls = parse_tool_calls(response);
-        // Current implementation parses ALL code blocks
-        assert_eq!(calls.len(), 2, "Should parse all code blocks");
-        assert_eq!(calls[0].tool_name, "read_file");
-        assert_eq!(calls[0].get_string("path"), Some("a.txt"));
-        assert_eq!(calls[1].tool_name, "write_file");
-        assert_eq!(calls[1].get_string("path"), Some("b.txt"));
-    }
-
-    #[test]
-    fn test_parse_tool_calls_malformed_json_in_block() {
-        // Malformed JSON should be skipped
-        let response = r#"
-```tool
-{
-  "tool": "read_file",
-  "args": {"path": "test.txt"  // missing closing brace
-}
-```
-"#;
-        let calls = parse_tool_calls(response);
-        assert_eq!(
-            calls.len(),
-            0,
-            "Malformed JSON should result in empty parse"
-        );
-    }
-
-    #[test]
-    fn test_parse_tool_calls_empty_code_block() {
-        let response = r#"
-```tool
-```
-"#;
-        let calls = parse_tool_calls(response);
-        assert!(
-            calls.is_empty(),
-            "Empty code block should result in empty parse"
-        );
-    }
-
-    #[test]
-    fn test_parse_tool_calls_missing_tool_field() {
-        // JSON without "tool" field should be rejected
-        let response = r#"
-```tool
-{
-  "args": {"path": "test.txt"},
-  "reasoning": "Missing tool field"
-}
-```
-"#;
-        let calls = parse_tool_calls(response);
-        assert_eq!(
-            calls.len(),
-            0,
-            "JSON without 'tool' field should be rejected"
-        );
-    }
-
-    #[test]
-    fn test_parse_tool_calls_optional_fields() {
-        // "reasoning" is optional
-        let response = r#"
-```tool
-{
-  "tool": "read_file",
-  "args": {"path": "/test/file.txt"}
-}
-```
-"#;
-        let calls = parse_tool_calls(response);
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].tool_name, "read_file");
-        // No reasoning field, should still work
     }
 
     #[test]
@@ -2936,75 +2400,5 @@ Here is my evaluation:
         let error = RunAgentError::EnsemblePlanningFailed("test error".to_string());
         assert_eq!(error.to_string(), "Ensemble planning failed: test error");
         assert!(!error.is_cancelled());
-    }
-
-    // ==================== Tool Resolution Tests ====================
-
-    #[test]
-    fn test_is_retryable_not_found() {
-        let result = quorum_domain::ToolResult::failure(
-            "bash",
-            quorum_domain::ToolError::not_found("Unknown tool: bash"),
-        );
-        assert!(is_retryable_error(&result));
-    }
-
-    #[test]
-    fn test_is_retryable_invalid_argument() {
-        let result = quorum_domain::ToolResult::failure(
-            "read_file",
-            quorum_domain::ToolError::invalid_argument("missing path"),
-        );
-        assert!(is_retryable_error(&result));
-    }
-
-    #[test]
-    fn test_is_not_retryable_execution_failed() {
-        let result = quorum_domain::ToolResult::failure(
-            "read_file",
-            quorum_domain::ToolError::execution_failed("disk error"),
-        );
-        assert!(!is_retryable_error(&result));
-    }
-
-    #[test]
-    fn test_resolve_plan_aliases() {
-        use quorum_domain::tool::entities::{RiskLevel, ToolDefinition, ToolSpec};
-
-        let tool_spec = ToolSpec::new()
-            .register(ToolDefinition::new("run_command", "Run", RiskLevel::High))
-            .register(ToolDefinition::new("read_file", "Read", RiskLevel::Low))
-            .register_alias("bash", "run_command")
-            .register_alias("view", "read_file");
-
-        let mut plan = Plan::new("Test", "Testing aliases")
-            .with_task(Task::new("1", "Run tests").with_tool("bash"))
-            .with_task(Task::new("2", "View file").with_tool("view"))
-            .with_task(Task::new("3", "Already correct").with_tool("run_command"))
-            .with_task(Task::new("4", "No tool"));
-
-        resolve_plan_aliases(&mut plan, &tool_spec);
-
-        assert_eq!(plan.tasks[0].tool_name.as_deref(), Some("run_command"));
-        assert_eq!(plan.tasks[1].tool_name.as_deref(), Some("read_file"));
-        assert_eq!(plan.tasks[2].tool_name.as_deref(), Some("run_command"));
-        assert_eq!(plan.tasks[3].tool_name, None);
-    }
-
-    #[test]
-    fn test_resolve_plan_aliases_unknown_stays() {
-        use quorum_domain::tool::entities::{RiskLevel, ToolDefinition, ToolSpec};
-
-        let tool_spec = ToolSpec::new()
-            .register(ToolDefinition::new("run_command", "Run", RiskLevel::High))
-            .register_alias("bash", "run_command");
-
-        let mut plan = Plan::new("Test", "Testing")
-            .with_task(Task::new("1", "Unknown tool").with_tool("nonexistent_tool"));
-
-        resolve_plan_aliases(&mut plan, &tool_spec);
-
-        // Unknown tool stays as-is (resolve_alias returns None)
-        assert_eq!(plan.tasks[0].tool_name.as_deref(), Some("nonexistent_tool"));
     }
 }
