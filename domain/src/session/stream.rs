@@ -99,8 +99,6 @@ impl PartialEq for StreamEvent {
     }
 }
 
-impl Eq for StreamEvent {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,15 +125,9 @@ mod tests {
     }
 
     #[test]
-    fn events_are_eq() {
-        assert_eq!(
-            StreamEvent::Delta("a".to_string()),
-            StreamEvent::Delta("a".to_string())
-        );
-        assert_ne!(
-            StreamEvent::Delta("a".to_string()),
-            StreamEvent::Completed("a".to_string())
-        );
+    fn events_partial_eq() {
+        assert!(StreamEvent::Delta("a".to_string()) == StreamEvent::Delta("a".to_string()));
+        assert!(StreamEvent::Delta("a".to_string()) != StreamEvent::Completed("a".to_string()));
     }
 
     #[test]
@@ -172,6 +164,6 @@ mod tests {
             name: Some("read_file".to_string()),
             arguments_delta: Some("{\"path\":".to_string()),
         };
-        assert_eq!(a, b);
+        assert!(a == b);
     }
 }

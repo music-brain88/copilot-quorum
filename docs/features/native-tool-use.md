@@ -26,14 +26,13 @@ Native Tool Use API は、Anthropic の `tool_use`、OpenAI の `function_callin
 
 ## Quick Start / クイックスタート
 
-Native Tool Use はすべてのツール呼び出しで自動的に使用されます。
-ユーザーが明示的に設定する必要はありません。
+Native Tool Use の型とマルチターンループの枠組みは整備済みです。
+各プロバイダーの `send_with_tools()` / `send_tool_results()` 実装は今後対応予定で、
+現時点では `send()` → `LlmResponse::from_text()` によるフォールバック経路で動作します。
 
 ```bash
-# Anthropic API 直接呼び出し → Native Tool Use
+# 現在はフォールバック経路で動作
 copilot-quorum --provider anthropic "List all Rust files"
-
-# Copilot CLI 経由 → Native Tool Use
 copilot-quorum "Fix the failing test"
 ```
 
@@ -63,6 +62,10 @@ LlmSession
 | **Copilot CLI** | JSON-RPC `session.create` に `tools` パラメータ追加 | 将来 |
 | **Anthropic API** | Messages API の `tools` パラメータ | 将来 |
 | **OpenAI API** | Chat Completions の `function_calling` | 将来 |
+
+> **Note**: 各プロバイダーの Native 実装が未対応の間、`LlmSession` のデフォルト実装
+> （`send()` → `LlmResponse::from_text()`）がフォールバックとして機能します。
+> マルチターンループの枠組み（型、ツール定義の JSON Schema 変換、並列実行）は既に完成しています。
 
 ---
 

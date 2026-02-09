@@ -171,9 +171,10 @@ impl LocalToolExecutor {
         self
     }
 
-    /// Internal execute implementation for synchronous tools (file, command, search).
+    /// Internal execute implementation for built-in synchronous tools (file, command, search).
     ///
-    /// Routes calls by exact canonical name.
+    /// Routes calls by exact canonical name. Custom tools are handled in the
+    /// async `execute()` path and never reach this method.
     fn execute_internal(&self, call: &ToolCall) -> ToolResult {
         // Check if tool exists
         let definition = match self.tool_spec.get(&call.tool_name) {
@@ -212,32 +213,13 @@ impl LocalToolExecutor {
             }
             search::GLOB_SEARCH => search::execute_glob_search(call),
             search::GREP_SEARCH => search::execute_grep_search(call),
-            _ => {
-                // Check if it's a custom tool
-                if let Some(ref provider) = self.custom_provider {
-                    // CustomToolProvider::execute is async, but custom tools are
-                    // synchronous shell commands internally — use block_in_place
-                    // if we have a runtime, otherwise spawn a temp runtime.
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        return tokio::task::block_in_place(|| {
-                            handle.block_on(provider.execute(call))
-                        });
-                    } else {
-                        // No runtime available — create a temp one
-                        let rt = tokio::runtime::Runtime::new();
-                        if let Ok(rt) = rt {
-                            return rt.block_on(provider.execute(call));
-                        }
-                    }
-                }
-                ToolResult::failure(
-                    &call.tool_name,
-                    ToolError::execution_failed(format!(
-                        "Tool '{}' is not implemented",
-                        call.tool_name
-                    )),
-                )
-            }
+            _ => ToolResult::failure(
+                &call.tool_name,
+                ToolError::execution_failed(format!(
+                    "Tool '{}' is not implemented",
+                    call.tool_name
+                )),
+            ),
         }
     }
 

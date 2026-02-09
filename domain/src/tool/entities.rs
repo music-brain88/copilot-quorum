@@ -264,7 +264,9 @@ impl ToolSpec {
     /// ToolSpec → to_api_tools() → Vec<Value> → LlmSession::send_with_tools()
     /// ```
     pub fn to_api_tools(&self) -> Vec<serde_json::Value> {
-        self.tools.values().map(|t| t.to_json_schema()).collect()
+        let mut tools: Vec<&ToolDefinition> = self.tools.values().collect();
+        tools.sort_by_key(|t| &t.name);
+        tools.into_iter().map(|t| t.to_json_schema()).collect()
     }
 
     /// Get the number of registered tools.
@@ -475,6 +477,10 @@ mod tests {
 
         let tools = spec.to_api_tools();
         assert_eq!(tools.len(), 2);
+
+        // Results are sorted by name
+        assert_eq!(tools[0]["name"], "read_file");
+        assert_eq!(tools[1]["name"], "write_file");
 
         // Check that all tools have the required fields
         for tool in &tools {

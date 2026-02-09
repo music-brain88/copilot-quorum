@@ -1043,24 +1043,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     (true, msg)
                 };
 
-                tool_result_messages.push(ToolResultMessage {
-                    tool_use_id: call
-                        .native_id
-                        .clone()
-                        .unwrap_or_else(|| call.tool_name.clone()),
-                    tool_name: call.tool_name.clone(),
-                    output,
-                    is_error,
-                });
-            }
-
-            // Check stop reason
-            if response
-                .stop_reason
-                .as_ref()
-                .is_none_or(|r| *r != quorum_domain::StopReason::ToolUse)
-            {
-                break;
+                if let Some(native_id) = call.native_id.clone() {
+                    tool_result_messages.push(ToolResultMessage {
+                        tool_use_id: native_id,
+                        tool_name: call.tool_name.clone(),
+                        output,
+                        is_error,
+                    });
+                } else {
+                    warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                }
             }
 
             response = session
@@ -1628,15 +1620,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
                     }
 
-                    tool_result_messages.push(ToolResultMessage {
-                        tool_use_id: call
-                            .native_id
-                            .clone()
-                            .unwrap_or_else(|| call.tool_name.clone()),
-                        tool_name: call.tool_name.clone(),
-                        output,
-                        is_error,
-                    });
+                    if let Some(native_id) = call.native_id.clone() {
+                        tool_result_messages.push(ToolResultMessage {
+                            tool_use_id: native_id,
+                            tool_name: call.tool_name.clone(),
+                            output,
+                            is_error,
+                        });
+                    } else {
+                        warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                    }
                 }
             }
 
@@ -1663,15 +1656,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
                     if !review.approved {
                         warn!("Tool call {} rejected by quorum", call.tool_name);
-                        tool_result_messages.push(ToolResultMessage {
-                            tool_use_id: call
-                                .native_id
-                                .clone()
-                                .unwrap_or_else(|| call.tool_name.clone()),
-                            tool_name: call.tool_name.clone(),
-                            output: "Action rejected by quorum review".to_string(),
-                            is_error: true,
-                        });
+                        if let Some(native_id) = call.native_id.clone() {
+                            tool_result_messages.push(ToolResultMessage {
+                                tool_use_id: native_id,
+                                tool_name: call.tool_name.clone(),
+                                output: "Action rejected by quorum review".to_string(),
+                                is_error: true,
+                            });
+                        } else {
+                            warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                        }
                         continue;
                     }
                 }
@@ -1695,24 +1689,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
                 }
 
-                tool_result_messages.push(ToolResultMessage {
-                    tool_use_id: call
-                        .native_id
-                        .clone()
-                        .unwrap_or_else(|| call.tool_name.clone()),
-                    tool_name: call.tool_name.clone(),
-                    output,
-                    is_error,
-                });
-            }
-
-            // Check if we should stop (stop_reason != ToolUse)
-            if response
-                .stop_reason
-                .as_ref()
-                .is_none_or(|r| *r != quorum_domain::StopReason::ToolUse)
-            {
-                break;
+                if let Some(native_id) = call.native_id.clone() {
+                    tool_result_messages.push(ToolResultMessage {
+                        tool_use_id: native_id,
+                        tool_name: call.tool_name.clone(),
+                        output,
+                        is_error,
+                    });
+                } else {
+                    warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                }
             }
 
             // Send tool results back to LLM for next turn

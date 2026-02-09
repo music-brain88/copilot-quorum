@@ -6,8 +6,9 @@
 //!
 //! # Security
 //!
-//! All parameter values are shell-escaped before substitution using
-//! single-quote wrapping to prevent command injection.
+//! All parameter values are shell-escaped before substitution to prevent
+//! command injection: single-quote wrapping on Unix, double-quote wrapping
+//! with character escaping on Windows.
 //!
 //! # Example Configuration
 //!
@@ -140,22 +141,29 @@ impl CustomToolProvider {
             if ch == '{' {
                 // Check if this looks like a placeholder
                 let mut placeholder = String::new();
-                let mut is_placeholder = false;
+                let mut found_close = false;
                 for c in chars.by_ref() {
                     if c == '}' {
-                        is_placeholder = !placeholder.is_empty()
-                            && placeholder.chars().all(|c| c.is_alphanumeric() || c == '_');
+                        found_close = true;
                         break;
                     }
                     placeholder.push(c);
                 }
-                if !is_placeholder {
-                    // Not a valid placeholder, keep original
+                if !found_close {
+                    // Unclosed brace — restore original characters
                     result.push('{');
                     result.push_str(&placeholder);
-                    result.push('}');
+                } else {
+                    let is_placeholder = !placeholder.is_empty()
+                        && placeholder.chars().all(|c| c.is_alphanumeric() || c == '_');
+                    if !is_placeholder {
+                        // Not a valid placeholder, keep original
+                        result.push('{');
+                        result.push_str(&placeholder);
+                        result.push('}');
+                    }
+                    // Valid placeholder with no value → omit (empty string)
                 }
-                // Valid placeholder with no value → omit (empty string)
             } else {
                 result.push(ch);
             }
@@ -251,8 +259,9 @@ impl CustomToolProvider {
 
 /// Escape a string for safe shell substitution.
 ///
-/// Uses single-quote wrapping with internal single-quote escaping:
-/// `hello 'world'` → `'hello '\''world'\'''`
+/// Uses OS-appropriate escaping:
+/// - **Unix**: Single-quote wrapping (`hello 'world'` → `'hello '\''world'\'''`)
+/// - **Windows**: Double-quote wrapping with `"` → `\"`, `%` → `%%`, `!` → `^!`
 fn shell_escape(s: &str) -> String {
     // If the string contains no special characters, return as-is
     if s.chars()
@@ -261,7 +270,15 @@ fn shell_escape(s: &str) -> String {
         return s.to_string();
     }
 
-    // Wrap in single quotes, escaping any internal single quotes
+    if cfg!(target_os = "windows") {
+        shell_escape_windows(s)
+    } else {
+        shell_escape_unix(s)
+    }
+}
+
+/// Unix shell escape: wrap in single quotes, escape internal single quotes.
+fn shell_escape_unix(s: &str) -> String {
     let mut escaped = String::with_capacity(s.len() + 4);
     escaped.push('\'');
     for ch in s.chars() {
@@ -272,6 +289,22 @@ fn shell_escape(s: &str) -> String {
         }
     }
     escaped.push('\'');
+    escaped
+}
+
+/// Windows cmd.exe escape: wrap in double quotes, escape `"`, `%`, and `!`.
+fn shell_escape_windows(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len() + 4);
+    escaped.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '%' => escaped.push_str("%%"),
+            '!' => escaped.push_str("^!"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
     escaped
 }
 
@@ -357,6 +390,35 @@ mod tests {
             risk_level: risk_level.to_string(),
             parameters,
         }
+    }
+
+    #[test]
+    fn test_build_command_unclosed_brace() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "tool".to_string(),
+            make_config("Tool", "echo {msg", "low", vec![("msg", "Msg", true)]),
+        );
+        let provider = CustomToolProvider::from_config(&configs);
+
+        // The {msg never closes, so it should be preserved as-is
+        let call = ToolCall::new("tool").with_arg("msg", "hello");
+        let cmd = provider.build_command("echo {msg", &call);
+        assert_eq!(cmd, "echo {msg");
+    }
+
+    #[test]
+    fn test_shell_escape_windows() {
+        assert_eq!(
+            shell_escape_windows("hello world"),
+            "\"hello world\""
+        );
+        assert_eq!(
+            shell_escape_windows("say \"hi\""),
+            "\"say \\\"hi\\\"\""
+        );
+        assert_eq!(shell_escape_windows("100%"), "\"100%%\"");
+        assert_eq!(shell_escape_windows("wow!"), "\"wow^!\"");
     }
 
     #[test]
