@@ -2332,11 +2332,8 @@ fn parse_plan(response: &str) -> Option<Plan> {
         return parse_plan_json(&parsed);
     }
 
-    // Fallback: create a simple plan from the response
-    Some(Plan::new(
-        "Execute user request",
-        response.chars().take(200).collect::<String>(),
-    ))
+    // No valid plan found — caller should handle the error
+    None
 }
 
 fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
@@ -2345,42 +2342,47 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
 
     let mut plan = Plan::new(objective, reasoning);
 
-    if let Some(tasks) = json.get("tasks").and_then(|v| v.as_array()) {
-        for task_json in tasks {
-            let id = task_json
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let description = task_json
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("No description");
+    let tasks = json.get("tasks").and_then(|v| v.as_array())?;
 
-            let mut task = Task::new(id, description);
+    // Empty tasks array is not a valid plan
+    if tasks.is_empty() {
+        return None;
+    }
 
-            if let Some(tool) = task_json.get("tool").and_then(|v| v.as_str())
-                && tool != "null"
-                && !tool.is_empty()
-            {
-                task = task.with_tool(tool);
-            }
+    for task_json in tasks {
+        let id = task_json
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let description = task_json
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("No description");
 
-            if let Some(args) = task_json.get("args").and_then(|v| v.as_object()) {
-                for (key, value) in args {
-                    task = task.with_arg(key, value.clone());
-                }
-            }
+        let mut task = Task::new(id, description);
 
-            if let Some(deps) = task_json.get("depends_on").and_then(|v| v.as_array()) {
-                for dep in deps {
-                    if let Some(dep_id) = dep.as_str() {
-                        task = task.with_dependency(dep_id);
-                    }
-                }
-            }
-
-            plan.add_task(task);
+        if let Some(tool) = task_json.get("tool").and_then(|v| v.as_str())
+            && tool != "null"
+            && !tool.is_empty()
+        {
+            task = task.with_tool(tool);
         }
+
+        if let Some(args) = task_json.get("args").and_then(|v| v.as_object()) {
+            for (key, value) in args {
+                task = task.with_arg(key, value.clone());
+            }
+        }
+
+        if let Some(deps) = task_json.get("depends_on").and_then(|v| v.as_array()) {
+            for dep in deps {
+                if let Some(dep_id) = dep.as_str() {
+                    task = task.with_dependency(dep_id);
+                }
+            }
+        }
+
+        plan.add_task(task);
     }
 
     Some(plan)
@@ -2433,6 +2435,68 @@ Here's my plan:
         assert_eq!(plan.tasks.len(), 2);
         assert_eq!(plan.tasks[0].tool_name, Some("read_file".to_string()));
         assert_eq!(plan.tasks[1].depends_on, vec![TaskId::new("1")]);
+    }
+
+    // ==================== parse_plan Edge Case Tests ====================
+
+    #[test]
+    fn test_parse_plan_plain_text_returns_none() {
+        // LLM がテキストだけ返した場合、空の Plan を作るべきではない
+        let response = "I'll organize the steps for you! Let me check the current state and figure out the best approach.";
+        assert!(
+            parse_plan(response).is_none(),
+            "Plain text should not produce a plan"
+        );
+    }
+
+    #[test]
+    fn test_parse_plan_empty_tasks_returns_none() {
+        // タスク 0 個の Plan は無意味なので None を返すべき
+        let response = r#"```plan
+{
+  "objective": "Do something",
+  "reasoning": "because",
+  "tasks": []
+}
+```"#;
+        assert!(
+            parse_plan(response).is_none(),
+            "Plan with empty tasks should return None"
+        );
+    }
+
+    #[test]
+    fn test_parse_plan_json_no_tasks_returns_none() {
+        // tasks フィールドがない JSON も同様
+        let response = r#"```plan
+{
+  "objective": "Do something",
+  "reasoning": "because"
+}
+```"#;
+        assert!(
+            parse_plan(response).is_none(),
+            "Plan JSON without tasks field should return None"
+        );
+    }
+
+    #[test]
+    fn test_parse_plan_raw_json_without_plan_block() {
+        // ```plan なしでも JSON 単体なら正常にパースされる（既存動作）
+        let response = r#"{"objective": "Test", "reasoning": "test", "tasks": [{"id": "1", "description": "Do it"}]}"#;
+        let plan = parse_plan(response);
+        assert!(plan.is_some(), "Raw JSON with tasks should parse");
+        assert_eq!(plan.unwrap().tasks.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_plan_raw_json_empty_tasks_returns_none() {
+        // JSON 直接でもタスク空なら None
+        let response = r#"{"objective": "Test", "reasoning": "test", "tasks": []}"#;
+        assert!(
+            parse_plan(response).is_none(),
+            "Raw JSON with empty tasks should return None"
+        );
     }
 
     #[test]
@@ -2918,6 +2982,29 @@ Here is my evaluation:
             self
         }
 
+        /// Replace planning response with a custom one (for testing parse failures)
+        fn with_plan_response(mut self, response: ScriptedResponse) -> Self {
+            // Rebuild gateway: context session + custom plan response (Fast skips review)
+            let mut gateway = ScriptedGateway::new();
+
+            // Context gathering session
+            gateway.add_session(
+                &self.config.exploration_model.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Context gathered",
+                ))],
+            );
+
+            // Custom planning session
+            gateway.add_session(
+                &self.config.decision_model.to_string(),
+                vec![response],
+            );
+
+            self.gateway = gateway;
+            self
+        }
+
         async fn execute(self) -> (Result<RunAgentOutput, RunAgentError>, TrackingProgress) {
             let progress = TrackingProgress::new();
             let gateway = Arc::new(self.gateway);
@@ -3090,6 +3177,58 @@ Here is my evaluation:
         let output = result.expect("should succeed");
         assert!(output.success);
         assert!(output.state.phase == AgentPhase::Completed);
+    }
+
+    // ==================== Plan Parse Failure Flow Tests ====================
+
+    #[tokio::test]
+    async fn test_plain_text_plan_response_fails_gracefully() {
+        // LLM がテキストだけ返した時、"Completed 0/0 tasks" ではなく失敗するべき
+        let (result, progress) = FlowTestBuilder::solo_fast()
+            .with_plan_response(ScriptedResponse::Text(
+                "I'll organize the steps for you! Let me check the current state.".into(),
+            ))
+            .execute()
+            .await;
+
+        let output = result.expect("should return output (not panic)");
+        assert!(
+            !output.success,
+            "Agent should fail when plan has no tasks, got: {}",
+            output.summary
+        );
+        // Planning should have been attempted
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        // Execution should NOT have been reached
+        assert!(
+            !progress.has_phase(&AgentPhase::Executing),
+            "Should not reach execution with invalid plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_tasks_plan_response_fails_gracefully() {
+        // タスク 0 個のプランでも同様に失敗するべき
+        let empty_plan = r#"```plan
+{
+  "objective": "Do something",
+  "reasoning": "because",
+  "tasks": []
+}
+```"#;
+        let (result, progress) = FlowTestBuilder::solo_fast()
+            .with_plan_response(ScriptedResponse::Text(empty_plan.into()))
+            .execute()
+            .await;
+
+        let output = result.expect("should return output (not panic)");
+        assert!(
+            !output.success,
+            "Agent should fail when plan has empty tasks, got: {}",
+            output.summary
+        );
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        assert!(!progress.has_phase(&AgentPhase::Executing));
     }
 
     #[tokio::test]
