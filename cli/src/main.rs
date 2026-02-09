@@ -11,7 +11,7 @@ use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
 };
 use quorum_presentation::{
-    AgentProgressReporter, AgentRepl, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig,
+    AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
 };
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -188,37 +188,29 @@ async fn main() -> Result<()> {
 
     // Determine initial consensus level
     // --ensemble flag overrides config file setting
-    let initial_level = if cli.ensemble {
+    let _initial_level = if cli.ensemble {
         agent_config = agent_config.with_ensemble();
         ConsensusLevel::Ensemble
     } else {
         agent_config.consensus_level
     };
 
-    // No question provided -> Start Agent REPL (default)
+    // No question provided -> Start TUI (default)
     if cli.question.is_none() {
-        let mut repl = AgentRepl::new(
-            gateway.clone(),
-            tool_executor,
-            context_loader.clone(),
-            agent_config.clone(),
-        )
-        .with_verbose(cli.verbose > 0)
-        .with_cancellation(cancellation_token.clone())
-        .with_consensus_level(initial_level);
-
-        // Set moderator from config
-        repl = repl.with_moderator(config.council.moderator.clone());
-
-        if let Some(dir) = working_dir {
-            repl = repl.with_working_dir(dir);
+        if let Some(dir) = &working_dir {
+            agent_config = agent_config.with_working_dir(dir);
         }
-
         if cli.final_review {
-            repl = repl.with_final_review(true);
+            agent_config = agent_config.with_final_review();
         }
 
-        repl.run().await?;
+        let mut tui_app = TuiApp::new(
+            gateway.clone(),
+            tool_executor.clone(),
+            context_loader.clone(),
+            agent_config,
+        );
+        tui_app.run().await?;
         return Ok(());
     }
 

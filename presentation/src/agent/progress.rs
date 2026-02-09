@@ -431,6 +431,10 @@ impl AgentProgressNotifier for AgentProgressReporter {
         );
     }
 
+    fn on_execution_confirmation_required(&self, _request: &str, _plan: &quorum_domain::Plan) {
+        self.finish_current_phase();
+    }
+
     // ==================== Ensemble Planning Callbacks ====================
 
     fn on_ensemble_start(&self, model_count: usize) {

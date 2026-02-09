@@ -189,6 +189,7 @@ The agent system extends quorum to autonomous task execution with safety through
 
 | Document | Description |
 |----------|-------------|
+| [tui.md](docs/features/tui.md) | Modal TUI（モーダルインターフェース） |
 | [quorum.md](docs/features/quorum.md) | Quorum Discussion & Consensus |
 | [agent-system.md](docs/features/agent-system.md) | Agent System + HiL |
 | [ensemble-mode.md](docs/features/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |

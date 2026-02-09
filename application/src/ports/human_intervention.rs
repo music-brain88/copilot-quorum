@@ -121,6 +121,24 @@ pub trait HumanInterventionPort: Send + Sync {
         plan: &Plan,
         review_history: &[ReviewRound],
     ) -> Result<HumanDecision, HumanInterventionError>;
+
+    /// Request execution confirmation before running the approved plan.
+    ///
+    /// Called when `PhaseScope::Full` is active, after plan review approval
+    /// but before task execution begins. This gives the user a final gate
+    /// to abort before any tools are actually invoked.
+    ///
+    /// # Default
+    ///
+    /// Defaults to `Approve` (proceed with execution). Override in
+    /// interactive implementations to prompt the user.
+    async fn request_execution_confirmation(
+        &self,
+        _request: &str,
+        _plan: &Plan,
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        Ok(HumanDecision::Approve)
+    }
 }
 
 /// Auto-reject implementation for `HilMode::AutoReject`.
@@ -190,6 +208,29 @@ mod tests {
         let plan = Plan::new("test", "test");
         let result = intervention
             .request_intervention("test", &plan, &[])
+            .await
+            .unwrap();
+        assert!(matches!(result, HumanDecision::Approve));
+    }
+
+    #[tokio::test]
+    async fn test_auto_reject_execution_confirmation_defaults_to_approve() {
+        let intervention = AutoRejectIntervention;
+        let plan = Plan::new("test", "test");
+        // Default implementation returns Approve
+        let result = intervention
+            .request_execution_confirmation("test", &plan)
+            .await
+            .unwrap();
+        assert!(matches!(result, HumanDecision::Approve));
+    }
+
+    #[tokio::test]
+    async fn test_auto_approve_execution_confirmation_defaults_to_approve() {
+        let intervention = AutoApproveIntervention;
+        let plan = Plan::new("test", "test");
+        let result = intervention
+            .request_execution_confirmation("test", &plan)
             .await
             .unwrap();
         assert!(matches!(result, HumanDecision::Approve));

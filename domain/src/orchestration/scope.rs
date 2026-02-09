@@ -37,6 +37,15 @@ impl PhaseScope {
     pub fn includes_action_review(&self) -> bool {
         matches!(self, PhaseScope::Full)
     }
+
+    /// Whether this scope requires explicit execution confirmation before task execution.
+    ///
+    /// Only `Full` scope requires confirmation — this is the gate between
+    /// "plan approved" and "actually running tools that modify things".
+    /// `Fast` skips it for speed; `PlanOnly` never reaches execution.
+    pub fn requires_execution_confirmation(&self) -> bool {
+        matches!(self, PhaseScope::Full)
+    }
 }
 
 impl fmt::Display for PhaseScope {
@@ -112,5 +121,12 @@ mod tests {
         assert!(PhaseScope::Full.includes_action_review());
         assert!(!PhaseScope::Fast.includes_action_review());
         assert!(!PhaseScope::PlanOnly.includes_action_review());
+    }
+
+    #[test]
+    fn test_requires_execution_confirmation() {
+        assert!(PhaseScope::Full.requires_execution_confirmation());
+        assert!(!PhaseScope::Fast.requires_execution_confirmation());
+        assert!(!PhaseScope::PlanOnly.requires_execution_confirmation());
     }
 }
