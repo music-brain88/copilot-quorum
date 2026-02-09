@@ -70,38 +70,34 @@ impl SessionChannel {
         loop {
             let msg = self.recv().await?;
             match msg {
-                RoutedMessage::SessionEvent { event_type, event } => {
-                    match event_type.as_str() {
-                        "assistant.message.delta" => {
-                            if let Some(data) = event.get("data")
-                                && let Some(content) =
-                                    data.get("content").and_then(|c| c.as_str())
-                                && !content.is_empty()
-                            {
-                                on_chunk(content);
-                                full_content.push_str(content);
-                            }
-                        }
-                        "assistant.message" => {
-                            if let Some(data) = event.get("data")
-                                && let Some(content) =
-                                    data.get("content").and_then(|c| c.as_str())
-                                && !content.is_empty()
-                                && full_content.is_empty()
-                            {
-                                on_chunk(content);
-                                full_content.push_str(content);
-                            }
-                        }
-                        "session.idle" => {
-                            debug!("Session idle, streaming complete");
-                            return Ok(full_content);
-                        }
-                        other => {
-                            trace!("Ignoring event type: {}", other);
+                RoutedMessage::SessionEvent { event_type, event } => match event_type.as_str() {
+                    "assistant.message.delta" => {
+                        if let Some(data) = event.get("data")
+                            && let Some(content) = data.get("content").and_then(|c| c.as_str())
+                            && !content.is_empty()
+                        {
+                            on_chunk(content);
+                            full_content.push_str(content);
                         }
                     }
-                }
+                    "assistant.message" => {
+                        if let Some(data) = event.get("data")
+                            && let Some(content) = data.get("content").and_then(|c| c.as_str())
+                            && !content.is_empty()
+                            && full_content.is_empty()
+                        {
+                            on_chunk(content);
+                            full_content.push_str(content);
+                        }
+                    }
+                    "session.idle" => {
+                        debug!("Session idle, streaming complete");
+                        return Ok(full_content);
+                    }
+                    other => {
+                        trace!("Ignoring event type: {}", other);
+                    }
+                },
                 RoutedMessage::ToolCall { .. } => {
                     warn!("Unexpected tool.call in read_streaming, ignoring");
                 }
@@ -119,42 +115,35 @@ impl SessionChannel {
         loop {
             let msg = self.recv().await?;
             match msg {
-                RoutedMessage::SessionEvent { event_type, event } => {
-                    match event_type.as_str() {
-                        "assistant.message.delta" => {
-                            if let Some(data) = event.get("data")
-                                && let Some(content) =
-                                    data.get("content").and_then(|c| c.as_str())
-                                && !content.is_empty()
-                            {
-                                on_chunk(content);
-                                full_content.push_str(content);
-                            }
-                        }
-                        "assistant.message" => {
-                            if let Some(data) = event.get("data")
-                                && let Some(content) =
-                                    data.get("content").and_then(|c| c.as_str())
-                                && !content.is_empty()
-                                && full_content.is_empty()
-                            {
-                                on_chunk(content);
-                                full_content.push_str(content);
-                            }
-                        }
-                        "session.idle" => {
-                            debug!("Session idle, streaming complete");
-                            return Ok(StreamingOutcome::Idle(full_content));
-                        }
-                        other => {
-                            trace!("Ignoring event type: {}", other);
+                RoutedMessage::SessionEvent { event_type, event } => match event_type.as_str() {
+                    "assistant.message.delta" => {
+                        if let Some(data) = event.get("data")
+                            && let Some(content) = data.get("content").and_then(|c| c.as_str())
+                            && !content.is_empty()
+                        {
+                            on_chunk(content);
+                            full_content.push_str(content);
                         }
                     }
-                }
-                RoutedMessage::ToolCall {
-                    request_id,
-                    params,
-                } => {
+                    "assistant.message" => {
+                        if let Some(data) = event.get("data")
+                            && let Some(content) = data.get("content").and_then(|c| c.as_str())
+                            && !content.is_empty()
+                            && full_content.is_empty()
+                        {
+                            on_chunk(content);
+                            full_content.push_str(content);
+                        }
+                    }
+                    "session.idle" => {
+                        debug!("Session idle, streaming complete");
+                        return Ok(StreamingOutcome::Idle(full_content));
+                    }
+                    other => {
+                        trace!("Ignoring event type: {}", other);
+                    }
+                },
+                RoutedMessage::ToolCall { request_id, params } => {
                     debug!(
                         "Tool call received: {} (request_id={})",
                         params.tool_name, request_id
@@ -193,38 +182,34 @@ impl SessionChannel {
             };
 
             match msg {
-                RoutedMessage::SessionEvent { event_type, event } => {
-                    match event_type.as_str() {
-                        "assistant.message.delta" => {
-                            if let Some(data) = event.get("data")
-                                && let Some(content) =
-                                    data.get("content").and_then(|c| c.as_str())
-                                && !content.is_empty()
-                            {
-                                on_chunk(content);
-                                full_content.push_str(content);
-                            }
-                        }
-                        "assistant.message" => {
-                            if let Some(data) = event.get("data")
-                                && let Some(content) =
-                                    data.get("content").and_then(|c| c.as_str())
-                                && !content.is_empty()
-                                && full_content.is_empty()
-                            {
-                                on_chunk(content);
-                                full_content.push_str(content);
-                            }
-                        }
-                        "session.idle" => {
-                            debug!("Session idle, streaming complete");
-                            return Ok(full_content);
-                        }
-                        other => {
-                            trace!("Ignoring event type: {}", other);
+                RoutedMessage::SessionEvent { event_type, event } => match event_type.as_str() {
+                    "assistant.message.delta" => {
+                        if let Some(data) = event.get("data")
+                            && let Some(content) = data.get("content").and_then(|c| c.as_str())
+                            && !content.is_empty()
+                        {
+                            on_chunk(content);
+                            full_content.push_str(content);
                         }
                     }
-                }
+                    "assistant.message" => {
+                        if let Some(data) = event.get("data")
+                            && let Some(content) = data.get("content").and_then(|c| c.as_str())
+                            && !content.is_empty()
+                            && full_content.is_empty()
+                        {
+                            on_chunk(content);
+                            full_content.push_str(content);
+                        }
+                    }
+                    "session.idle" => {
+                        debug!("Session idle, streaming complete");
+                        return Ok(full_content);
+                    }
+                    other => {
+                        trace!("Ignoring event type: {}", other);
+                    }
+                },
                 RoutedMessage::ToolCall { .. } => {
                     warn!("Unexpected tool.call in read_streaming_with_cancellation, ignoring");
                 }
@@ -366,15 +351,14 @@ impl MessageRouter {
 
         loop {
             // Read Content-Length header
-            let content_length: usize = match Self::read_content_length(&mut reader, &mut line)
-                .await
-            {
-                Ok(len) => len,
-                Err(e) => {
-                    warn!("Reader loop: failed to read content length: {}", e);
-                    break;
-                }
-            };
+            let content_length: usize =
+                match Self::read_content_length(&mut reader, &mut line).await {
+                    Ok(len) => len,
+                    Err(e) => {
+                        warn!("Reader loop: failed to read content length: {}", e);
+                        break;
+                    }
+                };
 
             // Skip empty line after headers
             loop {
@@ -447,10 +431,7 @@ impl MessageRouter {
                             {
                                 Some(p) => p,
                                 None => {
-                                    warn!(
-                                        "Router: failed to parse tool.call params (id={})",
-                                        id
-                                    );
+                                    warn!("Router: failed to parse tool.call params (id={})", id);
                                     continue;
                                 }
                             };
@@ -463,10 +444,7 @@ impl MessageRouter {
                                     params,
                                 });
                             } else {
-                                warn!(
-                                    "Router: no route for tool.call session_id={}",
-                                    session_id
-                                );
+                                warn!("Router: no route for tool.call session_id={}", session_id);
                             }
                         } else {
                             debug!("Router: ignoring incoming request method={}", method);
@@ -528,7 +506,10 @@ impl MessageRouter {
                             }
                         }
                     } else {
-                        trace!("Router: ignoring notification method={}", notification.method);
+                        trace!(
+                            "Router: ignoring notification method={}",
+                            notification.method
+                        );
                     }
                 }
             }
@@ -581,8 +562,7 @@ impl MessageRouter {
     ) -> Result<(String, SessionChannel)> {
         let _guard = self.create_lock.lock().await;
 
-        let request =
-            JsonRpcRequest::new("session.create", Some(serde_json::to_value(&params)?));
+        let request = JsonRpcRequest::new("session.create", Some(serde_json::to_value(&params)?));
 
         self.send_request(&request).await?;
 
