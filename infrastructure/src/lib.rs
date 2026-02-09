@@ -17,7 +17,7 @@ pub use context::LocalContextLoader;
 pub use copilot::{
     error::{CopilotError, Result},
     gateway::CopilotLlmGateway,
+    router::MessageRouter,
     session::CopilotSession,
-    transport::StdioTransport,
 };
 pub use tools::{LocalToolExecutor, default_tool_spec, read_only_tool_spec};

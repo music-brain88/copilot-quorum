@@ -459,6 +459,17 @@ impl AgentProgressNotifier for AgentProgressReporter {
         }
     }
 
+    fn on_ensemble_model_failed(&self, model: &quorum_domain::Model, error: &str) {
+        if let Some(pb) = self.quorum_bar.lock().unwrap().as_ref() {
+            pb.set_message(
+                format!("{} failed: {}", model, truncate(error, 40))
+                    .red()
+                    .to_string(),
+            );
+            pb.inc(1);
+        }
+    }
+
     fn on_ensemble_complete(&self, selected_model: &quorum_domain::Model, score: f64) {
         if let Some(pb) = self.quorum_bar.lock().unwrap().take() {
             pb.finish_with_message(format!(
@@ -467,6 +478,16 @@ impl AgentProgressNotifier for AgentProgressReporter {
                 selected_model.to_string().cyan(),
                 score
             ));
+        }
+    }
+
+    fn on_ensemble_fallback(&self, reason: &str) {
+        if let Some(pb) = self.quorum_bar.lock().unwrap().take() {
+            pb.finish_with_message(
+                format!("Falling back to solo: {}", truncate(reason, 50))
+                    .yellow()
+                    .to_string(),
+            );
         }
     }
 
@@ -679,8 +700,19 @@ impl AgentProgressNotifier for SimpleAgentProgress {
         println!("  🗳️  Voting on {} plans...", plan_count);
     }
 
+    fn on_ensemble_model_failed(&self, model: &quorum_domain::Model, error: &str) {
+        println!("    ✗ {} failed: {}", model, truncate(error, 40));
+    }
+
     fn on_ensemble_complete(&self, selected_model: &quorum_domain::Model, score: f64) {
         println!("  ✓ Selected: {} (score: {:.1}/10)", selected_model, score);
+    }
+
+    fn on_ensemble_fallback(&self, reason: &str) {
+        println!(
+            "  ⚠ Ensemble failed, falling back to solo: {}",
+            truncate(reason, 50)
+        );
     }
 
     // ==================== LLM Streaming Callbacks ====================

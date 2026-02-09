@@ -652,7 +652,10 @@ Quorum（合意形成）に関する型を定義します。
 |------|------------|-------------|
 | `CopilotLlmGateway` | `LlmGateway` | Copilot CLI経由のLLMゲートウェイ |
 | `CopilotSession` | `LlmSession` | Copilotセッション |
-| `StdioTransport` | - | TCP/JSON-RPC通信層 |
+| `MessageRouter` | - | TCP demultiplexer（セッション間メッセージルーティング） |
+| `SessionChannel` | - | セッション専用の受信チャネル |
+
+> 詳細は [features/transport.md](./features/transport.md) を参照してください。
 
 ### Tools Adapter
 
@@ -769,8 +772,12 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 |                          infrastructure/                                   |
 |                                                                            |
 |  +------------------+    +------------------+    +---------------------+   |
-|  | CopilotLlmGateway|----> StdioTransport   |----> copilot CLI (JSON) |   |
-|  +------------------+    +------------------+    +---------------------+   |
+|  | CopilotLlmGateway|----> MessageRouter    |----> copilot CLI (JSON) |   |
+|  +------------------+    +-------+----------+    +---------------------+   |
+|                                  |                                         |
+|                          +-------+-------+                                 |
+|                          | SessionChannel | (per session)                  |
+|                          +---------------+                                 |
 |                                                                            |
 +===========================================================================+
 ```
@@ -793,7 +800,22 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 1. `copilot --server` を起動
 2. stdout から "CLI server listening on port XXXXX" を読み取り
 3. TCP接続を確立
-4. LSP形式のヘッダー + JSON-RPCでメッセージ交換
+4. **MessageRouter** が背景タスクで TCP reader を占有、session_id でルーティング
+5. LSP形式のヘッダー + JSON-RPCでメッセージ交換
+
+### Transport Demultiplexer / トランスポート多重分離
+
+> 詳細は [features/transport.md](./features/transport.md) を参照してください。
+
+単一の TCP 接続上で複数セッションを並列運用するため、`MessageRouter` がメッセージを
+session_id ベースで各 `SessionChannel` にルーティングします。
+
+```
+Session A ← channel_a ←┐
+Session B ← channel_b ←┤── MessageRouter (background reader task)
+Session C ← channel_c ←┘        │
+                                 └── TCP reader (single owner, no Mutex)
+```
 
 ### Message Format / メッセージ形式
 
@@ -827,6 +849,10 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 ```
 
 非同期処理は `tokio` ランタイム上で実行。各フェーズ内のモデル呼び出しは `JoinSet` で並列化されており、レイテンシを最小化しています。
+
+各 `JoinSet::spawn` 内で `gateway.create_session()` が呼ばれ、`MessageRouter` が
+session_id 毎に独立した `SessionChannel` を払い出すため、並列セッション間でメッセージが
+混線することはありません（詳細は [features/transport.md](./features/transport.md)）。
 
 ---
 

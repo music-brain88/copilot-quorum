@@ -202,11 +202,22 @@ impl AgentProgressNotifier for TuiProgressBridge {
         )));
     }
 
+    fn on_ensemble_model_failed(&self, model: &Model, error: &str) {
+        self.emit(TuiEvent::EnsembleModelFailed {
+            model: model.to_string(),
+            error: error.to_string(),
+        });
+    }
+
     fn on_ensemble_complete(&self, selected_model: &Model, score: f64) {
         self.emit(TuiEvent::EnsembleComplete {
             selected_model: selected_model.to_string(),
             score,
         });
+    }
+
+    fn on_ensemble_fallback(&self, reason: &str) {
+        self.emit(TuiEvent::EnsembleFallback(reason.to_string()));
     }
 }
 
