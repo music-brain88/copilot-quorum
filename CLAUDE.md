@@ -195,4 +195,5 @@ The agent system extends quorum to autonomous task execution with safety through
 | [ensemble-mode.md](docs/features/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
 | [tool-system.md](docs/features/tool-system.md) | Tool System（プラグイン、リスク分類） |
 | [native-tool-use.md](docs/features/native-tool-use.md) | Native Tool Use API（構造化ツール呼び出し） |
+| [transport.md](docs/features/transport.md) | Transport Demultiplexer（並列セッションルーティング） |
 | [cli-and-configuration.md](docs/features/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |

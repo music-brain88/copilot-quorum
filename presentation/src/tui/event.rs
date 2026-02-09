@@ -92,10 +92,15 @@ pub enum TuiEvent {
     // -- Ensemble --
     EnsembleStart(usize),
     EnsemblePlanGenerated(String),
+    EnsembleModelFailed {
+        model: String,
+        error: String,
+    },
     EnsembleComplete {
         selected_model: String,
         score: f64,
     },
+    EnsembleFallback(String),
 
     // -- Other --
     HistoryCleared,

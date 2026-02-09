@@ -16,6 +16,7 @@
 | [Tool System](./tool-system.md) | プラグインベースのツールアーキテクチャ |
 | [Native Tool Use](./native-tool-use.md) | Native Tool Use API による構造化ツール呼び出し |
 | [Modal TUI](./tui.md) | Neovim ライクなモーダルインターフェース |
+| [Transport Demultiplexer](./transport.md) | 並列セッションのメッセージルーティング |
 | [CLI & Configuration](./cli-and-configuration.md) | REPL コマンド、設定、コンテキスト管理 |
 
 ---
@@ -35,5 +36,6 @@
 2. **[Tool System](./tool-system.md)** - ツール追加方法
 3. **[Native Tool Use](./native-tool-use.md)** - Native API によるツール呼び出し
 4. **[Ensemble Mode](./ensemble-mode.md)** - 設計判断の背景
-5. **[Agent System](./agent-system.md)** - エージェントアーキテクチャ
+5. **[Transport Demultiplexer](./transport.md)** - 並列セッションの仕組み
+6. **[Agent System](./agent-system.md)** - エージェントアーキテクチャ
 6. **[ARCHITECTURE.md](../ARCHITECTURE.md#tui-design-philosophy--tui-設計思想)** - TUI 設計思想

@@ -549,6 +549,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             TuiEvent::EnsemblePlanGenerated(model) => {
                 state.set_flash(format!("Plan generated: {}", model));
             }
+            TuiEvent::EnsembleModelFailed { model, error } => {
+                state.set_flash(format!("{} failed: {}", model, error));
+            }
             TuiEvent::EnsembleComplete {
                 selected_model,
                 score,
@@ -557,6 +560,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     "Selected: {} (score: {:.1})",
                     selected_model, score
                 ));
+            }
+            TuiEvent::EnsembleFallback(reason) => {
+                state.set_flash(format!("Ensemble failed, solo fallback: {}", reason));
             }
             TuiEvent::AgentStarting => {
                 state.progress.is_running = true;

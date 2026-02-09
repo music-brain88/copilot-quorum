@@ -1,58 +1,75 @@
-//! Copilot LLM Gateway implementation
+//! Copilot LLM Gateway — entry point for all LLM communication.
+//!
+//! [`CopilotLlmGateway`] implements the
+//! [`LlmGateway`] port
+//! and is the **single factory** for creating [`CopilotSession`]s.
+//!
+//! Every user-facing feature goes through this gateway:
+//!
+//! - **Solo mode** — `create_session()` once
+//! - **Quorum Discussion** — `create_session()` × N models × phases
+//! - **Ensemble Planning** — `create_session()` × N² for plans + voting
+//! - **Agent System** — sessions with tool definitions via `CopilotSession::send_with_tools`
+//!
+//! Internally, the gateway owns an [`Arc<MessageRouter>`](super::router::MessageRouter)
+//! which is shared with all sessions. The router handles the actual TCP
+//! communication and demultiplexing.
 
+use crate::copilot::router::MessageRouter;
 use crate::copilot::session::CopilotSession;
-use crate::copilot::transport::StdioTransport;
 use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use quorum_domain::Model;
 use std::sync::Arc;
 use tracing::info;
 
-/// LLM Gateway implementation for GitHub Copilot CLI
+/// LLM Gateway implementation for GitHub Copilot CLI.
+///
+/// Owns the [`MessageRouter`] and creates [`CopilotSession`]s on demand.
+/// A single gateway instance is shared across the entire application lifetime.
 pub struct CopilotLlmGateway {
-    transport: Arc<StdioTransport>,
+    router: Arc<MessageRouter>,
 }
 
 impl CopilotLlmGateway {
-    /// Create a new gateway by spawning the Copilot CLI
+    /// Create a new gateway by spawning the Copilot CLI.
+    ///
+    /// This is the standard production path, called during application startup
+    /// in `cli/src/main.rs`.
     pub async fn new() -> Result<Self, GatewayError> {
-        let transport = StdioTransport::spawn()
+        let router = MessageRouter::spawn()
             .await
             .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
 
         info!("CopilotLlmGateway initialized");
 
-        Ok(Self {
-            transport: Arc::new(transport),
-        })
+        Ok(Self { router })
     }
 
     /// Create a gateway with a custom command (for testing)
     pub async fn with_command(cmd: &str) -> Result<Self, GatewayError> {
-        let transport = StdioTransport::spawn_with_command(cmd)
+        let router = MessageRouter::spawn_with_command(cmd)
             .await
             .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
 
-        Ok(Self {
-            transport: Arc::new(transport),
-        })
+        Ok(Self { router })
     }
 
-    /// Create a gateway with an existing transport
-    pub fn with_transport(transport: Arc<StdioTransport>) -> Self {
-        Self { transport }
+    /// Create a gateway with a pre-built router (useful for shared test setups).
+    pub fn with_router(router: Arc<MessageRouter>) -> Self {
+        Self { router }
     }
 
-    /// Get a reference to the underlying transport
-    pub fn transport(&self) -> &Arc<StdioTransport> {
-        &self.transport
+    /// Get a reference to the underlying router
+    pub fn router(&self) -> &Arc<MessageRouter> {
+        &self.router
     }
 }
 
 #[async_trait]
 impl LlmGateway for CopilotLlmGateway {
     async fn create_session(&self, model: &Model) -> Result<Box<dyn LlmSession>, GatewayError> {
-        let session = CopilotSession::new(Arc::clone(&self.transport), model.clone())
+        let session = CopilotSession::new(Arc::clone(&self.router), model.clone())
             .await
             .map_err(|e| GatewayError::SessionError(e.to_string()))?;
 
@@ -65,7 +82,7 @@ impl LlmGateway for CopilotLlmGateway {
         system_prompt: &str,
     ) -> Result<Box<dyn LlmSession>, GatewayError> {
         let session = CopilotSession::new_with_system_prompt(
-            Arc::clone(&self.transport),
+            Arc::clone(&self.router),
             model.clone(),
             Some(system_prompt.to_string()),
         )
