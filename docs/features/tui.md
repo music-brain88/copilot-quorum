@@ -31,6 +31,10 @@ COMMAND モード        INSERT モード         $EDITOR (vim/neovim)
 | `i` / `a` | INSERT モードへ |
 | `I` | $EDITOR を起動（未実装） |
 | `:` | COMMAND モードへ |
+| `s` | Solo モードに切り替え |
+| `e` | Ensemble モードに切り替え |
+| `f` | Fast/Full スコープトグル |
+| `d` | Quorum Discussion 開始（`:discuss ` プリフィル） |
 | `j` / `k` / `↓` / `↑` | 会話バッファスクロール |
 | `g` | バッファ先頭 |
 | `G` | バッファ末尾 |
@@ -131,10 +135,11 @@ NORMAL モードで `I` を押すと `$EDITOR`（vim/neovim 等）を全画面�
 | j/k スクロール | 実装済 |
 | g/G 先頭/末尾 | 実装済 |
 | ? ヘルプ | 実装済 |
-| `:ask` | 未実装 |
-| `I` ($EDITOR 委譲) | 未実装 |
-| NORMAL キーバインド (d, s, e, f) | 未実装 |
-| VISUAL モード | 未実装（Phase 2 以降） |
+| NORMAL キーバインド (s, e, f, d) | 実装済 |
+| `:ask` | 未実装 (#78) |
+| `I` ($EDITOR 委譲) | 未実装 (#79) |
+| NORMAL キーバインド (/, y, .) | 未実装 (#78) |
+| VISUAL モード | 未実装（将来） |
 
 ---
 
@@ -144,4 +149,4 @@ NORMAL モードで `I` を押すと `$EDITOR`（vim/neovim 等）を全画面�
 - [Discussion #58: Neovim-Style Extensible TUI](https://github.com/music-brain88/copilot-quorum/discussions/58) — 元の提案
 - [CLI & Configuration](./cli-and-configuration.md) — 設定オプション
 
-<!-- LLM Context: TUI は 3 つのモード (Normal, Insert, Command) を持つモーダルインターフェース。3 つの入力粒度: :ask (COMMAND, 即時質問), i (INSERT, 対話的), I ($EDITOR, がっつり)。NORMAL がホームポジション。:ask (未実装) と :discuss (実装済) は COMMAND モードのファーストクラスコマンド。$EDITOR 委譲は未実装。主要ファイルは presentation/src/tui/。 -->
+<!-- LLM Context: TUI は 3 つのモード (Normal, Insert, Command) を持つモーダルインターフェース。3 つの入力粒度: :ask (COMMAND, 即時質問, 未実装), i (INSERT, 対話的), I ($EDITOR, がっつり, 未実装)。NORMAL がホームポジション。NORMAL モードクイックキー: s (Solo), e (Ensemble), f (Fast トグル), d (Discuss プリフィル)。:discuss (実装済) は COMMAND モードのファーストクラスコマンド。Follow-up: #78 (/, y, .), #79 ($EDITOR)。主要ファイルは presentation/src/tui/。 -->

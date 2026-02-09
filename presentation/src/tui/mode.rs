@@ -67,6 +67,12 @@ pub enum KeyAction {
     ScrollToTop,
     ScrollToBottom,
 
+    // -- Quick commands (Normal mode) --
+    SwitchSolo,
+    SwitchEnsemble,
+    ToggleFast,
+    StartDiscuss,
+
     // -- Application --
     Quit,
     ShowHelp,
@@ -92,6 +98,12 @@ fn handle_normal(key: KeyEvent) -> KeyAction {
         // Mode transitions
         KeyCode::Char('i') | KeyCode::Char('a') => KeyAction::EnterInsert,
         KeyCode::Char(':') => KeyAction::EnterCommand,
+
+        // Quick commands
+        KeyCode::Char('s') => KeyAction::SwitchSolo,
+        KeyCode::Char('e') => KeyAction::SwitchEnsemble,
+        KeyCode::Char('f') => KeyAction::ToggleFast,
+        KeyCode::Char('d') => KeyAction::StartDiscuss,
 
         // Scrolling
         KeyCode::Char('j') | KeyCode::Down => KeyAction::ScrollDown,
@@ -224,5 +236,25 @@ mod tests {
             handle_key_event(InputMode::Command, key),
             KeyAction::ExitToNormal
         );
+    }
+
+    #[test]
+    fn test_normal_quick_commands() {
+        let cases = vec![
+            ('s', KeyAction::SwitchSolo),
+            ('e', KeyAction::SwitchEnsemble),
+            ('f', KeyAction::ToggleFast),
+            ('d', KeyAction::StartDiscuss),
+        ];
+        for (ch, expected) in cases {
+            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+            assert_eq!(
+                handle_key_event(InputMode::Normal, key),
+                expected,
+                "Normal mode '{}' should map to {:?}",
+                ch,
+                expected,
+            );
+        }
     }
 }

@@ -259,6 +259,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("Normal Mode:"),
             Line::from("  i/a    Enter Insert mode"),
             Line::from("  :      Enter Command mode"),
+            Line::from("  s      Switch to Solo mode"),
+            Line::from("  e      Switch to Ensemble mode"),
+            Line::from("  f      Toggle Fast scope"),
+            Line::from("  d      Start Quorum Discussion"),
             Line::from("  j/k    Scroll down/up"),
             Line::from("  g/G    Scroll to top/bottom"),
             Line::from("  ?      Toggle this help"),
@@ -411,6 +415,23 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         let _ = self.cmd_tx.send(TuiCommand::HandleCommand(cmd));
                     }
                 }
+            }
+
+            // Quick commands
+            KeyAction::SwitchSolo => {
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("solo".into()));
+            }
+            KeyAction::SwitchEnsemble => {
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("ens".into()));
+            }
+            KeyAction::ToggleFast => {
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("fast".into()));
+            }
+            KeyAction::StartDiscuss => {
+                // Enter command mode with "discuss " pre-filled
+                state.mode = InputMode::Command;
+                state.command_input = "discuss ".into();
+                state.command_cursor = state.command_input.len();
             }
 
             // Scrolling
