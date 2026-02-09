@@ -18,7 +18,7 @@ use crate::ports::human_intervention::{HumanInterventionError, HumanIntervention
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::core::string::truncate;
-use quorum_domain::session::response::LlmResponse;
+use quorum_domain::session::response::{ContentBlock, LlmResponse};
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
     HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
@@ -79,6 +79,30 @@ impl RunAgentError {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, RunAgentError::Cancelled)
     }
+}
+
+/// Result of the planning phase.
+///
+/// When the LLM determines a request doesn't need a plan (e.g., greetings,
+/// questions), it returns text without calling `create_plan`. This enum
+/// distinguishes that case from a successful plan creation.
+enum PlanningResult {
+    /// LLM created a structured plan
+    Plan(Plan),
+    /// LLM responded with text only (no plan needed)
+    TextResponse(String),
+}
+
+/// Result of the ensemble planning phase.
+///
+/// Similar to [`PlanningResult`] but for ensemble mode. When all models return
+/// text-only responses (no plans), we treat it as a normal text response
+/// rather than an error.
+enum EnsemblePlanningOutcome {
+    /// Multiple models generated plans, voted, and selected one
+    Plans(EnsemblePlanResult),
+    /// All models returned text only (no plan needed)
+    TextResponse(String),
 }
 
 /// Input for the RunAgent use case
@@ -449,6 +473,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     ///
     /// Uses `send_streaming()` to receive incremental chunks, forwarding each
     /// to `progress.on_llm_chunk()` for real-time display.
+    ///
+    /// Note: Currently unused after migrating `create_plan()` to Native Tool Use.
+    /// Kept for future text-only LLM interactions (e.g., plan review, summaries).
+    #[allow(dead_code)]
     async fn send_with_cancellation(
         &self,
         session: &dyn LlmSession,
@@ -630,7 +658,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     )
                     .await
                 {
-                    Ok(result) => result,
+                    Ok(EnsemblePlanningOutcome::Plans(result)) => result,
+                    Ok(EnsemblePlanningOutcome::TextResponse(text)) => {
+                        state.add_thought(Thought::observation("No plan needed for this request"));
+                        state.complete();
+                        return Ok(RunAgentOutput {
+                            summary: text,
+                            success: true,
+                            state,
+                        });
+                    }
                     Err(e) => {
                         state.fail(format!("Ensemble planning failed: {}", e));
                         return Ok(RunAgentOutput {
@@ -685,13 +722,23 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 )
                 .await
             {
-                Ok(plan) => {
+                Ok(PlanningResult::Plan(plan)) => {
                     state.add_thought(Thought::planning(format!(
                         "Created plan with {} tasks: {}",
                         plan.tasks.len(),
                         plan.objective
                     )));
                     plan
+                }
+                Ok(PlanningResult::TextResponse(text)) => {
+                    // LLM determined no plan is needed — return text response directly
+                    state.add_thought(Thought::observation("No plan needed for this request"));
+                    state.complete();
+                    return Ok(RunAgentOutput {
+                        summary: text,
+                        success: true,
+                        state,
+                    });
                 }
                 Err(e) => {
                     state.fail(format!("Planning failed: {}", e));
@@ -1136,7 +1183,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         Ok(context)
     }
 
-    /// Create a plan for the task
+    /// Create a plan for the task using Native Tool Use API.
+    ///
+    /// Sends the `create_plan` virtual tool schema so the LLM returns a
+    /// structured plan via tool use. Falls back to text parsing if the
+    /// provider doesn't support tool use.
     async fn create_plan(
         &self,
         session: &dyn LlmSession,
@@ -1144,12 +1195,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         context: &AgentContext,
         previous_feedback: Option<&str>,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<Plan, RunAgentError> {
+    ) -> Result<PlanningResult, RunAgentError> {
         let prompt =
             AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
+        let plan_tool = AgentPromptTemplate::plan_tool_schema();
 
         let response = match self
-            .send_with_cancellation(session, &prompt, progress)
+            .send_with_tools_cancellable(session, &prompt, &[plan_tool], progress)
             .await
         {
             Ok(response) => response,
@@ -1157,10 +1209,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Err(e) => return Err(RunAgentError::PlanningFailed(e.to_string())),
         };
 
-        // Parse the plan from the response
-        parse_plan(&response).ok_or_else(|| {
-            RunAgentError::PlanningFailed("Failed to parse plan from model response".to_string())
-        })
+        // Extract plan from tool use or fallback to text response
+        if let Some(plan) = extract_plan_from_response(&response) {
+            return Ok(PlanningResult::Plan(plan));
+        }
+
+        // No plan found — LLM responded with text only (e.g., greeting, question)
+        let text = response.text_content();
+        if !text.is_empty() {
+            return Ok(PlanningResult::TextResponse(text));
+        }
+
+        Err(RunAgentError::PlanningFailed(
+            "No plan or text response from model".to_string(),
+        ))
     }
 
     /// Create plans using ensemble approach (multiple models generate independently, then vote)
@@ -1209,7 +1271,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         system_prompt: &str,
         previous_feedback: Option<&str>,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<EnsemblePlanResult, RunAgentError> {
+    ) -> Result<EnsemblePlanningOutcome, RunAgentError> {
         let models = &input.config.review_models;
 
         if models.is_empty() {
@@ -1233,6 +1295,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         let prompt =
             AgentPromptTemplate::planning_with_feedback(&input.request, context, previous_feedback);
+        let plan_tool = AgentPromptTemplate::plan_tool_schema();
 
         let mut join_set = JoinSet::new();
 
@@ -1241,20 +1304,27 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let model = model.clone();
             let prompt = prompt.clone();
             let system_prompt = system_prompt.to_string();
+            let plan_tool = plan_tool.clone();
 
             join_set.spawn(async move {
                 let session = gateway
                     .create_session_with_system_prompt(&model, &system_prompt)
                     .await?;
-                let response = session.send(&prompt).await?;
-                let plan = parse_plan(&response)
-                    .ok_or_else(|| GatewayError::Other("Failed to parse plan".to_string()))?;
-                Ok::<(Model, Plan), GatewayError>((model, plan))
+                let response = session.send_with_tools(&prompt, &[plan_tool]).await?;
+
+                if let Some(plan) = extract_plan_from_response(&response) {
+                    return Ok((model, Some(plan), String::new()));
+                }
+
+                // No plan — return text response
+                let text = response.text_content();
+                Ok::<(Model, Option<Plan>, String), GatewayError>((model, None, text))
             });
         }
 
         // Collect generated plans with cancellation support
         let mut candidates: Vec<PlanCandidate> = Vec::new();
+        let mut text_responses: Vec<String> = Vec::new();
 
         loop {
             let result = if let Some(ref token) = self.cancellation_token {
@@ -1275,10 +1345,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             };
 
             match result {
-                Ok(Ok((model, plan))) => {
+                Ok(Ok((model, Some(plan), _))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
                     progress.on_ensemble_plan_generated(&model);
                     candidates.push(PlanCandidate::new(model, plan));
+                }
+                Ok(Ok((model, None, text))) => {
+                    info!("Model {} returned text only (no plan)", model);
+                    if !text.is_empty() {
+                        text_responses.push(text);
+                    }
                 }
                 Ok(Err(e)) => {
                     warn!("Model failed to generate plan: {}", e);
@@ -1290,6 +1366,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         if candidates.is_empty() {
+            // All models returned text-only — treat as normal text response
+            if let Some(text) = text_responses.into_iter().next() {
+                return Ok(EnsemblePlanningOutcome::TextResponse(text));
+            }
             return Err(RunAgentError::EnsemblePlanningFailed(
                 "All models failed to generate plans".to_string(),
             ));
@@ -1298,7 +1378,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if candidates.len() == 1 {
             // Only one plan succeeded, use it directly
             info!("Only one plan generated, selecting it directly");
-            return Ok(EnsemblePlanResult::new(candidates, 0));
+            return Ok(EnsemblePlanningOutcome::Plans(EnsemblePlanResult::new(
+                candidates, 0,
+            )));
         }
 
         // Step 2: Each model votes on the other models' plans
@@ -1383,7 +1465,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             progress.on_ensemble_complete(&selected.model, selected.average_score());
         }
 
-        Ok(result)
+        Ok(EnsemblePlanningOutcome::Plans(result))
     }
 
     /// Determine the appropriate model for a task based on tool risk level
@@ -2306,6 +2388,32 @@ fn parse_vote_score(response: &str) -> f64 {
     5.0
 }
 
+/// Extract a plan from a structured LlmResponse.
+///
+/// 1. First looks for a `create_plan` ToolUse block (Native Tool Use path).
+/// 2. Falls back to text-based `parse_plan()` (for providers that don't support tool use).
+fn extract_plan_from_response(response: &LlmResponse) -> Option<Plan> {
+    // 1. Look for create_plan tool call
+    for block in &response.content {
+        if let ContentBlock::ToolUse { name, input, .. } = block
+            && name == "create_plan"
+        {
+            let json = serde_json::Value::Object(
+                input.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            );
+            return parse_plan_json(&json);
+        }
+    }
+
+    // 2. Fallback: parse from text content (for providers without Native Tool Use)
+    let text = response.text_content();
+    if !text.is_empty() {
+        return parse_plan(&text);
+    }
+
+    None
+}
+
 /// Parse a plan from model response
 fn parse_plan(response: &str) -> Option<Plan> {
     // Look for ```plan ... ``` blocks
@@ -2332,11 +2440,8 @@ fn parse_plan(response: &str) -> Option<Plan> {
         return parse_plan_json(&parsed);
     }
 
-    // Fallback: create a simple plan from the response
-    Some(Plan::new(
-        "Execute user request",
-        response.chars().take(200).collect::<String>(),
-    ))
+    // No valid plan found — caller should handle the error
+    None
 }
 
 fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
@@ -2345,42 +2450,47 @@ fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
 
     let mut plan = Plan::new(objective, reasoning);
 
-    if let Some(tasks) = json.get("tasks").and_then(|v| v.as_array()) {
-        for task_json in tasks {
-            let id = task_json
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let description = task_json
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("No description");
+    let tasks = json.get("tasks").and_then(|v| v.as_array())?;
 
-            let mut task = Task::new(id, description);
+    // Empty tasks array is not a valid plan
+    if tasks.is_empty() {
+        return None;
+    }
 
-            if let Some(tool) = task_json.get("tool").and_then(|v| v.as_str())
-                && tool != "null"
-                && !tool.is_empty()
-            {
-                task = task.with_tool(tool);
-            }
+    for task_json in tasks {
+        let id = task_json
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let description = task_json
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("No description");
 
-            if let Some(args) = task_json.get("args").and_then(|v| v.as_object()) {
-                for (key, value) in args {
-                    task = task.with_arg(key, value.clone());
-                }
-            }
+        let mut task = Task::new(id, description);
 
-            if let Some(deps) = task_json.get("depends_on").and_then(|v| v.as_array()) {
-                for dep in deps {
-                    if let Some(dep_id) = dep.as_str() {
-                        task = task.with_dependency(dep_id);
-                    }
-                }
-            }
-
-            plan.add_task(task);
+        if let Some(tool) = task_json.get("tool").and_then(|v| v.as_str())
+            && tool != "null"
+            && !tool.is_empty()
+        {
+            task = task.with_tool(tool);
         }
+
+        if let Some(args) = task_json.get("args").and_then(|v| v.as_object()) {
+            for (key, value) in args {
+                task = task.with_arg(key, value.clone());
+            }
+        }
+
+        if let Some(deps) = task_json.get("depends_on").and_then(|v| v.as_array()) {
+            for dep in deps {
+                if let Some(dep_id) = dep.as_str() {
+                    task = task.with_dependency(dep_id);
+                }
+            }
+        }
+
+        plan.add_task(task);
     }
 
     Some(plan)
@@ -2433,6 +2543,165 @@ Here's my plan:
         assert_eq!(plan.tasks.len(), 2);
         assert_eq!(plan.tasks[0].tool_name, Some("read_file".to_string()));
         assert_eq!(plan.tasks[1].depends_on, vec![TaskId::new("1")]);
+    }
+
+    // ==================== parse_plan Edge Case Tests ====================
+
+    #[test]
+    fn test_parse_plan_plain_text_returns_none() {
+        // LLM がテキストだけ返した場合、空の Plan を作るべきではない
+        let response = "I'll organize the steps for you! Let me check the current state and figure out the best approach.";
+        assert!(
+            parse_plan(response).is_none(),
+            "Plain text should not produce a plan"
+        );
+    }
+
+    #[test]
+    fn test_parse_plan_empty_tasks_returns_none() {
+        // タスク 0 個の Plan は無意味なので None を返すべき
+        let response = r#"```plan
+{
+  "objective": "Do something",
+  "reasoning": "because",
+  "tasks": []
+}
+```"#;
+        assert!(
+            parse_plan(response).is_none(),
+            "Plan with empty tasks should return None"
+        );
+    }
+
+    #[test]
+    fn test_parse_plan_json_no_tasks_returns_none() {
+        // tasks フィールドがない JSON も同様
+        let response = r#"```plan
+{
+  "objective": "Do something",
+  "reasoning": "because"
+}
+```"#;
+        assert!(
+            parse_plan(response).is_none(),
+            "Plan JSON without tasks field should return None"
+        );
+    }
+
+    #[test]
+    fn test_parse_plan_raw_json_without_plan_block() {
+        // ```plan なしでも JSON 単体なら正常にパースされる（既存動作）
+        let response = r#"{"objective": "Test", "reasoning": "test", "tasks": [{"id": "1", "description": "Do it"}]}"#;
+        let plan = parse_plan(response);
+        assert!(plan.is_some(), "Raw JSON with tasks should parse");
+        assert_eq!(plan.unwrap().tasks.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_plan_raw_json_empty_tasks_returns_none() {
+        // JSON 直接でもタスク空なら None
+        let response = r#"{"objective": "Test", "reasoning": "test", "tasks": []}"#;
+        assert!(
+            parse_plan(response).is_none(),
+            "Raw JSON with empty tasks should return None"
+        );
+    }
+
+    // ==================== extract_plan_from_response Tests ====================
+
+    #[test]
+    fn test_extract_plan_from_tool_call() {
+        use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
+        use std::collections::HashMap;
+
+        let mut input = HashMap::new();
+        input.insert("objective".to_string(), serde_json::json!("Fix the bug"));
+        input.insert(
+            "reasoning".to_string(),
+            serde_json::json!("Bug is critical"),
+        );
+        input.insert(
+            "tasks".to_string(),
+            serde_json::json!([
+                {
+                    "id": "1",
+                    "description": "Read the buggy file",
+                    "tool": "read_file",
+                    "args": {"path": "src/main.rs"}
+                },
+                {
+                    "id": "2",
+                    "description": "Fix the bug",
+                    "tool": "write_file",
+                    "args": {"path": "src/main.rs", "content": "fixed"},
+                    "depends_on": ["1"]
+                }
+            ]),
+        );
+
+        let response = LlmResponse {
+            content: vec![
+                ContentBlock::Text("Let me create a plan.".to_string()),
+                ContentBlock::ToolUse {
+                    id: "toolu_abc123".to_string(),
+                    name: "create_plan".to_string(),
+                    input,
+                },
+            ],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        };
+
+        let plan =
+            extract_plan_from_response(&response).expect("should extract plan from tool call");
+        assert_eq!(plan.objective, "Fix the bug");
+        assert_eq!(plan.reasoning, "Bug is critical");
+        assert_eq!(plan.tasks.len(), 2);
+        assert_eq!(plan.tasks[0].tool_name, Some("read_file".to_string()));
+        assert_eq!(plan.tasks[1].depends_on, vec![TaskId::new("1")]);
+    }
+
+    #[test]
+    fn test_extract_plan_from_text_fallback() {
+        // When provider doesn't support tool use, falls back to text parsing
+        let text_plan = r#"```plan
+{
+  "objective": "Update README",
+  "reasoning": "Needs updating",
+  "tasks": [
+    {"id": "1", "description": "Read README", "tool": "read_file"}
+  ]
+}
+```"#;
+        let response = LlmResponse::from_text(text_plan);
+
+        let plan =
+            extract_plan_from_response(&response).expect("should extract plan from text fallback");
+        assert_eq!(plan.objective, "Update README");
+        assert_eq!(plan.tasks.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_plan_from_response_no_plan() {
+        // Neither tool use nor parseable text
+        let response = LlmResponse::from_text("I'll think about this.");
+        assert!(extract_plan_from_response(&response).is_none());
+    }
+
+    #[test]
+    fn test_plan_tool_schema_structure() {
+        let schema = AgentPromptTemplate::plan_tool_schema();
+        assert_eq!(schema["name"], "create_plan");
+        assert!(schema["description"].as_str().unwrap().contains("MUST"));
+        assert_eq!(schema["input_schema"]["type"], "object");
+
+        let required = schema["input_schema"]["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("objective")));
+        assert!(required.contains(&serde_json::json!("reasoning")));
+        assert!(required.contains(&serde_json::json!("tasks")));
+
+        // tasks has minItems: 1
+        assert_eq!(schema["input_schema"]["properties"]["tasks"]["minItems"], 1);
     }
 
     #[test]
@@ -2514,7 +2783,7 @@ Here is my evaluation:
     use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
     use crate::ports::tool_executor::ToolExecutorPort;
     use async_trait::async_trait;
-    use quorum_domain::session::response::LlmResponse;
+    use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::tool::value_objects::ToolResult;
     use quorum_domain::{ConsensusLevel, PhaseScope};
@@ -2790,26 +3059,33 @@ Here is my evaluation:
         }
     }
 
-    /// Helper to create a plan JSON that the planner will return
-    fn make_plan_response(objective: &str) -> String {
-        format!(
-            r#"```plan
-{{
-  "objective": "{}",
-  "reasoning": "test reasoning",
-  "tasks": [
-    {{
-      "id": "1",
-      "description": "Read file",
-      "tool": "read_file",
-      "args": {{"path": "test.txt"}},
-      "depends_on": []
-    }}
-  ]
-}}
-```"#,
-            objective
-        )
+    /// Helper to create a plan as a ToolUse LlmResponse (Native Tool Use path)
+    fn make_plan_response(objective: &str) -> ScriptedResponse {
+        let mut input = HashMap::new();
+        input.insert("objective".to_string(), serde_json::json!(objective));
+        input.insert("reasoning".to_string(), serde_json::json!("test reasoning"));
+        input.insert(
+            "tasks".to_string(),
+            serde_json::json!([
+                {
+                    "id": "1",
+                    "description": "Read file",
+                    "tool": "read_file",
+                    "args": {"path": "test.txt"},
+                    "depends_on": []
+                }
+            ]),
+        );
+
+        ScriptedResponse::Response(LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "toolu_plan_001".to_string(),
+                name: "create_plan".to_string(),
+                input,
+            }],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        })
     }
 
     /// Helper to create an "APPROVE" review response
@@ -2862,7 +3138,7 @@ Here is my evaluation:
             // Planning session (decision model) - returns a plan
             gateway.add_session(
                 &Model::ClaudeSonnet45.to_string(),
-                vec![ScriptedResponse::Text(make_plan_response("Test plan"))],
+                vec![make_plan_response("Test plan")],
             );
 
             // Plan review session (review model) - APPROVE
@@ -2903,6 +3179,97 @@ Here is my evaluation:
             builder
         }
 
+        /// Ensemble + Fast minimal configuration
+        ///
+        /// 2 review models (ClaudeHaiku45, ClaudeSonnet45), each gets a planning session.
+        /// By default, both return plans — override with `with_ensemble_plan_responses()`.
+        fn ensemble_fast() -> Self {
+            let config = AgentConfig {
+                exploration_model: Model::ClaudeHaiku45,
+                decision_model: Model::ClaudeSonnet45,
+                review_models: vec![Model::ClaudeHaiku45, Model::ClaudeSonnet45],
+                consensus_level: ConsensusLevel::Ensemble,
+                phase_scope: PhaseScope::Fast,
+                require_plan_review: false,
+                require_final_review: false,
+                max_iterations: 50,
+                working_dir: None,
+                max_tool_retries: 2,
+                max_plan_revisions: 3,
+                hil_mode: HilMode::Interactive,
+                max_tool_turns: 3,
+                orchestration_strategy: Default::default(),
+            };
+            let mut gateway = ScriptedGateway::new();
+
+            // Context gathering session (exploration model)
+            gateway.add_session(
+                &Model::ClaudeHaiku45.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Context gathered",
+                ))],
+            );
+
+            // Planning sessions for each review model (default: both return plans)
+            gateway.add_session(
+                &Model::ClaudeHaiku45.to_string(),
+                vec![make_plan_response("Plan from Haiku")],
+            );
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![make_plan_response("Plan from Sonnet")],
+            );
+
+            // Voting sessions (each model votes on the other's plan)
+            gateway.add_session(
+                &Model::ClaudeHaiku45.to_string(),
+                vec![ScriptedResponse::Text("Score: 7/10".to_string())],
+            );
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![ScriptedResponse::Text("Score: 8/10".to_string())],
+            );
+
+            // Execution session (decision model)
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Task completed successfully",
+                ))],
+            );
+
+            Self {
+                config,
+                gateway,
+                tool_executor: MockToolExecutor::new(),
+                human_intervention: None,
+            }
+        }
+
+        /// Replace ensemble planning responses for all review models
+        fn with_ensemble_plan_responses(
+            mut self,
+            responses: Vec<(Model, ScriptedResponse)>,
+        ) -> Self {
+            let mut gateway = ScriptedGateway::new();
+
+            // Context gathering session
+            gateway.add_session(
+                &self.config.exploration_model.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Context gathered",
+                ))],
+            );
+
+            // Custom planning sessions for each model
+            for (model, response) in responses {
+                gateway.add_session(&model.to_string(), vec![response]);
+            }
+
+            self.gateway = gateway;
+            self
+        }
+
         fn with_phase_scope(mut self, scope: PhaseScope) -> Self {
             self.config.phase_scope = scope;
             self
@@ -2915,6 +3282,26 @@ Here is my evaluation:
 
         fn with_hil_mode(mut self, mode: HilMode) -> Self {
             self.config.hil_mode = mode;
+            self
+        }
+
+        /// Replace planning response with a custom one (for testing parse failures)
+        fn with_plan_response(mut self, response: ScriptedResponse) -> Self {
+            // Rebuild gateway: context session + custom plan response (Fast skips review)
+            let mut gateway = ScriptedGateway::new();
+
+            // Context gathering session
+            gateway.add_session(
+                &self.config.exploration_model.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Context gathered",
+                ))],
+            );
+
+            // Custom planning session
+            gateway.add_session(&self.config.decision_model.to_string(), vec![response]);
+
+            self.gateway = gateway;
             self
         }
 
@@ -3092,6 +3479,76 @@ Here is my evaluation:
         assert!(output.state.phase == AgentPhase::Completed);
     }
 
+    // ==================== Plan Parse Failure Flow Tests ====================
+
+    #[tokio::test]
+    async fn test_text_response_without_plan_succeeds() {
+        // LLM がプラン不要と判断してテキストだけ返した場合、正常終了するべき
+        let (result, progress) = FlowTestBuilder::solo_fast()
+            .with_plan_response(ScriptedResponse::Text(
+                "Hello! How can I help you today?".into(),
+            ))
+            .execute()
+            .await;
+
+        let output = result.expect("should return output (not panic)");
+        assert!(
+            output.success,
+            "Agent should succeed with text-only response, got: {}",
+            output.summary
+        );
+        assert_eq!(output.summary, "Hello! How can I help you today?");
+        // Planning should have been attempted
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        // Execution should NOT have been reached (no plan = no execution)
+        assert!(
+            !progress.has_phase(&AgentPhase::Executing),
+            "Should not reach execution with text-only response"
+        );
+        // State should be completed
+        assert_eq!(output.state.phase, AgentPhase::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_empty_tasks_native_tool_use_falls_back_to_text() {
+        // Native Tool Use で create_plan を呼んだがタスク 0 個の場合、
+        // extract_plan_from_response が None → テキストフォールバック
+        let mut input = HashMap::new();
+        input.insert("objective".to_string(), serde_json::json!("Do something"));
+        input.insert("reasoning".to_string(), serde_json::json!("because"));
+        input.insert("tasks".to_string(), serde_json::json!([]));
+
+        // ToolUse with empty tasks + text content
+        let response = LlmResponse {
+            content: vec![
+                ContentBlock::Text("I'll help with that.".to_string()),
+                ContentBlock::ToolUse {
+                    id: "toolu_001".to_string(),
+                    name: "create_plan".to_string(),
+                    input,
+                },
+            ],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        };
+
+        let (result, progress) = FlowTestBuilder::solo_fast()
+            .with_plan_response(ScriptedResponse::Response(response))
+            .execute()
+            .await;
+
+        let output = result.expect("should return output (not panic)");
+        // Empty tasks → extract fails → text fallback → success
+        assert!(
+            output.success,
+            "Agent should succeed with text fallback, got: {}",
+            output.summary
+        );
+        assert_eq!(output.summary, "I'll help with that.");
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        assert!(!progress.has_phase(&AgentPhase::Executing));
+    }
+
     #[tokio::test]
     async fn test_hil_auto_reject_stops_at_execution_confirmation() {
         let (result, progress) = FlowTestBuilder::solo_full()
@@ -3105,5 +3562,103 @@ Here is my evaluation:
 
         // Execution phase was never entered
         assert!(!progress.has_phase(&AgentPhase::Executing));
+    }
+
+    // ==================== Ensemble Planning Flow Tests ====================
+
+    #[tokio::test]
+    async fn test_ensemble_all_text_response_succeeds() {
+        // 全モデルがテキストのみ返した場合、TextResponse で正常終了するべき
+        let (result, progress) = FlowTestBuilder::ensemble_fast()
+            .with_ensemble_plan_responses(vec![
+                (
+                    Model::ClaudeHaiku45,
+                    ScriptedResponse::Text("Hello! I can help you with that.".into()),
+                ),
+                (
+                    Model::ClaudeSonnet45,
+                    ScriptedResponse::Text("Hi there! What do you need?".into()),
+                ),
+            ])
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed with text-only response");
+        assert!(
+            output.success,
+            "Ensemble should succeed with text-only responses, got: {}",
+            output.summary
+        );
+        // Should get one of the text responses
+        assert!(
+            output.summary.contains("Hello!") || output.summary.contains("Hi there!"),
+            "Summary should contain text response, got: {}",
+            output.summary
+        );
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        assert!(
+            !progress.has_phase(&AgentPhase::Executing),
+            "Should not reach execution with text-only response"
+        );
+        assert_eq!(output.state.phase, AgentPhase::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_ensemble_partial_plan_success() {
+        // 1モデルがプラン、1モデルがテキスト → プランが使われる
+        let (result, progress) = FlowTestBuilder::ensemble_fast()
+            .with_ensemble_plan_responses(vec![
+                (
+                    Model::ClaudeHaiku45,
+                    ScriptedResponse::Text("I don't think we need a plan for this.".into()),
+                ),
+                (Model::ClaudeSonnet45, make_plan_response("Sonnet's plan")),
+            ])
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed with partial plan");
+        assert!(
+            output.success,
+            "Ensemble should succeed when at least one model returns a plan, got: {}",
+            output.summary
+        );
+        // Plan should have been set (the one that succeeded)
+        assert!(
+            output.state.plan.is_some(),
+            "Plan should be set from the successful model"
+        );
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        // With Fast mode, execution should proceed
+        assert!(progress.has_phase(&AgentPhase::Executing));
+    }
+
+    #[tokio::test]
+    async fn test_ensemble_all_models_fail_returns_error() {
+        // 全モデルがエラー（テキストも空）→ EnsemblePlanningFailed エラー
+        let (result, _progress) = FlowTestBuilder::ensemble_fast()
+            .with_ensemble_plan_responses(vec![
+                (
+                    Model::ClaudeHaiku45,
+                    ScriptedResponse::Error("API error".into()),
+                ),
+                (
+                    Model::ClaudeSonnet45,
+                    ScriptedResponse::Error("API error".into()),
+                ),
+            ])
+            .execute()
+            .await;
+
+        let output = result.expect("should return output (not panic)");
+        assert!(
+            !output.success,
+            "Ensemble should fail when all models error"
+        );
+        assert!(
+            output.summary.contains("ensemble planning"),
+            "Error message should mention ensemble planning, got: {}",
+            output.summary
+        );
     }
 }
