@@ -6,20 +6,15 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Application input mode (vim-like)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InputMode {
     /// Navigation and single-key commands
     Normal,
     /// Text input — typing goes into the input buffer
+    #[default]
     Insert,
     /// Command-line mode (`:` prefix)
     Command,
-}
-
-impl Default for InputMode {
-    fn default() -> Self {
-        Self::Insert // Start in Insert for discoverability
-    }
 }
 
 impl InputMode {

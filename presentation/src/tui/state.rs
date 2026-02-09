@@ -222,10 +222,10 @@ impl TuiState {
 
     /// Clear flash if older than the given duration
     pub fn expire_flash(&mut self, max_age: std::time::Duration) {
-        if let Some((_, created)) = &self.flash_message {
-            if created.elapsed() > max_age {
-                self.flash_message = None;
-            }
+        if let Some((_, created)) = &self.flash_message
+            && created.elapsed() > max_age
+        {
+            self.flash_message = None;
         }
     }
 }
