@@ -52,6 +52,10 @@ pub enum CopilotError {
     /// Operation was cancelled.
     #[error("Operation cancelled")]
     Cancelled,
+
+    /// Error during tool call processing.
+    #[error("Tool call error: {0}")]
+    ToolCallError(String),
 }
 
 impl CopilotError {

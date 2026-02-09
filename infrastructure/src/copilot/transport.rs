@@ -5,7 +5,8 @@
 
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, SessionEventParams,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, JsonRpcResponseOut, SessionEventParams,
+    ToolCallParams,
 };
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -14,6 +15,42 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
+
+/// Classification of an incoming JSON-RPC message.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    /// A response to a request we sent (has `id`, no `method`).
+    Response,
+    /// An incoming request from the CLI (has `id` + `method`).
+    IncomingRequest { id: u64 },
+    /// A notification (has `method`, no `id`).
+    Notification,
+}
+
+/// Classify a JSON-RPC message by its structure.
+pub fn classify_message(json: &serde_json::Value) -> MessageKind {
+    let has_id = json.get("id").and_then(|v| v.as_u64());
+    let has_method = json.get("method").and_then(|v| v.as_str());
+
+    match (has_id, has_method) {
+        (Some(id), Some(_)) => MessageKind::IncomingRequest { id },
+        (Some(_), None) => MessageKind::Response,
+        _ => MessageKind::Notification,
+    }
+}
+
+/// Outcome of `read_streaming_for_tools()`.
+#[derive(Debug)]
+pub enum StreamingOutcome {
+    /// session.idle reached — text streaming is complete.
+    Idle(String),
+    /// A `tool.call` request was received from the CLI.
+    ToolCall {
+        text_so_far: String,
+        request_id: u64,
+        params: ToolCallParams,
+    },
+}
 
 /// Transport for communicating with Copilot CLI via TCP.
 ///
@@ -353,6 +390,165 @@ impl StdioTransport {
         }
     }
 
+    /// Send a JSON-RPC response (SDK → CLI), e.g. for tool.call results.
+    pub async fn send_response(&self, response: &JsonRpcResponseOut) -> Result<()> {
+        let response_json = serde_json::to_string(response)?;
+        trace!("Sending response: {}", response_json);
+
+        let mut writer = self.writer.lock().await;
+        let header = format!("Content-Length: {}\r\n\r\n", response_json.len());
+        writer.write_all(header.as_bytes()).await?;
+        writer.write_all(response_json.as_bytes()).await?;
+        writer.flush().await?;
+        Ok(())
+    }
+
+    /// Read streaming notifications until session.idle or a tool.call request.
+    ///
+    /// Unlike [`read_streaming()`](Self::read_streaming), this method also
+    /// detects incoming `tool.call` JSON-RPC requests and returns early with
+    /// [`StreamingOutcome::ToolCall`] so the caller can execute the tool and
+    /// send back a response.
+    pub async fn read_streaming_for_tools<F>(&self, mut on_chunk: F) -> Result<StreamingOutcome>
+    where
+        F: FnMut(&str),
+    {
+        let mut reader = self.reader.lock().await;
+        let mut line = String::new();
+        let mut full_content = String::new();
+
+        loop {
+            // Read Content-Length header
+            let content_length: usize = loop {
+                line.clear();
+                let bytes_read = reader.read_line(&mut line).await?;
+
+                if bytes_read == 0 {
+                    return Err(CopilotError::TransportClosed);
+                }
+
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                if let Some(len_str) = trimmed.strip_prefix("Content-Length:")
+                    && let Ok(len) = len_str.trim().parse::<usize>()
+                {
+                    break len;
+                }
+            };
+
+            // Skip empty line after headers
+            loop {
+                line.clear();
+                reader.read_line(&mut line).await?;
+                if line.trim().is_empty() {
+                    break;
+                }
+            }
+
+            // Read exact content length
+            let mut body = vec![0u8; content_length];
+            use tokio::io::AsyncReadExt;
+            reader.read_exact(&mut body).await?;
+
+            let body_str = String::from_utf8_lossy(&body);
+            trace!("Received message: {}", body_str);
+
+            let json_value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+                warn!("Failed to parse JSON: {}", body_str);
+                CopilotError::ParseError {
+                    error: e.to_string(),
+                    raw: body_str.to_string(),
+                }
+            })?;
+
+            match classify_message(&json_value) {
+                MessageKind::IncomingRequest { id } => {
+                    // Check if it's a tool.call
+                    if let Some(method) = json_value.get("method").and_then(|v| v.as_str())
+                        && method == "tool.call"
+                    {
+                        let params: ToolCallParams = json_value
+                            .get("params")
+                            .and_then(|p| serde_json::from_value(p.clone()).ok())
+                            .ok_or_else(|| {
+                                CopilotError::ToolCallError(
+                                    "Failed to parse tool.call params".to_string(),
+                                )
+                            })?;
+
+                        debug!(
+                            "Received tool.call: {} (id={})",
+                            params.tool_name, id
+                        );
+
+                        return Ok(StreamingOutcome::ToolCall {
+                            text_so_far: full_content,
+                            request_id: id,
+                            params,
+                        });
+                    }
+                    debug!("Skipping incoming request: {}", body_str);
+                }
+                MessageKind::Response => {
+                    debug!("Skipping response in streaming: {}", body_str);
+                }
+                MessageKind::Notification => {
+                    let notification: JsonRpcNotification =
+                        serde_json::from_value(json_value).map_err(|e| {
+                            warn!("Failed to parse notification: {}", body_str);
+                            CopilotError::ParseError {
+                                error: e.to_string(),
+                                raw: body_str.to_string(),
+                            }
+                        })?;
+
+                    if notification.method == "session.event"
+                        && let Some(params) = notification.params
+                        && let Some(event) = params.get("event")
+                        && let Some(event_type) =
+                            event.get("type").and_then(|t| t.as_str())
+                    {
+                        match event_type {
+                            "assistant.message.delta" => {
+                                if let Some(data) = event.get("data")
+                                    && let Some(content) =
+                                        data.get("content").and_then(|c| c.as_str())
+                                    && !content.is_empty()
+                                {
+                                    on_chunk(content);
+                                    full_content.push_str(content);
+                                }
+                            }
+                            "assistant.message" => {
+                                if let Some(data) = event.get("data")
+                                    && let Some(content) =
+                                        data.get("content").and_then(|c| c.as_str())
+                                    && !content.is_empty()
+                                    && full_content.is_empty()
+                                {
+                                    on_chunk(content);
+                                    full_content.push_str(content);
+                                }
+                            }
+                            "session.idle" => {
+                                debug!("Session idle, streaming complete");
+                                return Ok(StreamingOutcome::Idle(full_content));
+                            }
+                            other => {
+                                trace!("Ignoring event type: {}", other);
+                            }
+                        }
+                    } else if notification.method != "session.event" {
+                        debug!("Ignoring notification method: {}", notification.method);
+                    }
+                }
+            }
+        }
+    }
+
     /// Read streaming notifications until session.idle with cancellation support
     pub async fn read_streaming_with_cancellation<F>(
         &self,
@@ -496,5 +692,38 @@ impl StdioTransport {
                 debug!("Ignoring notification method: {}", notification.method);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_response() {
+        let json = serde_json::json!({"id": 1, "result": {}});
+        assert_eq!(classify_message(&json), MessageKind::Response);
+    }
+
+    #[test]
+    fn classify_incoming_request() {
+        let json = serde_json::json!({"id": 1, "method": "tool.call", "params": {}});
+        assert_eq!(
+            classify_message(&json),
+            MessageKind::IncomingRequest { id: 1 }
+        );
+    }
+
+    #[test]
+    fn classify_notification() {
+        let json = serde_json::json!({"method": "session.event", "params": {}});
+        assert_eq!(classify_message(&json), MessageKind::Notification);
+    }
+
+    #[test]
+    fn classify_no_id_no_method() {
+        // Edge case: neither id nor method → treated as Notification
+        let json = serde_json::json!({"data": "something"});
+        assert_eq!(classify_message(&json), MessageKind::Notification);
     }
 }
