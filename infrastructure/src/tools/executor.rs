@@ -16,12 +16,6 @@
 //!   └─ otherwise       → execute_internal()
 //! ```
 //!
-//! # Tool Name Alias System Integration
-//!
-//! The executor's routing uses **exact canonical names** via `match call.tool_name.as_str()`.
-//! Alias resolution happens upstream in `resolve_tool_call()` (application layer),
-//! so by the time a call reaches the executor, the `tool_name` is always canonical.
-//!
 //! # Web Tools (`web-tools` feature)
 //!
 //! When the `web-tools` feature is enabled, the executor holds a shared `reqwest::Client`
@@ -31,10 +25,11 @@ use async_trait::async_trait;
 use quorum_application::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::tool::{
     entities::{ToolCall, ToolSpec},
+    provider::ToolProvider,
     value_objects::{ToolError, ToolResult},
 };
 
-use super::{command, file, search};
+use super::{command, custom_provider::CustomToolProvider, file, search};
 
 /// Executor that runs tools on the local machine.
 ///
@@ -49,6 +44,11 @@ use super::{command, file, search};
 /// | [`read_only()`](Self::read_only) | Read-only tools only | Context gathering phase |
 /// | [`with_tools()`](Self::with_tools) | Custom [`ToolSpec`] | Testing / specialized setups |
 ///
+/// # Custom Tools
+///
+/// User-defined tools from `quorum.toml` are integrated via [`with_custom_tools()`](Self::with_custom_tools).
+/// Custom tool calls are delegated to the embedded [`CustomToolProvider`].
+///
 /// # Web Tools Integration
 ///
 /// With the `web-tools` feature, the executor holds a shared [`reqwest::Client`]
@@ -60,20 +60,23 @@ pub struct LocalToolExecutor {
     tool_spec: ToolSpec,
     /// Working directory for commands (None = current directory)
     working_dir: Option<String>,
+    /// Custom tool provider for user-defined tools
+    custom_provider: Option<CustomToolProvider>,
     /// HTTP client for web tools (only available with web-tools feature)
     #[cfg(feature = "web-tools")]
     http_client: reqwest::Client,
 }
 
 impl LocalToolExecutor {
-    /// Create a new executor with all available tools and aliases.
+    /// Create a new executor with all available tools.
     ///
     /// Uses [`default_tool_spec()`](super::default_tool_spec) which includes
-    /// all 5 core tools, their aliases, and (with `web-tools`) web tools.
+    /// all 5 core tools and (with `web-tools`) web tools.
     pub fn new() -> Self {
         Self {
             tool_spec: super::default_tool_spec(),
             working_dir: None,
+            custom_provider: None,
             #[cfg(feature = "web-tools")]
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -84,12 +87,13 @@ impl LocalToolExecutor {
 
     /// Create an executor with only read-only (low-risk) tools.
     ///
-    /// Excludes `write_file`, `run_command`, and their aliases. Used during
-    /// the context gathering phase where state modification is not allowed.
+    /// Excludes `write_file` and `run_command`. Used during the context
+    /// gathering phase where state modification is not allowed.
     pub fn read_only() -> Self {
         Self {
             tool_spec: super::read_only_tool_spec(),
             working_dir: None,
+            custom_provider: None,
             #[cfg(feature = "web-tools")]
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -103,6 +107,7 @@ impl LocalToolExecutor {
         Self {
             tool_spec,
             working_dir: None,
+            custom_provider: None,
             #[cfg(feature = "web-tools")]
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -117,10 +122,58 @@ impl LocalToolExecutor {
         self
     }
 
+    /// Register custom tools from config.
+    ///
+    /// Custom tool definitions are added to the tool spec so they appear
+    /// in `to_api_tools()` and `available_tools()`. Execution is delegated
+    /// to the embedded [`CustomToolProvider`].
+    pub fn with_custom_tools(
+        mut self,
+        configs: &std::collections::HashMap<String, crate::config::FileCustomToolConfig>,
+    ) -> Self {
+        if configs.is_empty() {
+            return self;
+        }
+
+        let mut provider = CustomToolProvider::from_config(configs);
+        if let Some(dir) = &self.working_dir {
+            provider = provider.with_working_dir(dir.clone());
+        }
+
+        // Register custom tool definitions in the tool spec so they appear
+        // in to_api_tools() and available_tools()
+        for (name, config) in configs {
+            let risk_level = match config.risk_level.to_lowercase().as_str() {
+                "low" => quorum_domain::tool::entities::RiskLevel::Low,
+                _ => quorum_domain::tool::entities::RiskLevel::High,
+            };
+            let mut definition = quorum_domain::tool::entities::ToolDefinition::new(
+                name.clone(),
+                config.description.clone(),
+                risk_level,
+            );
+            let mut params: Vec<_> = config.parameters.iter().collect();
+            params.sort_by_key(|(n, _)| n.as_str());
+            for (param_name, param_config) in params {
+                definition = definition.with_parameter(
+                    quorum_domain::tool::entities::ToolParameter::new(
+                        param_name.clone(),
+                        param_config.description.clone(),
+                        param_config.required,
+                    )
+                    .with_type(param_config.param_type.clone()),
+                );
+            }
+            self.tool_spec = self.tool_spec.register(definition);
+        }
+
+        self.custom_provider = Some(provider);
+        self
+    }
+
     /// Internal execute implementation for synchronous tools (file, command, search).
     ///
-    /// Routes calls by exact canonical name. Alias resolution has already
-    /// occurred upstream in `resolve_tool_call()`.
+    /// Routes calls by exact canonical name.
     fn execute_internal(&self, call: &ToolCall) -> ToolResult {
         // Check if tool exists
         let definition = match self.tool_spec.get(&call.tool_name) {
@@ -159,14 +212,56 @@ impl LocalToolExecutor {
             }
             search::GLOB_SEARCH => search::execute_glob_search(call),
             search::GREP_SEARCH => search::execute_grep_search(call),
-            _ => ToolResult::failure(
-                &call.tool_name,
-                ToolError::execution_failed(format!(
-                    "Tool '{}' is not implemented",
-                    call.tool_name
-                )),
-            ),
+            _ => {
+                // Check if it's a custom tool
+                if let Some(ref provider) = self.custom_provider {
+                    // CustomToolProvider::execute is async, but custom tools are
+                    // synchronous shell commands internally — use block_in_place
+                    // if we have a runtime, otherwise spawn a temp runtime.
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        return tokio::task::block_in_place(|| {
+                            handle.block_on(provider.execute(call))
+                        });
+                    } else {
+                        // No runtime available — create a temp one
+                        let rt = tokio::runtime::Runtime::new();
+                        if let Ok(rt) = rt {
+                            return rt.block_on(provider.execute(call));
+                        }
+                    }
+                }
+                ToolResult::failure(
+                    &call.tool_name,
+                    ToolError::execution_failed(format!(
+                        "Tool '{}' is not implemented",
+                        call.tool_name
+                    )),
+                )
+            }
         }
+    }
+
+    /// Check if a tool name belongs to a built-in tool (not custom).
+    fn is_builtin_tool(&self, name: &str) -> bool {
+        matches!(
+            name,
+            file::READ_FILE
+                | file::WRITE_FILE
+                | command::RUN_COMMAND
+                | search::GLOB_SEARCH
+                | search::GREP_SEARCH
+        ) || self.is_web_tool(name)
+    }
+
+    /// Check if a tool is a web tool (always false without the feature).
+    #[cfg(feature = "web-tools")]
+    fn is_web_tool(&self, name: &str) -> bool {
+        matches!(name, super::web::WEB_FETCH | super::web::WEB_SEARCH)
+    }
+
+    #[cfg(not(feature = "web-tools"))]
+    fn is_web_tool(&self, _name: &str) -> bool {
+        false
     }
 
     /// Check if a tool requires async execution (web tools using `reqwest`).
@@ -231,6 +326,14 @@ impl ToolExecutorPort for LocalToolExecutor {
         {
             if Self::is_async_tool(&call.tool_name) {
                 return self.execute_async(call).await;
+            }
+        }
+        // Check custom tools first (can await directly in async context)
+        if let Some(ref provider) = self.custom_provider {
+            if self.tool_spec.get(&call.tool_name).is_some()
+                && !self.is_builtin_tool(&call.tool_name)
+            {
+                return provider.execute(call).await;
             }
         }
         self.execute_internal(call)

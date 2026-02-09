@@ -135,6 +135,14 @@ async fn main() -> Result<()> {
     if let Some(ref dir) = working_dir {
         tool_executor = tool_executor.with_working_dir(dir);
     }
+    // Register custom tools from config
+    if !config.tools.custom.is_empty() {
+        tool_executor = tool_executor.with_custom_tools(&config.tools.custom);
+        info!(
+            "Registered {} custom tool(s)",
+            config.tools.custom.len()
+        );
+    }
     let tool_executor = Arc::new(tool_executor);
 
     // Create context loader

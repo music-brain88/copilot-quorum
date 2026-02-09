@@ -102,34 +102,6 @@ impl StreamHandle {
     }
 }
 
-/// Mode of tool communication between the application and the LLM.
-///
-/// This determines how tool definitions are sent to the LLM and how
-/// tool calls are extracted from responses.
-///
-/// # Two-Path Architecture
-///
-/// ```text
-/// PromptBased:  tools embedded in system prompt → parse tool calls from text
-/// Native:       tools sent via API parameter → structured tool calls in response
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolMode {
-    /// Legacy prompt-based tool definition.
-    ///
-    /// Tools are described in the system prompt as text. Tool calls are
-    /// extracted by parsing `` ```tool `` / `` ```json `` blocks from the
-    /// response text. Alias resolution is needed to handle LLM mistakes.
-    PromptBased,
-
-    /// Native Tool Use API (Anthropic `tool_use` / OpenAI `function_calling`).
-    ///
-    /// Tools are passed as structured JSON schemas via the API. The API
-    /// enforces valid tool names and parameter types. Tool calls arrive
-    /// as structured content blocks — no text parsing needed.
-    Native,
-}
-
 /// Result of a tool execution, sent back to the LLM in the Native Tool Use loop.
 ///
 /// Used with [`LlmSession::send_tool_results()`] to continue the multi-turn
@@ -181,24 +153,13 @@ pub trait LlmSession: Send + Sync {
 
     // ==================== Native Tool Use API ====================
 
-    /// Returns the tool communication mode for this session.
-    ///
-    /// Default: `PromptBased` — existing implementations work without changes.
-    /// Sessions that support Native Tool Use API override to return `Native`.
-    fn tool_mode(&self) -> ToolMode {
-        ToolMode::PromptBased
-    }
-
     /// Send a message with tool definitions, getting a structured response.
     ///
-    /// # Native mode
     /// The `tools` parameter is passed to the API as structured JSON schemas.
     /// The API response contains `ContentBlock::ToolUse` blocks for tool calls.
     ///
-    /// # Default (PromptBased fallback)
-    /// Ignores `tools` and delegates to `send()`, wrapping the result in
-    /// `LlmResponse::from_text()`. Tool calls must be extracted by parsing
-    /// the response text.
+    /// # Default fallback
+    /// Delegates to `send()` and wraps the result in `LlmResponse::from_text()`.
     async fn send_with_tools(
         &self,
         content: &str,
@@ -215,7 +176,7 @@ pub trait LlmSession: Send + Sync {
     /// send_with_tools() → ToolUse stop → execute tools → send_tool_results() → ...
     /// ```
     ///
-    /// # Default (PromptBased fallback)
+    /// # Default fallback
     /// Formats results as text and sends via `send()`.
     async fn send_tool_results(
         &self,
@@ -227,7 +188,7 @@ pub trait LlmSession: Send + Sync {
     }
 }
 
-/// Format tool results as plain text for the prompt-based fallback path.
+/// Format tool results as plain text for the default fallback path.
 fn format_tool_results_as_text(results: &[ToolResultMessage]) -> String {
     results
         .iter()

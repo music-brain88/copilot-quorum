@@ -11,16 +11,12 @@
 Native Tool Use API は、LLM にツール定義を **API パラメータとして構造化データで渡し**、
 ツール呼び出しを **構造化レスポンスから直接抽出する** 仕組みです。
 
-従来の **プロンプトベース方式** では、ツール定義をシステムプロンプトにテキスト埋め込みし、
-LLM レスポンスから `` ```tool `` ブロックをパースしてツール呼び出しを抽出していました。
-この方式には以下の問題がありました：
-
-| 問題 | プロンプトベース | Native Tool Use |
-|------|:---------------:|:---------------:|
-| ツール名ハルシネーション（`bash` → `run_command` 等） | エイリアスで対応 | API が名前を強制 → **発生しない** |
-| テキストパースの不安定さ | 4 段階フォールバック | パース不要 → **構造化データ** |
-| ツール定義のトークン消費 | プロンプトに埋め込み | API パラメータ → **プロンプト不要** |
-| マルチターン対話 | 1 ターンのみ | **ループで継続的にツール実行** |
+| 特徴 | 説明 |
+|------|------|
+| ツール名の正確性 | API がツール名を強制 → ハルシネーション**不発生** |
+| 構造化データ | テキストパース不要 → `ContentBlock::ToolUse` から直接抽出 |
+| トークン効率 | ツール定義は API パラメータ → プロンプト埋め込み不要 |
+| マルチターン対話 | ループで継続的にツール実行（`send_with_tools` → 実行 → `send_tool_results` → ...） |
 
 Native Tool Use API は、Anthropic の `tool_use`、OpenAI の `function_calling` に対応した
 業界標準のツール呼び出しプロトコルです。copilot-quorum はこの両方を同一の `LlmSession` trait で
@@ -30,76 +26,43 @@ Native Tool Use API は、Anthropic の `tool_use`、OpenAI の `function_callin
 
 ## Quick Start / クイックスタート
 
-Native Tool Use は、`LlmSession` の `tool_mode()` が `Native` を返す場合に自動的に使用されます。
+Native Tool Use はすべてのツール呼び出しで自動的に使用されます。
 ユーザーが明示的に設定する必要はありません。
 
 ```bash
-# Anthropic API 直接呼び出し（将来）→ 自動的に Native mode
+# Anthropic API 直接呼び出し → Native Tool Use
 copilot-quorum --provider anthropic "List all Rust files"
 
-# Copilot CLI 経由 → プロバイダーの対応状況で自動判定
+# Copilot CLI 経由 → Native Tool Use
 copilot-quorum "Fix the failing test"
-```
-
-REPL での確認:
-
-```
-> /config
-Provider: copilot
-Tool Mode: native    ← API がツール定義を受け付ける場合
 ```
 
 ---
 
 ## How It Works / 仕組み
 
-### Two-Path Architecture / 二経路アーキテクチャ
+### Architecture / アーキテクチャ
 
-copilot-quorum は **PromptBased** と **Native** の 2 つのツール呼び出し経路を持ち、
-`LlmSession::tool_mode()` の返り値で自動的に切り替えます。
+copilot-quorum は **Native Tool Use API** を通じてツール呼び出しを行います。
 
 ```
-LlmSession::tool_mode()
+LlmSession
     │
-    ├── PromptBased (従来方式)
-    │   │
-    │   ├── ツール定義 → システムプロンプトにテキスト埋め込み
-    │   ├── LLM レスポンス → テキストパース (```tool / ```json)
-    │   ├── エイリアス解決 → bash → run_command
-    │   └── 1 ターンのみ
-    │
-    └── Native (Native Tool Use API)
+    └── Native Tool Use API
         │
         ├── ツール定義 → API パラメータとして JSON Schema で送信
         ├── LLM レスポンス → ContentBlock::ToolUse から直接抽出
-        ├── エイリアス不要 → API がツール名を保証
+        ├── ツール名の正確性 → API がツール名を保証
         └── マルチターンループ → ToolUse stop → 実行 → 結果送信 → ...
 ```
 
-### Decision Logic / 経路決定ロジック
-
-```rust
-// LlmSession trait のデフォルト実装
-fn tool_mode(&self) -> ToolMode {
-    ToolMode::PromptBased  // 既存実装は何も変更不要
-}
-```
-
-| 判定ポイント | 決定方法 |
-|------------|---------|
-| **どの経路を使うか** | `session.tool_mode()` の返り値（各 `LlmSession` 実装が決定） |
-| **いつ決定されるか** | セッション作成時（`LlmGateway::create_session()` 内部） |
-| **誰が決定するか** | Infrastructure 層の各 Session 実装（`AnthropicSession`, `CopilotSession` 等） |
-| **ユーザーの介入** | 不要 — プロバイダーの能力に基づいて自動判定 |
-
 ### 各プロバイダーの対応状況
 
-| Provider | `tool_mode()` | 実装方式 | Status |
-|----------|:-------------:|---------|--------|
-| **Copilot CLI** | `PromptBased` → `Native` | JSON-RPC `session.create` に `tools` パラメータ追加 | 将来 |
-| **Anthropic API** | `Native` | Messages API の `tools` パラメータ | 将来 |
-| **OpenAI API** | `Native` | Chat Completions の `function_calling` | 将来 |
-| **Fallback** | `PromptBased` | 現行方式（エイリアス + テキストパース） | 実装済み |
+| Provider | 実装方式 | Status |
+|----------|---------|--------|
+| **Copilot CLI** | JSON-RPC `session.create` に `tools` パラメータ追加 | 将来 |
+| **Anthropic API** | Messages API の `tools` パラメータ | 将来 |
+| **OpenAI API** | Chat Completions の `function_calling` | 将来 |
 
 ---
 
@@ -280,15 +243,6 @@ impl ToolSpec {
 
 ### Application Layer / アプリケーション層
 
-#### `ToolMode` — ツール通信モード
-
-```rust
-pub enum ToolMode {
-    PromptBased,  // プロンプト埋め込み + テキストパース
-    Native,       // API パラメータ + 構造化レスポンス
-}
-```
-
 #### `ToolResultMessage` — ツール実行結果
 
 ```rust
@@ -300,37 +254,26 @@ pub struct ToolResultMessage {
 }
 ```
 
-#### `LlmSession` trait 拡張
+#### `LlmSession` trait
 
 ```rust
 #[async_trait]
 pub trait LlmSession: Send + Sync {
-    // === 既存メソッド（変更なし） ===
+    // === 基本メソッド ===
     fn model(&self) -> &Model;
     async fn send(&self, content: &str) -> Result<String, GatewayError>;
     async fn send_streaming(&self, content: &str) -> Result<StreamHandle, GatewayError>;
 
-    // === 新メソッド（デフォルト実装あり → 既存 impl は変更不要） ===
-    fn tool_mode(&self) -> ToolMode { ToolMode::PromptBased }
-
+    // === Native Tool Use メソッド ===
     async fn send_with_tools(
         &self, content: &str, tools: &[serde_json::Value],
-    ) -> Result<LlmResponse, GatewayError> {
-        // デフォルト: tools を無視して send() → LlmResponse::from_text()
-    }
+    ) -> Result<LlmResponse, GatewayError>;
 
     async fn send_tool_results(
         &self, results: &[ToolResultMessage],
-    ) -> Result<LlmResponse, GatewayError> {
-        // デフォルト: テキストにフォーマットして send()
-    }
+    ) -> Result<LlmResponse, GatewayError>;
 }
 ```
-
-**設計判断**: 別トレイト（`NativeToolSession`）にしなかった理由：
-- `RunAgentUseCase` が `dyn LlmSession` で動作 → ダウンキャスト不要
-- デフォルト実装により、既存の `CopilotSession` は一切変更不要
-- 将来 Native 対応する際は `tool_mode()` のオーバーライドだけで OK
 
 ---
 
@@ -360,29 +303,6 @@ pub enum StreamEvent {
 
 ---
 
-## Compatibility / 互換性
-
-### 既存コードへの影響
-
-| コンポーネント | 影響 | 理由 |
-|-------------|------|------|
-| `CopilotSession` | **変更不要** | デフォルト実装で `PromptBased` として動作 |
-| `AgentPromptTemplate` | **変更不要** | 既存メソッドはそのまま動作 |
-| `ToolSpec::aliases` | **引き続き有効** | PromptBased モードでは依然として必要 |
-| `parse_tool_calls()` | **引き続き有効** | PromptBased モードでは依然として使用 |
-| `resolve_tool_call()` | **Native では不要** | API がツール名を保証するため |
-| テスト | **全テスト通過** | 破壊変更なし |
-
-### エイリアスシステムとの関係
-
-| 仕組み | Native mode | PromptBased mode |
-|--------|:-----------:|:----------------:|
-| Alias (`bash` → `run_command`) | 不要（API が名前強制） | 引き続き有効 |
-| ToolRegistry (provider routing) | 必要 | 必要 |
-| ToolProvider priority | 必要 | 必要 |
-
----
-
 ## Configuration / 設定
 
 ```toml
@@ -408,47 +328,32 @@ let config = AgentConfig::default()
 | `domain/src/session/response.rs` | `LlmResponse`, `ContentBlock`, `StopReason` |
 | `domain/src/session/stream.rs` | `StreamEvent`（`ToolCallDelta`, `CompletedResponse` バリアント） |
 | `domain/src/tool/entities.rs` | `ToolCall::native_id`, `ToolDefinition::to_json_schema()`, `ToolSpec::to_api_tools()` |
-| `domain/src/prompt/agent.rs` | `PromptToolMode`, `agent_system_native()` |
+| `domain/src/prompt/agent.rs` | `agent_system()` — エージェントシステムプロンプト生成 |
 | `domain/src/agent/entities.rs` | `AgentConfig::max_tool_turns` |
-| `application/src/ports/llm_gateway.rs` | `ToolMode`, `ToolResultMessage`, `LlmSession` 拡張 |
-| `application/src/use_cases/run_agent.rs` | `execute_task_native()`, `execute_task_prompt_based()`, `send_with_tools_cancellable()` |
+| `application/src/ports/llm_gateway.rs` | `ToolResultMessage`, `LlmSession` trait |
+| `application/src/use_cases/run_agent.rs` | `execute_task_native()`, `send_with_tools_cancellable()` |
 
-### Data Flow (Native Path) / データフロー
+### Data Flow / データフロー
 
 ```
 RunAgentUseCase::execute_single_task()
     │
-    ├── session.tool_mode() == Native?
-    │       │
-    │       ▼
-    │   execute_task_native()
-    │       │
-    │       ├── tool_spec.to_api_tools() → JSON Schema 配列
-    │       │
-    │       ├── session.send_with_tools(prompt, tools) → LlmResponse
-    │       │
-    │       ├── response.tool_calls() → Vec<ToolCall> (直接抽出)
-    │       │
-    │       ├── Low-risk → futures::join_all() 並列実行
-    │       │
-    │       ├── High-risk → Quorum Review → 順次実行
-    │       │
-    │       ├── session.send_tool_results(results) → 次の LlmResponse
-    │       │
-    │       └── turn_count < max_tool_turns? → ループ
+    ▼
+execute_task_native()
     │
-    └── session.tool_mode() == PromptBased?
-            │
-            ▼
-        execute_task_prompt_based()
-            │
-            ├── session.send(prompt) → String
-            │
-            ├── parse_tool_calls(response) → Vec<ToolCall> (テキストパース)
-            │
-            ├── resolve_tool_call() → エイリアス解決
-            │
-            └── execute_tool_with_retry() → リトライ付き実行
+    ├── tool_spec.to_api_tools() → JSON Schema 配列
+    │
+    ├── session.send_with_tools(prompt, tools) → LlmResponse
+    │
+    ├── response.tool_calls() → Vec<ToolCall> (直接抽出)
+    │
+    ├── Low-risk → futures::join_all() 並列実行
+    │
+    ├── High-risk → Quorum Review → 順次実行
+    │
+    ├── session.send_tool_results(results) → 次の LlmResponse
+    │
+    └── turn_count < max_tool_turns? → ループ
 ```
 
 ---
@@ -460,4 +365,4 @@ RunAgentUseCase::execute_single_task()
 - [Ensemble Mode](./ensemble-mode.md) - マルチモデル計画生成
 - [CLI & Configuration](./cli-and-configuration.md) - 設定オプション
 
-<!-- LLM Context: Native Tool Use API は LLM プロバイダーの構造化ツール呼び出し対応。LlmSession::tool_mode() で PromptBased/Native を自動判定し、Native 時は send_with_tools() → LlmResponse → ContentBlock::ToolUse から直接 ToolCall 抽出（テキストパース・エイリアス解決不要）。マルチターンループで StopReason::ToolUse の間ツール実行を繰り返す。Low-risk ツールは並列実行、High-risk は Quorum Review 後に順次実行。max_tool_turns（デフォルト10）でループ制限。主要ファイルは domain/src/session/response.rs、application/src/ports/llm_gateway.rs、application/src/use_cases/run_agent.rs。 -->
+<!-- LLM Context: Native Tool Use API は LLM プロバイダーの構造化ツール呼び出し。LlmSession の send_with_tools() で API パラメータとしてツール定義を送信し、LlmResponse の ContentBlock::ToolUse から直接 ToolCall を抽出（テキストパース不要）。マルチターンループで StopReason::ToolUse の間ツール実行を繰り返す。Low-risk ツールは futures::join_all() で並列実行、High-risk は Quorum Review 後に順次実行。max_tool_turns（デフォルト10）でループ制限。主要ファイルは domain/src/session/response.rs、application/src/ports/llm_gateway.rs、application/src/use_cases/run_agent.rs。 -->

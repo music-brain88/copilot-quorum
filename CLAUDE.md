@@ -108,7 +108,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 | Layer | Crate | Description |
 |-------|-------|-------------|
 | domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy, LlmResponse, ContentBlock, StopReason) |
-| application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort, ToolMode, ToolResultMessage) |
+| application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort, ToolResultMessage) |
 | infrastructure | `quorum-infrastructure` | Copilot CLI adapter, LocalToolExecutor (file, command, search tools) |
 | presentation | `quorum-presentation` | CLI commands, ChatRepl, ConsoleFormatter, ProgressReporter |
 | cli | `copilot-quorum` | main.rs with dependency injection |
@@ -130,7 +130,7 @@ domain/src/
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
 ├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
-├── tool/           # ToolDefinition, ToolCall, ToolSpec (with aliases), ToolResult (ツール)
+├── tool/           # ToolDefinition, ToolCall, ToolSpec, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
 ├── session/        # Message, LlmSessionRepository, LlmResponse, ContentBlock, StopReason
 ├── context/        # ProjectContext, KnownContextFile (/init用)
@@ -143,40 +143,8 @@ domain/src/
 - New orchestration strategy: Add to `domain/orchestration/`
 - New output format: Add to `presentation/output/`
 - New model: Add variant to `domain/src/core/model.rs` Model enum
-- New tool: Add to `infrastructure/tools/`, register in `default_tool_spec()`, add aliases in same file
-- New agent capability: Extend `domain/agent/` and `RunAgentUseCase`
-- New context file type: Add to `domain/context/` KnownContextFile enum
-
-### Tool Name Alias System
-
-LLM のツール名間違い（`bash` → `run_command` 等）を API 呼び出しなしで自動解決する仕組み。
-- `ToolSpec::register_alias()` / `register_aliases()` でエイリアス登録
-- `resolve_tool_call()` でエイリアスファストパス（LLM に聞く前に解決）
-- `resolve_plan_aliases()` で Plan 段階のツール名も自動変換
-- `has_tool()` / `get()` は正規名のみ（exact match）— executor のルーティングを壊さない
-
-### Tool Output Format Specification
-
-**Supported LLM Response Formats** (for tool calls):
-
-| Format | Priority | Multi-Tool? | Example |
-|--------|----------|-------------|---------|
-| ` ```tool ` block | 1 (Highest) | ✅ Sequential | Preferred in prompts |
-| ` ```json ` block | 2 | ✅ Sequential | Alternative markdown |
-| Raw JSON | 3 | ❌ Single only | Whole response is JSON |
-| Embedded JSON | 4 (Lowest) | ❌ Single only | Heuristic fallback |
-
-**Multi-Tool Execution**:
-- Multiple ` ```tool ` or ` ```json ` blocks → All parsed & executed sequentially
-- JSON array `[{...}, {...}]` → **Not supported** (use multiple blocks instead)
-
-**Retry Strategy** (for tool execution failures):
-- **Retryable errors**: `INVALID_ARGUMENT`, `NOT_FOUND`
-- **Max retries**: 2 attempts with LLM correction
-- **Non-retryable**: Execution errors returned immediately
-
-See `application/src/use_cases/run_agent.rs` for implementation details.
 - New tool: Add to `infrastructure/tools/`, register in `default_tool_spec()`
+- Custom tool: Add to `[tools.custom]` in `quorum.toml`
 - New agent capability: Extend `domain/agent/` and `RunAgentUseCase`
 - New context file type: Add to `domain/context/` KnownContextFile enum
 
@@ -204,11 +172,11 @@ The agent system extends quorum to autonomous task execution with safety through
 - `domain/agent/`: AgentState, Plan, Task, AgentConfig (max_tool_turns)
 - `domain/tool/`: ToolDefinition, ToolCall (native_id), ToolResult, RiskLevel
 - `domain/session/response.rs`: LlmResponse, ContentBlock, StopReason
-- `application/use_cases/run_agent.rs`: RunAgentUseCase orchestrates the flow (dual-path: PromptBased / Native)
-- `application/ports/llm_gateway.rs`: LlmSession trait (tool_mode, send_with_tools, send_tool_results)
+- `application/use_cases/run_agent.rs`: RunAgentUseCase orchestrates the flow (Native Tool Use)
+- `application/ports/llm_gateway.rs`: LlmSession trait (send_with_tools, send_tool_results)
 - `infrastructure/tools/`: LocalToolExecutor implements ToolExecutorPort
 
-**Native Tool Use**: `LlmSession::tool_mode()` が `Native` を返す場合、構造化 API 経由でツールを呼び出す。
+**Native Tool Use**: LLM の構造化 Tool Use API を使用してツールを呼び出す（唯一のツール実行パス）。
 - ツール定義は `ToolSpec::to_api_tools()` で JSON Schema に変換
 - Multi-turn loop: `send_with_tools()` → ToolUse stop → execute → `send_tool_results()` → repeat
 - Low-risk ツールは `futures::join_all()` で並列実行、High-risk は順次 + Quorum Review

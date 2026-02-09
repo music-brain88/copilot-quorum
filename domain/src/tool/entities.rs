@@ -190,38 +190,11 @@ impl ToolParameter {
     }
 }
 
-/// Registry of available tools and their name aliases.
+/// Registry of available tools.
 ///
-/// `ToolSpec` is the central **Tool Name Alias System** data structure, serving two roles:
-///
-/// 1. **Tool registry** — stores [`ToolDefinition`]s keyed by canonical name
-/// 2. **Alias map** — maps common LLM-hallucinated names to canonical names
-///
-/// # Alias Resolution
-///
-/// LLMs frequently emit incorrect tool names (`bash`, `grep`, `view`, etc.).
-/// The alias system provides a three-tier resolution strategy:
-///
-/// ```text
-/// resolve_tool_call() in application layer:
-///   1. has_tool(exact)      → use as-is        (zero cost)
-///   2. resolve_alias(name)  → canonical name    (zero cost, no LLM call)
-///   3. LLM retry            → ask model to fix  (1 API round-trip, fallback)
-/// ```
-///
-/// The alias map is also used at **plan time** by `resolve_plan_aliases()` to
-/// correct tool names in [`Plan`](crate::agent::Plan) tasks before execution begins.
-///
-/// # Design: `get()` vs `get_resolved()`
-///
-/// | Method | Alias-aware? | Use case |
-/// |--------|-------------|----------|
-/// | [`get()`](Self::get) | No (exact match) | Executor routing (`match call.tool_name`) |
-/// | [`get_resolved()`](Self::get_resolved) | Yes | Validation, display, lookups |
-///
-/// `get()` intentionally ignores aliases so that the executor's `match` dispatch
-/// always operates on canonical names. Alias resolution happens once upstream
-/// (in `resolve_tool_call`), not at every access point.
+/// `ToolSpec` stores [`ToolDefinition`]s keyed by canonical name. Tools are
+/// passed to the LLM via the Native Tool Use API, which enforces valid tool
+/// names — no alias resolution needed.
 ///
 /// # Examples
 ///
@@ -229,35 +202,20 @@ impl ToolParameter {
 /// use quorum_domain::tool::entities::{ToolSpec, ToolDefinition, RiskLevel};
 ///
 /// let spec = ToolSpec::new()
-///     .register(ToolDefinition::new("run_command", "Run a shell command", RiskLevel::High))
-///     .register_alias("bash", "run_command")
-///     .register_alias("shell", "run_command");
+///     .register(ToolDefinition::new("run_command", "Run a shell command", RiskLevel::High));
 ///
-/// // Exact match works
 /// assert!(spec.get("run_command").is_some());
-///
-/// // Alias resolves to canonical name
-/// assert_eq!(spec.resolve("bash"), Some("run_command"));
-///
-/// // get_resolved works with both canonical and alias names
-/// assert_eq!(spec.get_resolved("shell").unwrap().name, "run_command");
+/// assert_eq!(spec.tool_count(), 1);
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct ToolSpec {
     tools: HashMap<String, ToolDefinition>,
-    /// Alias → canonical name mapping (e.g. `"bash"` → `"run_command"`).
-    ///
-    /// Populated by [`register_alias`](Self::register_alias) and
-    /// [`register_aliases`](Self::register_aliases). Queried by
-    /// [`resolve_alias`](Self::resolve_alias) and [`resolve`](Self::resolve).
-    aliases: HashMap<String, String>,
 }
 
 impl ToolSpec {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
-            aliases: HashMap::new(),
         }
     }
 
@@ -270,92 +228,7 @@ impl ToolSpec {
         self
     }
 
-    /// Register a single alias mapping (builder pattern).
-    ///
-    /// Maps an `alias` name to a `canonical` tool name, enabling the
-    /// **Tool Name Alias System** to resolve LLM-hallucinated names.
-    ///
-    /// If the alias collides with a registered canonical name, the canonical
-    /// name takes priority in [`resolve()`](Self::resolve).
-    pub fn register_alias(
-        mut self,
-        alias: impl Into<String>,
-        canonical: impl Into<String>,
-    ) -> Self {
-        self.aliases.insert(alias.into(), canonical.into());
-        self
-    }
-
-    /// Register multiple aliases at once (builder pattern).
-    ///
-    /// Convenience method for batch registration. Each `(alias, canonical)` pair
-    /// is equivalent to calling [`register_alias`](Self::register_alias).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use quorum_domain::tool::entities::{ToolSpec, ToolDefinition, RiskLevel};
-    /// let spec = ToolSpec::new()
-    ///     .register(ToolDefinition::new("grep_search", "Search files", RiskLevel::Low))
-    ///     .register_aliases([
-    ///         ("grep", "grep_search"),
-    ///         ("rg", "grep_search"),
-    ///         ("ripgrep", "grep_search"),
-    ///     ]);
-    /// ```
-    pub fn register_aliases(
-        mut self,
-        mappings: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
-    ) -> Self {
-        for (alias, canonical) in mappings {
-            self.aliases.insert(alias.into(), canonical.into());
-        }
-        self
-    }
-
-    /// Resolve an alias to its canonical tool name.
-    ///
-    /// Returns `Some(canonical_name)` only if `name` is a registered alias.
-    /// Returns `None` for canonical names and unknown names alike.
-    ///
-    /// This is the fast-path used by `resolve_tool_call()` in the application layer
-    /// to correct LLM-hallucinated tool names without an LLM API call.
-    pub fn resolve_alias(&self, name: &str) -> Option<&str> {
-        self.aliases.get(name).map(|s| s.as_str())
-    }
-
-    /// Resolve any tool name — canonical or alias — to a canonical name.
-    ///
-    /// Resolution priority:
-    /// 1. If `name` is a registered canonical tool name → returns `name` as-is
-    /// 2. If `name` is a registered alias → returns the alias target
-    /// 3. Otherwise → `None`
-    ///
-    /// Canonical names always take priority over aliases, so if a name is both
-    /// a registered tool and an alias, the tool's own identity wins.
-    pub fn resolve<'a>(&'a self, name: &'a str) -> Option<&'a str> {
-        if self.tools.contains_key(name) {
-            Some(name)
-        } else {
-            self.resolve_alias(name)
-        }
-    }
-
-    /// Get a [`ToolDefinition`] by canonical name **or** alias.
-    ///
-    /// Unlike [`get()`](Self::get) which requires an exact canonical match,
-    /// this method first resolves the name through the alias system.
-    /// Used for validation and display contexts where alias-awareness is desired.
-    pub fn get_resolved(&self, name: &str) -> Option<&ToolDefinition> {
-        self.resolve(name)
-            .and_then(|canonical| self.tools.get(canonical))
-    }
-
-    /// Get a [`ToolDefinition`] by **exact** canonical name only.
-    ///
-    /// Does **not** resolve aliases — this is intentional. The executor's routing
-    /// logic (`match call.tool_name.as_str()`) relies on exact canonical names.
-    /// Use [`get_resolved()`](Self::get_resolved) when alias resolution is needed.
+    /// Get a [`ToolDefinition`] by canonical name.
     pub fn get(&self, name: &str) -> Option<&ToolDefinition> {
         self.tools.get(name)
     }
@@ -400,36 +273,13 @@ impl ToolSpec {
     }
 }
 
-/// A request to invoke a tool, parsed from an LLM response.
+/// A request to invoke a tool, extracted from an LLM response.
 ///
-/// `ToolCall` is produced either by the response parser (`parse_tool_calls()`)
-/// in the prompt-based path, or extracted directly from [`LlmResponse::tool_calls()`]
-/// in the Native Tool Use path.
-///
-/// ```text
-/// PromptBased:    LLM response → parse_tool_calls() → resolve_tool_call() → execute()
-/// Native API:     LlmResponse → tool_calls() → execute()  (no parsing needed)
-/// ```
-///
-/// The `tool_name` field may initially contain an aliased name (e.g. `"bash"`)
-/// in the prompt-based path. The **Tool Name Alias System** in `resolve_tool_call()`
-/// rewrites it to the canonical name (e.g. `"run_command"`) before execution.
-/// In the Native path, the API guarantees correct tool names.
-///
-/// # Supported LLM Response Formats (Prompt-Based)
-///
-/// Tool calls are extracted from LLM responses in these formats (highest priority first):
-/// 1. `` ```tool `` fenced blocks
-/// 2. `` ```json `` fenced blocks
-/// 3. Raw JSON (entire response)
-/// 4. Embedded JSON (heuristic fallback)
+/// `ToolCall` is extracted from [`LlmResponse::tool_calls()`] via the
+/// Native Tool Use API. The API guarantees valid tool names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Name of the tool to call.
-    ///
-    /// May be an alias (e.g. `"bash"`) before resolution; will be rewritten
-    /// to the canonical name (e.g. `"run_command"`) by the alias system.
-    /// In Native mode, the API guarantees this is a valid canonical name.
+    /// Name of the tool to call (canonical name, guaranteed valid by the API).
     pub tool_name: String,
     /// Arguments passed to the tool, validated against [`ToolDefinition::parameters`].
     pub arguments: HashMap<String, serde_json::Value>,
@@ -445,7 +295,6 @@ pub struct ToolCall {
     /// (e.g. Anthropic `tool_use` content block). Used to correlate
     /// tool results back to the original request via `send_tool_results()`.
     ///
-    /// `None` for prompt-based tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_id: Option<String>,
 }
@@ -552,90 +401,6 @@ mod tests {
 
         assert_eq!(spec.high_risk_tools().count(), 1);
         assert_eq!(spec.low_risk_tools().count(), 1);
-    }
-
-    #[test]
-    fn test_tool_spec_aliases() {
-        let spec = ToolSpec::new()
-            .register(ToolDefinition::new(
-                "run_command",
-                "Run command",
-                RiskLevel::High,
-            ))
-            .register(ToolDefinition::new(
-                "read_file",
-                "Read file",
-                RiskLevel::Low,
-            ))
-            .register_alias("bash", "run_command")
-            .register_alias("shell", "run_command")
-            .register_alias("view", "read_file");
-
-        // resolve_alias only resolves aliases, not canonical names
-        assert_eq!(spec.resolve_alias("bash"), Some("run_command"));
-        assert_eq!(spec.resolve_alias("shell"), Some("run_command"));
-        assert_eq!(spec.resolve_alias("view"), Some("read_file"));
-        assert_eq!(spec.resolve_alias("run_command"), None);
-        assert_eq!(spec.resolve_alias("unknown"), None);
-
-        // resolve returns canonical for both registered tools and aliases
-        assert_eq!(spec.resolve("run_command"), Some("run_command"));
-        assert_eq!(spec.resolve("bash"), Some("run_command"));
-        assert_eq!(spec.resolve("read_file"), Some("read_file"));
-        assert_eq!(spec.resolve("view"), Some("read_file"));
-        assert_eq!(spec.resolve("unknown"), None);
-
-        // get_resolved returns tool definition via alias
-        assert_eq!(spec.get_resolved("bash").unwrap().name, "run_command");
-        assert_eq!(
-            spec.get_resolved("run_command").unwrap().name,
-            "run_command"
-        );
-        assert!(spec.get_resolved("unknown").is_none());
-    }
-
-    #[test]
-    fn test_tool_spec_register_aliases_batch() {
-        let spec = ToolSpec::new()
-            .register(ToolDefinition::new("grep_search", "Grep", RiskLevel::Low))
-            .register_aliases([
-                ("grep", "grep_search"),
-                ("rg", "grep_search"),
-                ("search", "grep_search"),
-            ]);
-
-        assert_eq!(spec.resolve("grep"), Some("grep_search"));
-        assert_eq!(spec.resolve("rg"), Some("grep_search"));
-        assert_eq!(spec.resolve("search"), Some("grep_search"));
-    }
-
-    #[test]
-    fn test_canonical_name_takes_priority_over_alias() {
-        // If a canonical name and alias collide, canonical wins in resolve()
-        let spec = ToolSpec::new()
-            .register(ToolDefinition::new(
-                "read_file",
-                "Read file",
-                RiskLevel::Low,
-            ))
-            .register(ToolDefinition::new("view", "View tool", RiskLevel::Low))
-            .register_alias("view", "read_file"); // alias points to read_file, but "view" is also a tool
-
-        // resolve should return "view" as canonical since it's a registered tool
-        assert_eq!(spec.resolve("view"), Some("view"));
-        // get_resolved should return the "view" tool, not "read_file"
-        assert_eq!(spec.get_resolved("view").unwrap().name, "view");
-    }
-
-    #[test]
-    fn test_get_is_not_affected_by_aliases() {
-        let spec = ToolSpec::new()
-            .register(ToolDefinition::new("run_command", "Run", RiskLevel::High))
-            .register_alias("bash", "run_command");
-
-        // get() is exact match only - aliases don't work
-        assert!(spec.get("run_command").is_some());
-        assert!(spec.get("bash").is_none());
     }
 
     #[test]

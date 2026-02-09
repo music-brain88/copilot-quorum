@@ -45,7 +45,7 @@ pub use orchestration::{
     strategy::{DebateConfig, DebateIntensity, OrchestrationStrategy, StrategyExecutor},
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
-pub use prompt::{AgentPromptTemplate, PromptTemplate, PromptToolMode};
+pub use prompt::{AgentPromptTemplate, PromptTemplate};
 pub use session::{
     entities::Message,
     repository::LlmSessionRepository,
