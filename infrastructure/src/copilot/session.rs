@@ -1,7 +1,29 @@
 //! Copilot session management.
 //!
-//! Provides [`CopilotSession`] which implements [`LlmSession`] for
-//! maintaining a conversation with a specific LLM model through Copilot CLI.
+//! Provides [`CopilotSession`] which implements
+//! [`LlmSession`] for
+//! maintaining a conversation with a specific LLM model through the Copilot CLI.
+//!
+//! # Feature support
+//!
+//! A single `CopilotSession` encapsulates one LLM conversation. Depending on
+//! the feature, sessions are used differently:
+//!
+//! | Feature | Session usage |
+//! |---------|--------------|
+//! | **Solo mode** | [`send`](CopilotSession) for text Q&A |
+//! | **Quorum Discussion** | Multiple sessions in parallel, each with its own [`SessionChannel`] |
+//! | **Ensemble Planning** | N plan-generation + N×(N−1) voting sessions |
+//! | **Native Tool Use** | [`send_with_tools`](CopilotSession) creates a second tool-enabled session internally |
+//! | **Agent System** | Multi-turn loop: `send_with_tools` → execute → [`send_tool_results`](CopilotSession) → repeat |
+//!
+//! # Tool session lifecycle
+//!
+//! When [`send_with_tools`](CopilotSession) is called, a **separate** Copilot
+//! session is created with tool definitions attached. This tool session is
+//! stored internally so that subsequent calls to
+//! [`send_tool_results`](CopilotSession) can reuse the same session and
+//! channel for the multi-turn tool-use loop.
 
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
@@ -18,14 +40,20 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-/// Internal state for a tool-enabled session.
+/// Internal state for a tool-enabled session (**Native Tool Use**).
+///
+/// Created by [`CopilotSession::create_tool_session_and_send`] when the
+/// application layer calls [`send_with_tools`](LlmSession::send_with_tools).
+/// Holds its own [`SessionChannel`] so that the multi-turn tool-call loop
+/// can continue reading from the same session across multiple
+/// [`send_tool_results`](LlmSession::send_tool_results) calls.
 struct ToolSessionState {
     /// Session ID for the tool-enabled session (re-created with tools).
     #[allow(dead_code)]
     session_id: String,
-    /// Channel for the tool-enabled session.
+    /// Dedicated channel for the tool-enabled session.
     channel: SessionChannel,
-    /// Pending tool.call request awaiting a response from us.
+    /// Pending `tool.call` request awaiting our response.
     pending_tool_call: Option<PendingToolCall>,
 }
 
@@ -37,8 +65,20 @@ struct PendingToolCall {
 
 /// An active conversation session with a specific Copilot model.
 ///
-/// Maintains session state and allows sending prompts and receiving responses.
 /// Implements [`LlmSession`] for use with the application layer.
+/// Each instance holds its own [`SessionChannel`] for receiving routed
+/// messages from the [`MessageRouter`], ensuring complete isolation from
+/// other concurrent sessions.
+///
+/// # Feature support
+///
+/// - **Text Q&A** (Solo, Quorum, Ensemble): [`send`](LlmSession::send) /
+///   [`ask_streaming`](Self::ask_streaming)
+/// - **Native Tool Use**: [`send_with_tools`](LlmSession::send_with_tools)
+///   creates an internal tool session; [`send_tool_results`](LlmSession::send_tool_results)
+///   continues the multi-turn loop.
+/// - **Cancellation**: [`ask_with_cancellation`](Self::ask_with_cancellation)
+///   for user-interruptible Quorum Discussion phases.
 pub struct CopilotSession {
     router: Arc<MessageRouter>,
     session_id: String,
@@ -49,7 +89,10 @@ pub struct CopilotSession {
 }
 
 impl CopilotSession {
-    /// Create a new session with the specified model
+    /// Create a new session with the specified model.
+    ///
+    /// Delegates to [`MessageRouter::create_session`] which handles the
+    /// `session.create` → `session.start` handshake internally.
     pub async fn new(router: Arc<MessageRouter>, model: Model) -> Result<Self> {
         Self::new_with_system_prompt(router, model, None).await
     }
@@ -176,8 +219,24 @@ impl CopilotSession {
 
     /// Create a tool-enabled session and send the initial prompt.
     ///
+    /// Called by the [`LlmSession::send_with_tools`] implementation.
     /// This creates a **new** Copilot session with tool definitions attached,
-    /// then sends the prompt and reads the streaming response.
+    /// sends the prompt, and reads the streaming response. If the LLM
+    /// returns a `tool.call`, the tool session is stashed in
+    /// [`ToolSessionState`] so that [`send_tool_results`](LlmSession::send_tool_results)
+    /// can continue the conversation on the same session.
+    ///
+    /// # Native Tool Use flow
+    ///
+    /// ```text
+    /// send_with_tools(prompt, tools)
+    ///   └─ create_tool_session_and_send()
+    ///        ├─ router.create_session(params_with_tools)
+    ///        ├─ router.request(session.send)
+    ///        └─ tool_channel.read_streaming_for_tools()
+    ///             ├─ Idle → return text response
+    ///             └─ ToolCall → stash channel + return ToolUse response
+    /// ```
     async fn create_tool_session_and_send(
         &self,
         content: &str,
@@ -249,8 +308,13 @@ impl CopilotSession {
             .await
     }
 
-    /// Build an `LlmResponse` from a streaming outcome, stashing tool session
+    /// Build an [`LlmResponse`] from a streaming outcome, stashing tool session
     /// state when a tool call is received.
+    ///
+    /// Maps [`StreamingOutcome::Idle`] to a text response with
+    /// [`StopReason::EndTurn`], and [`StreamingOutcome::ToolCall`] to a
+    /// [`ContentBlock::ToolUse`] response with [`StopReason::ToolUse`] while
+    /// saving the channel for the next [`send_tool_results`](LlmSession::send_tool_results).
     async fn build_response_from_outcome(
         &self,
         outcome: StreamingOutcome,

@@ -1,4 +1,19 @@
-//! Copilot LLM Gateway implementation
+//! Copilot LLM Gateway — entry point for all LLM communication.
+//!
+//! [`CopilotLlmGateway`] implements the
+//! [`LlmGateway`] port
+//! and is the **single factory** for creating [`CopilotSession`]s.
+//!
+//! Every user-facing feature goes through this gateway:
+//!
+//! - **Solo mode** — `create_session()` once
+//! - **Quorum Discussion** — `create_session()` × N models × phases
+//! - **Ensemble Planning** — `create_session()` × N² for plans + voting
+//! - **Agent System** — sessions with tool definitions via `CopilotSession::send_with_tools`
+//!
+//! Internally, the gateway owns an [`Arc<MessageRouter>`](super::router::MessageRouter)
+//! which is shared with all sessions. The router handles the actual TCP
+//! communication and demultiplexing.
 
 use crate::copilot::router::MessageRouter;
 use crate::copilot::session::CopilotSession;
@@ -8,13 +23,19 @@ use quorum_domain::Model;
 use std::sync::Arc;
 use tracing::info;
 
-/// LLM Gateway implementation for GitHub Copilot CLI
+/// LLM Gateway implementation for GitHub Copilot CLI.
+///
+/// Owns the [`MessageRouter`] and creates [`CopilotSession`]s on demand.
+/// A single gateway instance is shared across the entire application lifetime.
 pub struct CopilotLlmGateway {
     router: Arc<MessageRouter>,
 }
 
 impl CopilotLlmGateway {
-    /// Create a new gateway by spawning the Copilot CLI
+    /// Create a new gateway by spawning the Copilot CLI.
+    ///
+    /// This is the standard production path, called during application startup
+    /// in `cli/src/main.rs`.
     pub async fn new() -> Result<Self, GatewayError> {
         let router = MessageRouter::spawn()
             .await
@@ -34,7 +55,7 @@ impl CopilotLlmGateway {
         Ok(Self { router })
     }
 
-    /// Create a gateway with an existing router
+    /// Create a gateway with a pre-built router (useful for shared test setups).
     pub fn with_router(router: Arc<MessageRouter>) -> Self {
         Self { router }
     }

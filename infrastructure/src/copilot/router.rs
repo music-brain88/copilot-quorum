@@ -1,10 +1,21 @@
-//! Message router for demultiplexing Copilot CLI events to sessions.
+//! Transport demultiplexer — message routing for concurrent Copilot CLI sessions.
 //!
-//! The Copilot CLI communicates over a single TCP connection, but multiple
-//! sessions can be active concurrently (e.g. during Ensemble mode).
-//! [`MessageRouter`] runs a background reader task that owns the TCP reader
-//! exclusively (no `Mutex` contention) and routes incoming messages to the
-//! correct [`SessionChannel`] by `session_id`.
+//! The Copilot CLI communicates over a **single TCP connection** using JSON-RPC 2.0,
+//! but several features require **multiple sessions running concurrently**:
+//!
+//! | Feature | Concurrent sessions |
+//! |---------|-------------------|
+//! | **Solo mode** | 1 (+ 1 tool session if using Native Tool Use) |
+//! | **Solo + `/discuss`** | Up to 7 (initial × 3 + review × 3 + synthesis) |
+//! | **Ensemble Planning** | N² peak (N plan-generation + N×(N−1) voting) |
+//! | **Agent + Tool Use** | 2 per model (main + tool-enabled session) |
+//!
+//! [`MessageRouter`] solves this by running a single background reader task that
+//! owns the TCP read-half exclusively — no `Mutex` contention — and routes
+//! incoming messages to the correct [`SessionChannel`] by `session_id`.
+//!
+//! See [docs/features/transport.md](../../../../docs/features/transport.md) for
+//! the full design rationale and concurrency patterns.
 
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
@@ -25,14 +36,24 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 /// A message routed to a specific session's channel.
+///
+/// The background reader task classifies every incoming JSON-RPC message
+/// (via [`classify_message`]) and wraps session-relevant ones in this enum
+/// before sending them through the per-session `mpsc` channel.
 #[derive(Debug)]
 pub enum RoutedMessage {
     /// A `session.event` notification (delta, message, idle, etc.).
+    ///
+    /// Used by **all features** — every LLM response is delivered as a stream
+    /// of `assistant.message.delta` events followed by `session.idle`.
     SessionEvent {
         event_type: String,
         event: serde_json::Value,
     },
     /// An incoming `tool.call` request from the CLI.
+    ///
+    /// Used by **Native Tool Use** and the **Agent System** — the LLM decides
+    /// to invoke a tool, and the CLI forwards the request to us for execution.
     ToolCall {
         request_id: u64,
         params: ToolCallParams,
@@ -48,8 +69,18 @@ struct SessionStartEvent {
 /// A per-session channel for receiving routed messages.
 ///
 /// Each [`CopilotSession`](super::session::CopilotSession) owns a
-/// `SessionChannel` for its lifetime.  When dropped, the session is
-/// automatically deregistered from the router.
+/// `SessionChannel` for its lifetime. When dropped, the session is
+/// automatically deregistered from the router via [`Drop`].
+///
+/// # Feature usage
+///
+/// - **Solo / Quorum Discussion**: one channel per session, reading text via
+///   [`read_streaming`](Self::read_streaming).
+/// - **Native Tool Use**: the tool-enabled session uses
+///   [`read_streaming_for_tools`](Self::read_streaming_for_tools) to detect
+///   `tool.call` requests interleaved with text deltas.
+/// - **Quorum Discussion with cancellation**: long-running parallel sessions
+///   use [`read_streaming_with_cancellation`](Self::read_streaming_with_cancellation).
 pub struct SessionChannel {
     rx: mpsc::UnboundedReceiver<RoutedMessage>,
     session_id: String,
@@ -57,13 +88,20 @@ pub struct SessionChannel {
 }
 
 impl SessionChannel {
-    /// Receive the next routed message (blocks until available).
+    /// Receive the next routed message, blocking until one arrives.
+    ///
+    /// Returns [`CopilotError::RouterStopped`] if the background reader task
+    /// has ended (e.g. TCP disconnection or Copilot CLI crash).
     pub async fn recv(&mut self) -> Result<RoutedMessage> {
         self.rx.recv().await.ok_or(CopilotError::RouterStopped)
     }
 
     /// Read streaming session events until `session.idle`, calling `on_chunk`
     /// for each text delta.
+    ///
+    /// Used by **Solo mode**, **Quorum Discussion**, and **Ensemble Planning**
+    /// for regular text-only LLM responses. Tool calls arriving during this
+    /// read are logged as warnings and ignored.
     pub async fn read_streaming(&mut self, mut on_chunk: impl FnMut(&str)) -> Result<String> {
         let mut full_content = String::new();
 
@@ -106,6 +144,14 @@ impl SessionChannel {
     }
 
     /// Read streaming events until `session.idle` **or** `tool.call`.
+    ///
+    /// Returns [`StreamingOutcome::Idle`] when the LLM finishes responding, or
+    /// [`StreamingOutcome::ToolCall`] when the LLM requests tool execution.
+    ///
+    /// Used by **Native Tool Use** and the **Agent System** — the multi-turn
+    /// loop in [`CopilotSession::send_with_tools`](super::session::CopilotSession)
+    /// and [`send_tool_results`](super::session::CopilotSession) relies on
+    /// this to detect when the LLM wants a tool invoked.
     pub async fn read_streaming_for_tools(
         &mut self,
         mut on_chunk: impl FnMut(&str),
@@ -159,6 +205,10 @@ impl SessionChannel {
     }
 
     /// Read streaming events with cancellation support.
+    ///
+    /// Behaves like [`read_streaming`](Self::read_streaming) but can be
+    /// aborted via a [`CancellationToken`]. Used by **Quorum Discussion**
+    /// where a user may cancel a long-running parallel discussion.
     pub async fn read_streaming_with_cancellation(
         &mut self,
         mut on_chunk: impl FnMut(&str),
@@ -231,6 +281,26 @@ impl Drop for SessionChannel {
 
 /// Central message router that demultiplexes a single TCP connection
 /// across multiple concurrent Copilot sessions.
+///
+/// # Responsibilities
+///
+/// 1. **Spawn** the Copilot CLI process and establish a TCP connection.
+/// 2. **Own** the TCP read-half in a background [`tokio::spawn`] task — no
+///    `Mutex` on the reader, eliminating cross-session contention.
+/// 3. **Route** incoming JSON-RPC messages by `session_id` to per-session
+///    [`SessionChannel`]s via `mpsc::UnboundedSender`.
+/// 4. **Correlate** request–response pairs via `oneshot` channels (used by
+///    [`request`](Self::request)).
+/// 5. **Serialize** session creation through [`create_lock`](Self) to prevent
+///    `session.start` event mix-ups.
+///
+/// # Feature usage
+///
+/// Every feature that talks to an LLM goes through this router:
+/// - **Solo mode**: 1 session
+/// - **Quorum Discussion**: 3–7 parallel sessions (initial + review + synthesis)
+/// - **Ensemble Planning**: N² sessions at peak (plan generation + voting)
+/// - **Native Tool Use**: 2 sessions per model (main + tool-enabled)
 pub struct MessageRouter {
     /// Background reader task handle.
     _reader_handle: JoinHandle<()>,
@@ -256,7 +326,11 @@ pub struct MessageRouter {
 }
 
 impl MessageRouter {
-    /// Spawn the Copilot CLI and build the router.
+    /// Spawn the Copilot CLI (`copilot --server`) and build the router.
+    ///
+    /// Called by [`CopilotLlmGateway::new`](super::gateway::CopilotLlmGateway::new)
+    /// during application startup. The returned `Arc<Self>` is shared by all
+    /// [`CopilotSession`](super::session::CopilotSession)s.
     pub async fn spawn() -> Result<Arc<Self>> {
         Self::spawn_with_command("copilot").await
     }
@@ -340,6 +414,18 @@ impl MessageRouter {
     }
 
     /// Background reader loop — single owner of the TCP read half.
+    ///
+    /// Runs indefinitely until the TCP connection closes or an I/O error
+    /// occurs. Each incoming JSON-RPC message is classified by
+    /// [`classify_message`] and dispatched:
+    ///
+    /// - **Response** → `pending_responses` oneshot (request correlation)
+    /// - **Notification `session.start`** → `session_start_tx` (session creation)
+    /// - **Notification (other)** → `routes[session_id]` → [`SessionChannel`]
+    /// - **IncomingRequest `tool.call`** → `routes[session_id]` → [`SessionChannel`]
+    ///
+    /// When the loop exits, all senders are dropped so that receivers observe
+    /// `None` / `RecvError`, which propagates as [`CopilotError::RouterStopped`].
     async fn reader_loop(
         read_half: OwnedReadHalf,
         routes: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>>,
@@ -554,8 +640,14 @@ impl MessageRouter {
 
     /// Create a new Copilot session and return its ID + channel.
     ///
-    /// Session creation is serialized via `create_lock` to avoid
-    /// mixing up `session.start` events from concurrent creates.
+    /// Session creation is serialized via `create_lock` to prevent
+    /// concurrent `session.create` requests from confusing which
+    /// `session.start` event belongs to which caller.
+    ///
+    /// Called by [`CopilotSession::new`](super::session::CopilotSession::new)
+    /// for the main session, and again by
+    /// [`CopilotSession::create_tool_session_and_send`](super::session::CopilotSession)
+    /// when Native Tool Use needs a separate tool-enabled session.
     pub async fn create_session(
         self: &Arc<Self>,
         params: CreateSessionParams,
@@ -592,6 +684,13 @@ impl MessageRouter {
     }
 
     /// Send a JSON-RPC request and wait for the correlated response.
+    ///
+    /// Uses a `oneshot` channel: the request ID is registered in
+    /// `pending_responses`, and the background reader task fulfils it
+    /// when the matching response arrives.
+    ///
+    /// Used by [`CopilotSession::ask_streaming`](super::session::CopilotSession)
+    /// for `session.send` and similar request–response pairs.
     pub async fn request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let (tx, rx) = oneshot::channel();
 
@@ -605,7 +704,10 @@ impl MessageRouter {
         rx.await.map_err(|_| CopilotError::RouterStopped)
     }
 
-    /// Send a JSON-RPC request (fire-and-forget).
+    /// Send a JSON-RPC request without waiting for a response (fire-and-forget).
+    ///
+    /// Used for `session.create` where the response is an asynchronous
+    /// `session.start` event rather than a direct JSON-RPC response.
     pub async fn send_request(&self, request: &JsonRpcRequest) -> Result<()> {
         let request_json = serde_json::to_string(request)?;
         trace!("Router sending: {}", request_json);
@@ -618,7 +720,11 @@ impl MessageRouter {
         Ok(())
     }
 
-    /// Send a JSON-RPC response (SDK -> CLI), e.g. for tool.call results.
+    /// Send a JSON-RPC response (SDK → CLI), returning tool execution results.
+    ///
+    /// Used by **Native Tool Use** — after the agent executes a tool,
+    /// [`CopilotSession::send_tool_results`](super::session::CopilotSession)
+    /// calls this to deliver the result back to the CLI-side LLM.
     pub async fn send_response(&self, response: &JsonRpcResponseOut) -> Result<()> {
         let response_json = serde_json::to_string(response)?;
         trace!("Router sending response: {}", response_json);
@@ -632,6 +738,9 @@ impl MessageRouter {
     }
 
     /// Deregister a session from the routing table.
+    ///
+    /// Automatically called by [`SessionChannel::drop`] — callers do not
+    /// normally need to invoke this directly.
     pub fn deregister_session(&self, session_id: &str) {
         let routes = Arc::clone(&self.routes);
         let session_id = session_id.to_string();

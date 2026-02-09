@@ -1,13 +1,25 @@
 //! JSON-RPC protocol types for Copilot CLI communication.
 //!
-//! This module defines the message structures used in the JSON-RPC 2.0 protocol
-//! for communicating with the Copilot CLI process.
+//! Defines the message structures used in the JSON-RPC 2.0 protocol for
+//! communicating with the Copilot CLI process over TCP.
 //!
 //! # Protocol Overview
 //!
-//! - **Requests**: Client → Copilot CLI (e.g., `session.create`, `session.send`)
-//! - **Responses**: Copilot CLI → Client (result or error)
-//! - **Notifications**: Copilot CLI → Client (e.g., `assistant.message`, `session.idle`)
+//! - **Requests** (Client → CLI): `session.create`, `session.send`
+//! - **Responses** (CLI → Client): result or error, correlated by request `id`
+//! - **Notifications** (CLI → Client): `session.event` carrying streaming deltas,
+//!   `session.idle`, `session.start`
+//! - **Incoming Requests** (CLI → Client): `tool.call` — the LLM wants a tool
+//!   executed (**Native Tool Use**)
+//!
+//! # Feature relevance
+//!
+//! | Type | Feature |
+//! |------|---------|
+//! | [`CreateSessionParams`] | All features (session creation) |
+//! | [`CopilotToolDefinition`] | Native Tool Use / Agent System |
+//! | [`ToolCallParams`] | Native Tool Use (incoming `tool.call` requests) |
+//! | [`ToolCallResult`] / [`JsonRpcResponseOut`] | Native Tool Use (returning tool results) |
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -101,7 +113,12 @@ impl Message {
     }
 }
 
-/// Session creation parameters
+/// Parameters for `session.create` — sent to the Copilot CLI to open a new
+/// conversation session.
+///
+/// When `tools` is `Some`, the CLI-side LLM is allowed to issue `tool.call`
+/// requests (**Native Tool Use**). This is used by
+/// [`CopilotSession::create_tool_session_and_send`](super::session::CopilotSession).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionParams {
@@ -113,9 +130,12 @@ pub struct CreateSessionParams {
     pub tools: Option<Vec<CopilotToolDefinition>>,
 }
 
-/// Tool definition for the Copilot CLI session.
+/// Tool definition for the Copilot CLI session (**Native Tool Use**).
 ///
-/// Converted from the domain's `to_api_tools()` JSON Schema format via [`from_api_tool()`](Self::from_api_tool).
+/// Converted from the domain's [`ToolSpec::to_api_tools()`](quorum_domain::tool::ToolSpec::to_api_tools)
+/// JSON Schema format via [`from_api_tool`](Self::from_api_tool).
+/// Each definition tells the CLI-side LLM what tools are available and
+/// their input schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotToolDefinition {
@@ -219,7 +239,12 @@ pub struct IncomingJsonRpcRequest {
     pub params: Option<serde_json::Value>,
 }
 
-/// JSON-RPC response sent from SDK → CLI (e.g., tool.call result).
+/// JSON-RPC response sent from SDK → CLI (e.g., `tool.call` result).
+///
+/// Used by **Native Tool Use** — after executing a tool,
+/// [`CopilotSession::send_tool_results`](super::session::CopilotSession)
+/// wraps the result in this type and sends it via
+/// [`MessageRouter::send_response`](super::router::MessageRouter::send_response).
 #[derive(Debug, Clone, Serialize)]
 pub struct JsonRpcResponseOut {
     pub jsonrpc: &'static str,
@@ -237,7 +262,11 @@ impl JsonRpcResponseOut {
     }
 }
 
-/// Result payload for a `tool.call` response.
+/// Result payload for a `tool.call` response (**Native Tool Use**).
+///
+/// Serialized inside [`JsonRpcResponseOut::result`] and sent back to the
+/// CLI-side LLM so it can see the tool output and decide what to do next
+/// (generate more text or call another tool).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallResult {

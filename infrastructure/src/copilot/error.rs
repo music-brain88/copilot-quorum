@@ -2,6 +2,11 @@
 //!
 //! Provides structured error handling for all failure modes when
 //! communicating with the GitHub Copilot CLI process.
+//!
+//! These errors surface in every feature that uses the Copilot backend
+//! (Solo, Quorum Discussion, Ensemble Planning, Agent / Tool Use) and are
+//! mapped to [`GatewayError`](quorum_application::ports::llm_gateway::GatewayError)
+//! at the `CopilotSession` boundary.
 
 use thiserror::Error;
 
@@ -38,6 +43,9 @@ pub enum CopilotError {
     SessionNotInitialized,
 
     /// The transport connection to Copilot CLI was closed.
+    ///
+    /// Returned when the background reader task in [`MessageRouter`](super::router::MessageRouter)
+    /// detects that the TCP connection has been closed (e.g. Copilot CLI exited).
     #[error("Transport closed")]
     TransportClosed,
 
@@ -54,10 +62,18 @@ pub enum CopilotError {
     Cancelled,
 
     /// Error during tool call processing.
+    ///
+    /// Used by **Native Tool Use** when a `tool.call` request cannot be parsed
+    /// or forwarded correctly.
     #[error("Tool call error: {0}")]
     ToolCallError(String),
 
     /// The message router background task has stopped.
+    ///
+    /// This occurs when [`SessionChannel::recv`](super::router::SessionChannel::recv)
+    /// finds that all senders have been dropped — typically because the TCP
+    /// connection closed or the Copilot CLI process crashed. Affects **all
+    /// features** as every session relies on the router.
     #[error("Message router stopped")]
     RouterStopped,
 }
