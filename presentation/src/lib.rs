@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod output;
 pub mod progress;
+pub mod tui;
 
 // Re-export commonly used types
 pub use cli::commands::{Cli, CliOutputFormat};
@@ -19,8 +20,12 @@ pub use progress::reporter::{ProgressReporter, SimpleProgress};
 pub use agent::human_intervention::InteractiveHumanIntervention;
 pub use agent::presenter::ReplPresenter;
 pub use agent::progress::{AgentProgressReporter, SimpleAgentProgress};
-pub use agent::repl::AgentRepl;
 pub use agent::thought::{ThoughtStream, format_thoughts, summarize_thoughts};
+
+// TUI exports
+pub use tui::{
+    TuiApp, TuiHumanIntervention, TuiPresenter, TuiProgressReporter, TuiEvent, TuiMode, TuiState,
+};
 
 // Re-export OutputFormat from domain layer
 pub use quorum_domain::OutputFormat;
