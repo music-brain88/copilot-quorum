@@ -3,11 +3,66 @@
 use crate::agent::{AgentContext, Plan, Task};
 use crate::tool::entities::ToolSpec;
 
+/// Whether tool definitions should be included in prompts.
+///
+/// In Native Tool Use mode, tools are passed via the API — no need to
+/// describe them in the system prompt. This reduces token usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptToolMode {
+    /// Include tool descriptions in the prompt (prompt-based path).
+    Include,
+    /// Omit tool descriptions (Native Tool Use path — API handles tools).
+    Omit,
+}
+
 /// Templates for generating agent prompts
 pub struct AgentPromptTemplate;
 
 impl AgentPromptTemplate {
-    /// System prompt for the agent
+    /// System prompt for the agent (Native Tool Use mode).
+    ///
+    /// Omits tool descriptions and tool call format instructions since
+    /// tools are defined via the API. Keeps general agent guidelines.
+    pub fn agent_system_native() -> String {
+        r#"You are an autonomous coding agent that helps users with software engineering tasks.
+
+## Your Capabilities
+
+You can analyze codebases, write code, execute commands, and help with various development tasks.
+You work by creating and executing plans, using tools to interact with the file system.
+
+## Guidelines
+
+1. **Plan First**: Always analyze the request and create a clear plan before acting
+2. **Be Cautious**: High-risk operations (file writes, commands) should be well-justified
+3. **Verify**: After making changes, verify they work as expected
+4. **Explain**: Keep the user informed about what you're doing and why
+5. **Ask When Unsure**: If requirements are unclear, ask for clarification
+
+## Output Format
+
+Structure your responses with clear sections:
+- **Thinking**: Your analysis and reasoning
+- **Plan**: What you intend to do (when planning)
+- **Action**: The tool call (when executing)
+- **Result**: What happened (after tool execution)
+
+When you need to use a tool, simply call it using the available tool functions.
+Do not wrap tool calls in code blocks."#
+            .to_string()
+    }
+
+    /// System prompt for the agent, optionally including tool descriptions.
+    ///
+    /// Use [`PromptToolMode::Omit`] in Native Tool Use mode to save tokens.
+    pub fn agent_system_with_mode(tool_spec: &ToolSpec, mode: PromptToolMode) -> String {
+        match mode {
+            PromptToolMode::Omit => Self::agent_system_native(),
+            PromptToolMode::Include => Self::agent_system(tool_spec),
+        }
+    }
+
+    /// System prompt for the agent (prompt-based mode, includes tool descriptions).
     pub fn agent_system(tool_spec: &ToolSpec) -> String {
         let tool_descriptions = tool_spec
             .all()

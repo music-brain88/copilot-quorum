@@ -10,9 +10,12 @@
 
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
-use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
+use crate::ports::llm_gateway::{
+    GatewayError, LlmGateway, LlmSession, ToolMode, ToolResultMessage,
+};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::core::string::truncate;
+use quorum_domain::session::response::LlmResponse;
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
     HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
@@ -482,12 +485,51 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     progress.on_llm_stream_end();
                     return Err(RunAgentError::GatewayError(GatewayError::RequestFailed(e)));
                 }
+                Some(StreamEvent::CompletedResponse(response)) => {
+                    let text = response.text_content();
+                    if full_text.is_empty() {
+                        full_text = text;
+                    }
+                    break;
+                }
+                Some(StreamEvent::ToolCallDelta { .. }) => {
+                    // Tool call deltas handled in Native path — skip in text collection
+                }
                 None => break, // channel closed
             }
         }
 
         progress.on_llm_stream_end();
         Ok(full_text)
+    }
+
+    /// Send a prompt with tools to the LLM with cancellation support (Native Tool Use path).
+    ///
+    /// Returns the full `LlmResponse` with structured content blocks.
+    /// This is the Native counterpart of `send_with_cancellation()`.
+    async fn send_with_tools_cancellable(
+        &self,
+        session: &dyn LlmSession,
+        prompt: &str,
+        tools: &[serde_json::Value],
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<LlmResponse, RunAgentError> {
+        self.check_cancelled()?;
+        progress.on_llm_stream_start("native_tool_use");
+
+        let response = session
+            .send_with_tools(prompt, tools)
+            .await
+            .map_err(RunAgentError::GatewayError)?;
+
+        // Forward any text content to progress
+        let text = response.text_content();
+        if !text.is_empty() {
+            progress.on_llm_chunk(&text);
+        }
+
+        progress.on_llm_stream_end();
+        Ok(response)
     }
 
     /// Execute the agent without progress reporting
@@ -1499,6 +1541,39 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // Otherwise, ask the model to execute the task
+        // Branch based on tool communication mode
+        match session.tool_mode() {
+            ToolMode::Native => {
+                self.execute_task_native(session, input, state, task, previous_results, progress)
+                    .await
+            }
+            ToolMode::PromptBased => {
+                self.execute_task_prompt_based(
+                    session,
+                    input,
+                    state,
+                    task,
+                    previous_results,
+                    progress,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Execute a task using the prompt-based path (legacy).
+    ///
+    /// Sends a text prompt, parses tool calls from the response text,
+    /// resolves aliases, and executes each tool call.
+    async fn execute_task_prompt_based(
+        &self,
+        session: &dyn LlmSession,
+        input: &RunAgentInput,
+        state: &AgentState,
+        task: &Task,
+        previous_results: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<String, RunAgentError> {
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
 
         let response = match self
@@ -1576,6 +1651,229 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         Ok(outputs.join("\n---\n"))
+    }
+
+    /// Execute a task using the Native Tool Use API path with multi-turn loop.
+    ///
+    /// Implements the standard Native Tool Use conversation loop:
+    /// ```text
+    /// send_with_tools(prompt, tools)
+    ///   → stop_reason == ToolUse?
+    ///     → yes: execute tool calls → send_tool_results() → loop
+    ///     → no: return text content (done)
+    /// ```
+    ///
+    /// Tool calls are extracted directly from the structured response — no
+    /// text parsing or alias resolution needed (the API guarantees valid names).
+    ///
+    /// # Parallel Execution
+    ///
+    /// Low-risk tool calls within the same turn are executed in parallel
+    /// using `futures::join_all`. High-risk tools are executed sequentially
+    /// to maintain quorum review ordering.
+    async fn execute_task_native(
+        &self,
+        session: &dyn LlmSession,
+        input: &RunAgentInput,
+        state: &AgentState,
+        task: &Task,
+        previous_results: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<String, RunAgentError> {
+        let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
+        let tools = self.tool_executor.tool_spec().to_api_tools();
+        let max_turns = input.config.max_tool_turns;
+        let mut turn_count = 0;
+        let mut all_outputs = Vec::new();
+
+        // Initial request
+        let mut response = match self
+            .send_with_tools_cancellable(session, &prompt, &tools, progress)
+            .await
+        {
+            Ok(response) => response,
+            Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
+            Err(e) => return Err(RunAgentError::TaskExecutionFailed(e.to_string())),
+        };
+
+        loop {
+            // Collect any text from this turn
+            let text = response.text_content();
+            if !text.is_empty() {
+                all_outputs.push(text);
+            }
+
+            // Extract tool calls
+            let tool_calls = response.tool_calls();
+
+            if tool_calls.is_empty() {
+                // No tool calls — model is done
+                break;
+            }
+
+            // Check turn limit
+            turn_count += 1;
+            if turn_count > max_turns {
+                warn!(
+                    "Native tool use loop exceeded max_tool_turns ({})",
+                    max_turns
+                );
+                break;
+            }
+
+            // Check cancellation
+            self.check_cancelled()?;
+
+            // Execute tool calls and collect results
+            let mut tool_result_messages = Vec::new();
+
+            // Separate into low-risk (can parallelize) and high-risk (sequential)
+            let mut low_risk_calls = Vec::new();
+            let mut high_risk_calls = Vec::new();
+
+            for call in &tool_calls {
+                if self.is_high_risk_tool(&call.tool_name) {
+                    high_risk_calls.push(call);
+                } else {
+                    low_risk_calls.push(call);
+                }
+            }
+
+            // Execute low-risk calls in parallel
+            if !low_risk_calls.is_empty() {
+                let mut futures = Vec::new();
+                for call in &low_risk_calls {
+                    progress.on_tool_call(
+                        &call.tool_name,
+                        &format!("{:?}", call.arguments),
+                    );
+                    futures.push(self.tool_executor.execute(call));
+                }
+
+                let results: Vec<_> = futures::future::join_all(futures).await;
+
+                for (call, result) in low_risk_calls.iter().zip(results) {
+                    let is_error = !result.is_success();
+                    let output = if is_error {
+                        result
+                            .error()
+                            .map(|e| e.message.clone())
+                            .unwrap_or_else(|| "Unknown error".to_string())
+                    } else {
+                        result.output().unwrap_or("").to_string()
+                    };
+
+                    progress.on_tool_result(&call.tool_name, !is_error);
+
+                    if !is_error {
+                        all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
+                    }
+
+                    tool_result_messages.push(ToolResultMessage {
+                        tool_use_id: call
+                            .native_id
+                            .clone()
+                            .unwrap_or_else(|| call.tool_name.clone()),
+                        tool_name: call.tool_name.clone(),
+                        output,
+                        is_error,
+                    });
+                }
+            }
+
+            // Execute high-risk calls sequentially (with quorum review)
+            for call in &high_risk_calls {
+                // Quorum review for high-risk operations
+                if !input.config.review_models.is_empty() {
+                    let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
+                        "tool": call.tool_name,
+                        "args": call.arguments,
+                    }))
+                    .unwrap_or_default();
+
+                    let review = self
+                        .review_action(input, state, task, &tool_call_json, progress)
+                        .await?;
+
+                    progress.on_quorum_complete_with_votes(
+                        "action_review",
+                        review.approved,
+                        &review.votes,
+                        review.feedback.as_deref(),
+                    );
+
+                    if !review.approved {
+                        warn!("Tool call {} rejected by quorum", call.tool_name);
+                        tool_result_messages.push(ToolResultMessage {
+                            tool_use_id: call
+                                .native_id
+                                .clone()
+                                .unwrap_or_else(|| call.tool_name.clone()),
+                            tool_name: call.tool_name.clone(),
+                            output: "Action rejected by quorum review".to_string(),
+                            is_error: true,
+                        });
+                        continue;
+                    }
+                }
+
+                progress.on_tool_call(
+                    &call.tool_name,
+                    &format!("{:?}", call.arguments),
+                );
+
+                let result = self.tool_executor.execute(call).await;
+                let is_error = !result.is_success();
+                let output = if is_error {
+                    result
+                        .error()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                } else {
+                    result.output().unwrap_or("").to_string()
+                };
+
+                progress.on_tool_result(&call.tool_name, !is_error);
+
+                if !is_error {
+                    all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
+                }
+
+                tool_result_messages.push(ToolResultMessage {
+                    tool_use_id: call
+                        .native_id
+                        .clone()
+                        .unwrap_or_else(|| call.tool_name.clone()),
+                    tool_name: call.tool_name.clone(),
+                    output,
+                    is_error,
+                });
+            }
+
+            // Check if we should stop (stop_reason != ToolUse)
+            if response
+                .stop_reason
+                .as_ref()
+                .map_or(true, |r| *r != quorum_domain::StopReason::ToolUse)
+            {
+                break;
+            }
+
+            // Send tool results back to LLM for next turn
+            debug!(
+                "Native tool use turn {}/{}: sending {} tool results",
+                turn_count,
+                max_turns,
+                tool_result_messages.len()
+            );
+
+            response = session
+                .send_tool_results(&tool_result_messages)
+                .await
+                .map_err(RunAgentError::GatewayError)?;
+        }
+
+        Ok(all_outputs.join("\n---\n"))
     }
 
     /// Handle human intervention when plan revision limit is exceeded

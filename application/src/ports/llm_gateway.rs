@@ -3,6 +3,7 @@
 //! Defines the interface for communicating with LLM providers.
 
 use async_trait::async_trait;
+use quorum_domain::session::response::LlmResponse;
 use quorum_domain::{Model, StreamEvent};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -83,11 +84,78 @@ impl StreamHandle {
                 StreamEvent::Error(e) => {
                     return Err(GatewayError::RequestFailed(e));
                 }
+                // Native Tool Use events — extract text from completed response
+                StreamEvent::CompletedResponse(response) => {
+                    let text = response.text_content();
+                    if full_text.is_empty() {
+                        return Ok(text);
+                    }
+                    full_text.push_str(&text);
+                    return Ok(full_text);
+                }
+                // Tool call deltas are not text — skip
+                StreamEvent::ToolCallDelta { .. } => {}
             }
         }
         // Channel closed without Completed — return what we have
         Ok(full_text)
     }
+}
+
+/// Mode of tool communication between the application and the LLM.
+///
+/// This determines how tool definitions are sent to the LLM and how
+/// tool calls are extracted from responses.
+///
+/// # Two-Path Architecture
+///
+/// ```text
+/// PromptBased:  tools embedded in system prompt → parse tool calls from text
+/// Native:       tools sent via API parameter → structured tool calls in response
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolMode {
+    /// Legacy prompt-based tool definition.
+    ///
+    /// Tools are described in the system prompt as text. Tool calls are
+    /// extracted by parsing `` ```tool `` / `` ```json `` blocks from the
+    /// response text. Alias resolution is needed to handle LLM mistakes.
+    PromptBased,
+
+    /// Native Tool Use API (Anthropic `tool_use` / OpenAI `function_calling`).
+    ///
+    /// Tools are passed as structured JSON schemas via the API. The API
+    /// enforces valid tool names and parameter types. Tool calls arrive
+    /// as structured content blocks — no text parsing needed.
+    Native,
+}
+
+/// Result of a tool execution, sent back to the LLM in the Native Tool Use loop.
+///
+/// Used with [`LlmSession::send_tool_results()`] to continue the multi-turn
+/// tool use conversation.
+///
+/// # Example
+///
+/// ```ignore
+/// let result = ToolResultMessage {
+///     tool_use_id: "toolu_abc123".to_string(),
+///     tool_name: "read_file".to_string(),
+///     output: "fn main() { ... }".to_string(),
+///     is_error: false,
+/// };
+/// let next_response = session.send_tool_results(&[result]).await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct ToolResultMessage {
+    /// The `id` from the original `ContentBlock::ToolUse` (correlates request → result).
+    pub tool_use_id: String,
+    /// Canonical tool name (for logging/debugging).
+    pub tool_name: String,
+    /// Tool output or error message.
+    pub output: String,
+    /// Whether this result represents an error.
+    pub is_error: bool,
 }
 
 /// An active LLM session
@@ -110,4 +178,66 @@ pub trait LlmSession: Send + Sync {
         let _ = tx.send(StreamEvent::Completed(result)).await;
         Ok(StreamHandle::new(rx))
     }
+
+    // ==================== Native Tool Use API ====================
+
+    /// Returns the tool communication mode for this session.
+    ///
+    /// Default: `PromptBased` — existing implementations work without changes.
+    /// Sessions that support Native Tool Use API override to return `Native`.
+    fn tool_mode(&self) -> ToolMode {
+        ToolMode::PromptBased
+    }
+
+    /// Send a message with tool definitions, getting a structured response.
+    ///
+    /// # Native mode
+    /// The `tools` parameter is passed to the API as structured JSON schemas.
+    /// The API response contains `ContentBlock::ToolUse` blocks for tool calls.
+    ///
+    /// # Default (PromptBased fallback)
+    /// Ignores `tools` and delegates to `send()`, wrapping the result in
+    /// `LlmResponse::from_text()`. Tool calls must be extracted by parsing
+    /// the response text.
+    async fn send_with_tools(
+        &self,
+        content: &str,
+        _tools: &[serde_json::Value],
+    ) -> Result<LlmResponse, GatewayError> {
+        let text = self.send(content).await?;
+        Ok(LlmResponse::from_text(text))
+    }
+
+    /// Send tool execution results back to the LLM.
+    ///
+    /// Used in the multi-turn Native Tool Use loop:
+    /// ```text
+    /// send_with_tools() → ToolUse stop → execute tools → send_tool_results() → ...
+    /// ```
+    ///
+    /// # Default (PromptBased fallback)
+    /// Formats results as text and sends via `send()`.
+    async fn send_tool_results(
+        &self,
+        results: &[ToolResultMessage],
+    ) -> Result<LlmResponse, GatewayError> {
+        let text = format_tool_results_as_text(results);
+        let response = self.send(&text).await?;
+        Ok(LlmResponse::from_text(response))
+    }
+}
+
+/// Format tool results as plain text for the prompt-based fallback path.
+fn format_tool_results_as_text(results: &[ToolResultMessage]) -> String {
+    results
+        .iter()
+        .map(|r| {
+            let status = if r.is_error { "ERROR" } else { "OK" };
+            format!(
+                "## Tool Result: {} [{}]\n\n{}",
+                r.tool_name, status, r.output
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n")
 }

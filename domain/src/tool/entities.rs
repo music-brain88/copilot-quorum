@@ -120,6 +120,58 @@ impl ToolDefinition {
     pub fn is_high_risk(&self) -> bool {
         self.risk_level.requires_quorum()
     }
+
+    /// Convert this tool definition to a provider-neutral JSON Schema object.
+    ///
+    /// Returns a JSON object with `name`, `description`, and `input_schema` fields.
+    /// This is the intermediate format used by [`ToolSpec::to_api_tools()`] before
+    /// provider-specific wrapping (e.g., OpenAI's `{"type": "function", "function": {...}}`).
+    ///
+    /// # JSON Schema Type Mapping
+    ///
+    /// | `param_type` | JSON Schema `type` |
+    /// |-------------|-------------------|
+    /// | `"string"`, `"path"` | `"string"` |
+    /// | `"number"` | `"number"` |
+    /// | `"integer"` | `"integer"` |
+    /// | `"boolean"` | `"boolean"` |
+    /// | anything else | `"string"` |
+    pub fn to_json_schema(&self) -> serde_json::Value {
+        let mut properties = serde_json::Map::new();
+        let mut required = Vec::new();
+
+        for param in &self.parameters {
+            let schema_type = match param.param_type.as_str() {
+                "string" | "path" => "string",
+                "number" => "number",
+                "integer" => "integer",
+                "boolean" => "boolean",
+                _ => "string",
+            };
+
+            let mut prop = serde_json::Map::new();
+            prop.insert("type".to_string(), serde_json::json!(schema_type));
+            prop.insert(
+                "description".to_string(),
+                serde_json::json!(param.description),
+            );
+            properties.insert(param.name.clone(), serde_json::Value::Object(prop));
+
+            if param.required {
+                required.push(serde_json::json!(param.name));
+            }
+        }
+
+        serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "input_schema": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            }
+        })
+    }
 }
 
 impl ToolParameter {
@@ -327,22 +379,44 @@ impl ToolSpec {
     pub fn low_risk_tools(&self) -> impl Iterator<Item = &ToolDefinition> {
         self.tools.values().filter(|t| !t.is_high_risk())
     }
+
+    /// Convert all registered tools to a provider-neutral JSON Schema array.
+    ///
+    /// Each element has `{"name", "description", "input_schema"}` format.
+    /// Provider-specific wrapping (e.g., OpenAI's `{"type": "function", "function": {...}}`)
+    /// is done in the infrastructure layer.
+    ///
+    /// This is the bridge between `ToolSpec` and the Native Tool Use API:
+    /// ```text
+    /// ToolSpec → to_api_tools() → Vec<Value> → LlmSession::send_with_tools()
+    /// ```
+    pub fn to_api_tools(&self) -> Vec<serde_json::Value> {
+        self.tools.values().map(|t| t.to_json_schema()).collect()
+    }
+
+    /// Get the number of registered tools.
+    pub fn tool_count(&self) -> usize {
+        self.tools.len()
+    }
 }
 
 /// A request to invoke a tool, parsed from an LLM response.
 ///
-/// `ToolCall` is produced by the response parser (`parse_tool_calls()`) and flows
-/// through the tool execution pipeline:
+/// `ToolCall` is produced either by the response parser (`parse_tool_calls()`)
+/// in the prompt-based path, or extracted directly from [`LlmResponse::tool_calls()`]
+/// in the Native Tool Use path.
 ///
 /// ```text
-/// LLM response → parse_tool_calls() → resolve_tool_call() → ToolValidator → execute()
+/// PromptBased:    LLM response → parse_tool_calls() → resolve_tool_call() → execute()
+/// Native API:     LlmResponse → tool_calls() → execute()  (no parsing needed)
 /// ```
 ///
-/// The `tool_name` field may initially contain an aliased name (e.g. `"bash"`).
-/// The **Tool Name Alias System** in `resolve_tool_call()` rewrites it to the
-/// canonical name (e.g. `"run_command"`) before execution.
+/// The `tool_name` field may initially contain an aliased name (e.g. `"bash"`)
+/// in the prompt-based path. The **Tool Name Alias System** in `resolve_tool_call()`
+/// rewrites it to the canonical name (e.g. `"run_command"`) before execution.
+/// In the Native path, the API guarantees correct tool names.
 ///
-/// # Supported LLM Response Formats
+/// # Supported LLM Response Formats (Prompt-Based)
 ///
 /// Tool calls are extracted from LLM responses in these formats (highest priority first):
 /// 1. `` ```tool `` fenced blocks
@@ -355,6 +429,7 @@ pub struct ToolCall {
     ///
     /// May be an alias (e.g. `"bash"`) before resolution; will be rewritten
     /// to the canonical name (e.g. `"run_command"`) by the alias system.
+    /// In Native mode, the API guarantees this is a valid canonical name.
     pub tool_name: String,
     /// Arguments passed to the tool, validated against [`ToolDefinition::parameters`].
     pub arguments: HashMap<String, serde_json::Value>,
@@ -364,6 +439,15 @@ pub struct ToolCall {
     /// chose this tool, improving consensus quality.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// API-assigned tool use ID for Native Tool Use.
+    ///
+    /// Set when the tool call originates from a Native API response
+    /// (e.g. Anthropic `tool_use` content block). Used to correlate
+    /// tool results back to the original request via `send_tool_results()`.
+    ///
+    /// `None` for prompt-based tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_id: Option<String>,
 }
 
 impl ToolCall {
@@ -372,6 +456,24 @@ impl ToolCall {
             tool_name: tool_name.into(),
             arguments: HashMap::new(),
             reasoning: None,
+            native_id: None,
+        }
+    }
+
+    /// Create a tool call from a Native Tool Use API response.
+    ///
+    /// The `id` is the API-assigned identifier used to correlate tool results
+    /// back to this request. The `name` is guaranteed valid by the API.
+    pub fn from_native(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        input: HashMap<String, serde_json::Value>,
+    ) -> Self {
+        Self {
+            tool_name: name.into(),
+            arguments: input,
+            reasoning: None,
+            native_id: Some(id.into()),
         }
     }
 
@@ -546,5 +648,82 @@ mod tests {
         assert_eq!(call.get_string("path"), Some("/test/file.txt"));
         assert_eq!(call.require_string("path").unwrap(), "/test/file.txt");
         assert!(call.require_string("missing").is_err());
+        assert_eq!(call.native_id, None);
+    }
+
+    #[test]
+    fn test_tool_call_from_native() {
+        let input: HashMap<String, serde_json::Value> =
+            [("path".to_string(), serde_json::json!("/src/main.rs"))]
+                .into_iter()
+                .collect();
+
+        let call = ToolCall::from_native("toolu_abc123", "read_file", input);
+
+        assert_eq!(call.tool_name, "read_file");
+        assert_eq!(call.native_id, Some("toolu_abc123".to_string()));
+        assert_eq!(call.get_string("path"), Some("/src/main.rs"));
+        assert_eq!(call.reasoning, None);
+    }
+
+    #[test]
+    fn test_to_json_schema() {
+        let tool = ToolDefinition::new("read_file", "Read file contents", RiskLevel::Low)
+            .with_parameter(ToolParameter::new("path", "File path to read", true).with_type("path"))
+            .with_parameter(
+                ToolParameter::new("max_lines", "Max lines to read", false).with_type("integer"),
+            );
+
+        let schema = tool.to_json_schema();
+
+        assert_eq!(schema["name"], "read_file");
+        assert_eq!(schema["description"], "Read file contents");
+        assert_eq!(schema["input_schema"]["type"], "object");
+
+        // Check path parameter
+        let path_prop = &schema["input_schema"]["properties"]["path"];
+        assert_eq!(path_prop["type"], "string"); // "path" maps to "string"
+        assert_eq!(path_prop["description"], "File path to read");
+
+        // Check max_lines parameter
+        let lines_prop = &schema["input_schema"]["properties"]["max_lines"];
+        assert_eq!(lines_prop["type"], "integer");
+
+        // Check required
+        let required = schema["input_schema"]["required"].as_array().unwrap();
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0], "path");
+    }
+
+    #[test]
+    fn test_to_api_tools() {
+        let spec = ToolSpec::new()
+            .register(
+                ToolDefinition::new("read_file", "Read file", RiskLevel::Low)
+                    .with_parameter(ToolParameter::new("path", "File path", true)),
+            )
+            .register(ToolDefinition::new(
+                "write_file",
+                "Write file",
+                RiskLevel::High,
+            ));
+
+        let tools = spec.to_api_tools();
+        assert_eq!(tools.len(), 2);
+
+        // Check that all tools have the required fields
+        for tool in &tools {
+            assert!(tool["name"].is_string());
+            assert!(tool["description"].is_string());
+            assert!(tool["input_schema"]["type"].as_str() == Some("object"));
+        }
+    }
+
+    #[test]
+    fn test_tool_count() {
+        let spec = ToolSpec::new()
+            .register(ToolDefinition::new("a", "Tool A", RiskLevel::Low))
+            .register(ToolDefinition::new("b", "Tool B", RiskLevel::High));
+        assert_eq!(spec.tool_count(), 2);
     }
 }

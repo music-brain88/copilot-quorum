@@ -5,5 +5,5 @@
 pub mod agent;
 mod template;
 
-pub use agent::AgentPromptTemplate;
+pub use agent::{AgentPromptTemplate, PromptToolMode};
 pub use template::PromptTemplate;
