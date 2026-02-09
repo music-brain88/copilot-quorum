@@ -1,129 +1,58 @@
-//! TUI event system
+//! TUI event types
 //!
-//! Handles all events that can occur in the TUI:
-//! - Terminal events (key presses, resize)
-//! - Application events (from AgentController via UiEvent)
-//! - Internal TUI events (for state updates)
+//! Defines the commands sent TO the controller task and the events
+//! coming FROM it (via UiEvent channel and progress bridge).
 
-use crossterm::event::{KeyEvent, MouseEvent};
-use quorum_application::{ConfigSnapshot, UiEvent as AppUiEvent};
-use quorum_domain::{AgentPhase, ConsensusLevel, PhaseScope};
+use quorum_domain::{AgentPhase, ConsensusLevel, HumanDecision, Plan, ReviewRound};
+use tokio::sync::oneshot;
 
-/// Events that can occur in the TUI
-#[derive(Debug, Clone)]
-pub enum Event {
-    /// Terminal key event
-    Key(KeyEvent),
-    /// Terminal mouse event
-    Mouse(MouseEvent),
-    /// Terminal resize event
-    Resize(u16, u16),
-    /// Application UI event (from AgentController)
-    UiEvent(AppUiEvent),
-    /// Tick event for periodic updates
-    Tick,
-    /// Error occurred
-    Error(String),
+/// Commands sent from the TUI event loop to the controller task (Actor inbox)
+pub enum TuiCommand {
+    /// User submitted text from Insert mode
+    ProcessRequest(String),
+    /// User issued a slash-command from Command mode (e.g. "q", "help", "solo")
+    HandleCommand(String),
+    /// Graceful shutdown
+    #[allow(dead_code)]
+    Quit,
 }
 
-impl From<crossterm::event::Event> for Event {
-    fn from(event: crossterm::event::Event) -> Self {
-        match event {
-            crossterm::event::Event::Key(key) => Event::Key(key),
-            crossterm::event::Event::Mouse(mouse) => Event::Mouse(mouse),
-            crossterm::event::Event::Resize(width, height) => Event::Resize(width, height),
-            _ => Event::Tick,
-        }
-    }
-}
-
-impl From<AppUiEvent> for Event {
-    fn from(event: AppUiEvent) -> Self {
-        Event::UiEvent(event)
-    }
-}
-
-/// Internal TUI events for state updates
-///
-/// These events are emitted by TUI adapters (presenter, progress, HIL)
-/// to update the TUI state in response to application events.
+/// Events emitted by TuiPresenter / TuiProgressBridge for rendering
 #[derive(Debug, Clone)]
 pub enum TuiEvent {
-    // ==================== Welcome/Config ====================
+    // -- Welcome / Config --
     Welcome {
         decision_model: String,
-        review_models: Vec<String>,
-        moderator: Option<String>,
-        working_dir: Option<String>,
         consensus_level: ConsensusLevel,
     },
-    HelpRequested,
-    ConfigDisplay {
-        snapshot: ConfigSnapshot,
-    },
-    
-    // ==================== Mode Changes ====================
+    ConfigDisplay(String),
+
+    // -- Mode / Scope changes --
     ModeChanged {
         level: ConsensusLevel,
         description: String,
     },
-    ScopeChanged {
-        scope: PhaseScope,
-        description: String,
-    },
-    StrategyChanged {
-        strategy: String,
-        description: String,
-    },
-    
-    // ==================== Agent Events ====================
-    AgentStarting {
-        mode: ConsensusLevel,
-    },
+    ScopeChanged(String),
+    StrategyChanged(String),
+
+    // -- Agent lifecycle --
+    AgentStarting,
     AgentResult {
         success: bool,
         summary: String,
-        verbose: bool,
     },
-    AgentError {
-        cancelled: bool,
-        error: String,
-    },
-    
-    // ==================== Quorum Events ====================
-    QuorumStarting,
-    QuorumResult {
-        output: String,
-    },
-    QuorumError {
-        error: String,
-    },
-    
-    // ==================== Context Init ====================
-    ContextInitStarting {
-        model_count: usize,
-    },
-    ContextInitResult {
-        path: String,
-        contributing_models: Vec<String>,
-    },
-    ContextInitError {
-        error: String,
-    },
-    ContextAlreadyExists,
-    
-    // ==================== Progress Events ====================
+    AgentError(String),
+
+    // -- Streaming text --
+    StreamChunk(String),
+    StreamEnd,
+
+    // -- Progress --
     PhaseChange {
         phase: AgentPhase,
         name: String,
     },
-    Thought {
-        thought_type: String,
-        content: String,
-    },
-    TaskStart {
-        description: String,
-    },
+    TaskStart(String),
     TaskComplete {
         description: String,
         success: bool,
@@ -138,18 +67,17 @@ pub enum TuiEvent {
     },
     ToolError {
         tool_name: String,
-        category: String,
         message: String,
     },
-    ToolRetry {
-        tool_name: String,
-        attempt: usize,
-        max_retries: usize,
-        error: String,
-    },
+
+    // -- Quorum --
     QuorumStart {
         phase: String,
         model_count: usize,
+    },
+    QuorumModelVote {
+        model: String,
+        approved: bool,
     },
     QuorumComplete {
         phase: String,
@@ -160,31 +88,36 @@ pub enum TuiEvent {
         revision: usize,
         feedback: String,
     },
-    
-    // ==================== Human Intervention ====================
-    HumanInterventionRequired {
-        max_revisions: usize,
+
+    // -- Ensemble --
+    EnsembleStart(usize),
+    EnsemblePlanGenerated(String),
+    EnsembleComplete {
+        selected_model: String,
+        score: f64,
     },
-    HumanInterventionPrompt {
-        request: String,
-        objective: String,
-        tasks: Vec<String>,
-        review_count: usize,
-    },
-    HumanDecision {
-        decision: String,
-    },
-    
-    // ==================== Other ====================
+
+    // -- Other --
     HistoryCleared,
-    VerboseStatus {
-        enabled: bool,
-    },
-    CommandError {
-        message: String,
-    },
-    UnknownCommand {
-        command: String,
-    },
+    CommandError(String),
+    Flash(String),
     Exit,
+}
+
+/// Request for human intervention, sent from HumanIntervention port to TUI
+pub struct HilRequest {
+    pub kind: HilKind,
+    pub response_tx: oneshot::Sender<HumanDecision>,
+}
+
+pub enum HilKind {
+    PlanIntervention {
+        request: String,
+        plan: Plan,
+        review_history: Vec<ReviewRound>,
+    },
+    ExecutionConfirmation {
+        request: String,
+        plan: Plan,
+    },
 }

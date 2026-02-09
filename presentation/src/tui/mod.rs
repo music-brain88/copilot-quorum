@@ -1,8 +1,8 @@
 //! TUI (Text User Interface) module for copilot-quorum
 //!
-//! This module provides a terminal-based interactive UI using ratatui.
-//! It integrates agent REPL, progress reporting, and human intervention
-//! into a unified multi-pane interface.
+//! Replaces the rustyline-based REPL with a full ratatui TUI.
+//! Architecture: Actor pattern separates the AgentController into a background task,
+//! with channels for communication between the TUI event loop and the controller.
 
 mod app;
 mod event;
@@ -14,14 +14,9 @@ mod state;
 mod widgets;
 
 pub use app::TuiApp;
-pub use event::{Event, TuiEvent};
+pub use event::TuiEvent;
 pub use human_intervention::TuiHumanIntervention;
-pub use mode::{Action, KeyHandler, Mode, ReplMode};
+pub use mode::{InputMode, KeyAction};
 pub use presenter::TuiPresenter;
-pub use progress::TuiProgressReporter;
-pub use state::{
-    AgentStatus, AppState, Message, MessageEntry, MessageRole, ProgressState, TuiMode, TuiState,
-};
-pub use widgets::{
-    ConversationWidget, HelpWidget, InputWidget, ProgressWidget, StatusWidget, TuiLayout,
-};
+pub use progress::TuiProgressBridge;
+pub use state::{DisplayMessage, MessageRole, ProgressState, TuiState};

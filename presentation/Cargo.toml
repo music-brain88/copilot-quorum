@@ -21,7 +21,6 @@ indicatif = { workspace = true }
 colored = { workspace = true }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
-rustyline = "14.0"
 
 # CLI
 clap = { workspace = true }

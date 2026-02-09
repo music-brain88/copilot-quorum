@@ -1,400 +1,690 @@
-//! TUI application entry point
+//! TUI application — main loop with Actor pattern
 //!
-//! Implements the main TUI loop with Actor pattern for state management:
-//! - TuiApp: Main loop (terminal rendering, event handling)
-//! - controller_task: Background task to update AppState
+//! Architecture:
+//! ```text
+//! TuiApp (select! loop)                 controller_task (tokio::spawn)
+//!   ├─ crossterm EventStream              ├─ cmd_rx.recv()
+//!   ├─ ui_rx (UiEvent from controller)    ├─ controller.handle_command()
+//!   ├─ tui_rx (TuiEvent from progress)    └─ controller.process_request()
+//!   ├─ hil_rx (HilRequest)
+//!   └─ tick_interval
+//!        └── cmd_tx ──────────────────>──┘
+//! ```
 
-use super::event::Event;
-use super::mode::Mode;
-use super::state::AppState;
+use super::event::{HilKind, HilRequest, TuiCommand, TuiEvent};
+use super::mode::{self, InputMode, KeyAction};
+use super::presenter::TuiPresenter;
+use super::progress::TuiProgressBridge;
+use super::state::{
+    DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiState,
+};
+use super::widgets::{
+    conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
+    progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget, MainLayout,
+};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture, EventStream},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::stream::StreamExt;
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
+use quorum_application::{
+    AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort, UiEvent,
 };
+use quorum_domain::{AgentConfig, ConsensusLevel, HumanDecision, Model};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use tokio::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+
+use super::human_intervention::TuiHumanIntervention;
 
 /// Main TUI application
-pub struct TuiApp {
-    /// Terminal backend
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
-    /// Event receiver from controller
-    event_rx: mpsc::UnboundedReceiver<Event>,
-    /// Command sender to controller
-    cmd_tx: mpsc::UnboundedSender<Command>,
+pub struct TuiApp<
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+> {
+    // -- Actor channels --
+    cmd_tx: mpsc::UnboundedSender<TuiCommand>,
+    ui_rx: mpsc::UnboundedReceiver<UiEvent>,
+    tui_event_rx: mpsc::UnboundedReceiver<TuiEvent>,
+    hil_rx: mpsc::UnboundedReceiver<HilRequest>,
+
+    // -- Presenter (applies UiEvents to state) --
+    presenter: TuiPresenter,
+
+    // -- Pending HiL response sender --
+    pending_hil_tx: Arc<Mutex<Option<oneshot::Sender<HumanDecision>>>>,
+
+    // -- Controller task handle --
+    _controller_handle: tokio::task::JoinHandle<()>,
+
+    // -- Type witness for generics --
+    _phantom: std::marker::PhantomData<(G, T, C)>,
 }
 
-/// Commands sent from UI to controller
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum Command {
-    /// Submit user input
-    Submit(String),
-    /// Execute command
-    ExecuteCommand(String),
-    /// Change mode
-    SetMode(Mode),
-    /// Toggle consensus level
-    ToggleConsensus,
-    /// Show help
-    ShowHelp,
-    /// Hide help
-    HideHelp,
-    /// Confirm action
-    Confirm,
-    /// Cancel action
-    Cancel,
-    /// Quit application
-    Quit,
-}
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
+    TuiApp<G, T, C>
+{
+    /// Create a new TUI application wired to the controller
+    pub fn new(
+        gateway: Arc<G>,
+        tool_executor: Arc<T>,
+        context_loader: Arc<C>,
+        config: AgentConfig,
+    ) -> Self {
+        // Channels
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();
+        let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiEvent>();
+        let (tui_event_tx, tui_event_rx) = mpsc::unbounded_channel::<TuiEvent>();
+        let (hil_tx, hil_rx) = mpsc::unbounded_channel::<HilRequest>();
 
-impl TuiApp {
-    /// Create a new TUI application
-    pub fn new() -> io::Result<Self> {
+        // Human intervention port (sends to hil_rx)
+        let human_intervention = Arc::new(TuiHumanIntervention::new(hil_tx));
+
+        // Progress bridge (sends TuiEvents to tui_event_rx)
+        let progress_tx = tui_event_tx.clone();
+
+        // Presenter (applies UiEvents and emits TuiEvents)
+        let presenter = TuiPresenter::new(tui_event_tx);
+
+        // Controller (runs in background task)
+        let controller = AgentController::new(
+            gateway,
+            tool_executor,
+            context_loader,
+            config,
+            human_intervention,
+            ui_tx,
+        );
+
+        let controller_handle =
+            tokio::spawn(controller_task(controller, cmd_rx, progress_tx));
+
+        Self {
+            cmd_tx,
+            ui_rx,
+            tui_event_rx,
+            hil_rx,
+            presenter,
+            pending_hil_tx: Arc::new(Mutex::new(None)),
+            _controller_handle: controller_handle,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    // -- Builder methods (delegate to controller via commands) --
+
+    pub fn with_verbose(self, _verbose: bool) -> Self {
+        // TODO: send SetVerbose command to controller
+        self
+    }
+
+    pub fn with_cancellation(self, _token: CancellationToken) -> Self {
+        // TODO: send cancellation to controller
+        self
+    }
+
+    pub fn with_consensus_level(self, _level: ConsensusLevel) -> Self {
+        self
+    }
+
+    pub fn with_moderator(self, _model: Model) -> Self {
+        self
+    }
+
+    pub fn with_working_dir(self, _dir: impl Into<String>) -> Self {
+        self
+    }
+
+    pub fn with_final_review(self, _enable: bool) -> Self {
+        self
+    }
+
+    /// Run the TUI main loop
+    pub async fn run(&mut self) -> io::Result<()> {
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend)?;
+        let mut terminal = Terminal::new(backend)?;
 
-        // Create channels
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        // Install panic hook to restore terminal
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            original_hook(info);
+        }));
 
-        // Spawn controller task
-        let _controller_handle = tokio::spawn(controller_task(cmd_rx, event_tx.clone()));
+        let mut state = TuiState::new();
+        let mut event_stream = EventStream::new();
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
 
-        // Spawn terminal event reader
-        tokio::spawn(terminal_event_task(event_tx.clone()));
-
-        Ok(Self {
-            terminal,
-            event_rx,
-            cmd_tx,
-        })
-    }
-
-    /// Run the TUI application
-    pub async fn run(&mut self) -> io::Result<()> {
-        let mut state = AppState::new();
+        // Send welcome
+        let _ = self.cmd_tx.send(TuiCommand::HandleCommand("__welcome".into()));
 
         loop {
             // Render
-            self.terminal.draw(|frame| {
-                // TODO: Implement proper rendering with widgets
-                // For now, just render placeholder
-                use ratatui::widgets::{Block, Borders, Paragraph};
-                let block = Block::default()
-                    .title("Copilot Quorum TUI")
-                    .borders(Borders::ALL);
-                let text = format!(
-                    "Mode: {:?}\nInput: {}\nConsensus: {:?}",
-                    state.mode, state.input, state.consensus_level
-                );
-                let paragraph = Paragraph::new(text).block(block);
-                frame.render_widget(paragraph, frame.area());
+            terminal.draw(|frame| {
+                self.render(frame, &state);
             })?;
 
-            // Handle events
-            if let Some(event) = self.event_rx.recv().await {
-                match event {
-                    Event::Key(key) => {
-                        if !self.handle_key_event(&mut state, key) {
-                            break; // Quit requested
-                        }
-                    }
-                    Event::Resize(_, _) => {
-                        // Terminal will auto-resize on next draw
-                    }
-                    Event::UiEvent(ui_event) => {
-                        // Handle application UI event
-                        self.handle_ui_event(&mut state, ui_event);
-                    }
-                    Event::Error(err) => {
-                        state.set_error(err);
-                    }
-                    Event::Tick => {
-                        // Periodic update (no-op for now)
-                    }
-                    Event::Mouse(_) => {
-                        // Ignore mouse events for now
-                    }
+            if state.should_quit {
+                break;
+            }
+
+            // select! on all event sources
+            tokio::select! {
+                // Terminal events (keyboard, mouse, resize)
+                Some(Ok(term_event)) = event_stream.next() => {
+                    self.handle_terminal_event(&mut state, term_event);
+                }
+
+                // UiEvents from controller (via AgentController → ui_tx)
+                Some(ui_event) = self.ui_rx.recv() => {
+                    self.presenter.apply(&mut state, &ui_event);
+                }
+
+                // TuiEvents from progress bridge / presenter
+                Some(tui_event) = self.tui_event_rx.recv() => {
+                    self.apply_tui_event(&mut state, tui_event);
+                }
+
+                // HiL requests
+                Some(hil_request) = self.hil_rx.recv() => {
+                    self.handle_hil_request(&mut state, hil_request);
+                }
+
+                // Tick for flash expiry, spinner animation, etc.
+                _ = tick.tick() => {
+                    state.expire_flash(Duration::from_secs(5));
                 }
             }
         }
+
+        // Restore terminal
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
 
         Ok(())
     }
 
-    /// Handle key event
-    fn handle_key_event(&mut self, state: &mut AppState, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::{KeyCode, KeyModifiers};
+    /// Render all widgets
+    fn render(&self, frame: &mut ratatui::Frame, state: &TuiState) {
+        let layout = MainLayout::compute(frame.area());
 
-        // Check for quit shortcuts
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return false; // Quit
+        frame.render_widget(HeaderWidget::new(state), layout.header);
+        frame.render_widget(ConversationWidget::new(state), layout.conversation);
+        frame.render_widget(ProgressPanelWidget::new(state), layout.progress);
+        frame.render_widget(InputWidget::new(state), layout.input);
+        frame.render_widget(StatusBarWidget::new(state), layout.status_bar);
+
+        // Help overlay
+        if state.show_help {
+            let help_area = MainLayout::centered_overlay(70, 70, frame.area());
+            frame.render_widget(ratatui::widgets::Clear, help_area);
+            self.render_help(frame, help_area);
         }
 
-        match state.mode {
-            Mode::Normal => self.handle_normal_mode(state, key),
-            Mode::Insert => self.handle_insert_mode(state, key),
-            Mode::Command => self.handle_command_mode(state, key),
-            Mode::Confirm => self.handle_confirm_mode(state, key),
+        // HiL modal
+        if state.hil_prompt.is_some() {
+            let modal_area = MainLayout::centered_overlay(60, 50, frame.area());
+            frame.render_widget(ratatui::widgets::Clear, modal_area);
+            self.render_hil_modal(frame, modal_area, state);
         }
     }
 
-    /// Handle Normal mode keys
-    fn handle_normal_mode(&mut self, state: &mut AppState, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+    fn render_help(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-        match key.code {
-            KeyCode::Char('i') => {
-                state.set_mode(Mode::Insert);
-            }
-            KeyCode::Char(':') => {
-                state.set_mode(Mode::Command);
-            }
-            KeyCode::Char('?') => {
-                state.show_help();
-            }
-            KeyCode::Char('q') => {
-                return false; // Quit
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                state.scroll_up();
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                state.scroll_down();
-            }
-            KeyCode::Char('e') => {
-                // Toggle ensemble mode
-                state.toggle_consensus();
-                let _ = self.cmd_tx.send(Command::ToggleConsensus);
-            }
-            _ => {}
-        }
+        let lines = vec![
+            Line::from(Span::styled(
+                "Keyboard Shortcuts",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Normal Mode:"),
+            Line::from("  i/a    Enter Insert mode"),
+            Line::from("  :      Enter Command mode"),
+            Line::from("  j/k    Scroll down/up"),
+            Line::from("  g/G    Scroll to top/bottom"),
+            Line::from("  ?      Toggle this help"),
+            Line::from("  Ctrl+C Quit"),
+            Line::from(""),
+            Line::from("Insert Mode:"),
+            Line::from("  Enter  Send message"),
+            Line::from("  Esc    Return to Normal"),
+            Line::from(""),
+            Line::from("Commands (:command):"),
+            Line::from("  :q     Quit"),
+            Line::from("  :help  Show help"),
+            Line::from("  :solo  Switch to Solo mode"),
+            Line::from("  :ens   Switch to Ensemble mode"),
+            Line::from("  :fast  Toggle fast mode"),
+            Line::from("  :config Show configuration"),
+            Line::from("  :clear Clear history"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press ? or Esc to close",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
 
-        true
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Help ")
+            .style(Style::default().fg(Color::Cyan));
+
+        frame.render_widget(
+            Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+            area,
+        );
     }
 
-    /// Handle Insert mode keys
-    fn handle_insert_mode(&mut self, state: &mut AppState, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+    fn render_hil_modal(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        state: &TuiState,
+    ) {
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-        match key.code {
-            KeyCode::Esc => {
-                state.set_mode(Mode::Normal);
-            }
-            KeyCode::Enter => {
-                let input = state.get_input().to_string();
-                if !input.is_empty() {
-                    let _ = self.cmd_tx.send(Command::Submit(input));
-                    state.clear_input();
+        let hil = state.hil_prompt.as_ref().unwrap();
+        let mut lines = vec![
+            Line::from(Span::styled(
+                &hil.title,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(format!("Objective: {}", hil.objective)),
+            Line::from(""),
+        ];
+
+        for (i, task) in hil.tasks.iter().enumerate() {
+            lines.push(Line::from(format!("  {}. {}", i + 1, task)));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(&*hil.message));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "y: approve  n: reject  Esc: reject",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Human Intervention ")
+            .style(Style::default().fg(Color::Yellow));
+
+        frame.render_widget(
+            Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+            area,
+        );
+    }
+
+    /// Handle a terminal (crossterm) event
+    fn handle_terminal_event(
+        &self,
+        state: &mut TuiState,
+        event: crossterm::event::Event,
+    ) {
+        match event {
+            crossterm::event::Event::Key(key) => {
+                // If HiL modal is showing, handle y/n/Esc
+                if state.hil_prompt.is_some() {
+                    self.handle_hil_key(state, key);
+                    return;
                 }
-                state.set_mode(Mode::Normal);
-            }
-            KeyCode::Backspace => {
-                state.delete_char();
-            }
-            KeyCode::Left => {
-                state.cursor_left();
-            }
-            KeyCode::Right => {
-                state.cursor_right();
-            }
-            KeyCode::Home => {
-                state.cursor_start();
-            }
-            KeyCode::End => {
-                state.cursor_end();
-            }
-            KeyCode::Char(c) => {
-                state.insert_char(c);
-            }
-            _ => {}
-        }
 
-        true
-    }
-
-    /// Handle Command mode keys
-    fn handle_command_mode(&mut self, state: &mut AppState, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
-
-        match key.code {
-            KeyCode::Esc => {
-                state.set_mode(Mode::Normal);
-            }
-            KeyCode::Enter => {
-                let command = state.get_input().to_string();
-                if !command.is_empty() {
-                    // Special handling for quit commands
-                    if command == "q" || command == "quit" {
-                        return false;
+                // If help is showing, Esc or ? closes it
+                if state.show_help {
+                    match key.code {
+                        crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('?') => {
+                            state.show_help = false;
+                            return;
+                        }
+                        _ => {}
                     }
-                    let _ = self.cmd_tx.send(Command::ExecuteCommand(command));
-                    state.clear_input();
                 }
-                state.set_mode(Mode::Normal);
+
+                let action = mode::handle_key_event(state.mode, key);
+                self.handle_action(state, action);
             }
-            KeyCode::Backspace => {
-                state.delete_char();
-            }
-            KeyCode::Left => {
-                state.cursor_left();
-            }
-            KeyCode::Right => {
-                state.cursor_right();
-            }
-            KeyCode::Home => {
-                state.cursor_start();
-            }
-            KeyCode::End => {
-                state.cursor_end();
-            }
-            KeyCode::Char(c) => {
-                state.insert_char(c);
+            crossterm::event::Event::Resize(_, _) => {
+                // Terminal auto-resizes on next draw
             }
             _ => {}
         }
-
-        true
     }
 
-    /// Handle Confirm mode keys
-    fn handle_confirm_mode(&mut self, state: &mut AppState, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+    /// Handle a semantic key action
+    fn handle_action(&self, state: &mut TuiState, action: KeyAction) {
+        match action {
+            KeyAction::None => {}
 
+            // Mode transitions
+            KeyAction::EnterInsert => state.mode = InputMode::Insert,
+            KeyAction::EnterCommand => {
+                state.mode = InputMode::Command;
+                state.command_input.clear();
+                state.command_cursor = 0;
+            }
+            KeyAction::ExitToNormal => state.mode = InputMode::Normal,
+
+            // Text editing
+            KeyAction::InsertChar(c) => state.insert_char(c),
+            KeyAction::DeleteChar => state.delete_char(),
+            KeyAction::CursorLeft => state.cursor_left(),
+            KeyAction::CursorRight => state.cursor_right(),
+            KeyAction::CursorHome => state.cursor_home(),
+            KeyAction::CursorEnd => state.cursor_end(),
+
+            // Submit
+            KeyAction::SubmitInput => {
+                let input = state.take_input();
+                if !input.is_empty() {
+                    state.push_message(DisplayMessage::user(&input));
+                    let _ = self.cmd_tx.send(TuiCommand::ProcessRequest(input));
+                }
+            }
+            KeyAction::SubmitCommand => {
+                let cmd = state.take_command();
+                state.mode = InputMode::Normal;
+                if !cmd.is_empty() {
+                    if cmd == "q" || cmd == "quit" || cmd == "exit" {
+                        state.should_quit = true;
+                    } else {
+                        let _ = self.cmd_tx.send(TuiCommand::HandleCommand(cmd));
+                    }
+                }
+            }
+
+            // Scrolling
+            KeyAction::ScrollUp => state.scroll_up(),
+            KeyAction::ScrollDown => state.scroll_down(),
+            KeyAction::ScrollToTop => state.scroll_to_top(),
+            KeyAction::ScrollToBottom => state.scroll_to_bottom(),
+
+            // Application
+            KeyAction::Quit => state.should_quit = true,
+            KeyAction::ShowHelp => state.show_help = !state.show_help,
+            KeyAction::ToggleConsensus => {
+                // Handled by command
+                let _ = self
+                    .cmd_tx
+                    .send(TuiCommand::HandleCommand("toggle_consensus".into()));
+            }
+        }
+    }
+
+    /// Apply a TuiEvent (from progress bridge or presenter) to state
+    fn apply_tui_event(&self, state: &mut TuiState, event: TuiEvent) {
+        match event {
+            TuiEvent::StreamChunk(chunk) => {
+                state.streaming_text.push_str(&chunk);
+                if state.auto_scroll {
+                    state.scroll_to_bottom();
+                }
+            }
+            TuiEvent::StreamEnd => {
+                state.finalize_stream();
+            }
+            TuiEvent::PhaseChange { phase, name } => {
+                state.progress.current_phase = Some(phase);
+                state.progress.phase_name = name;
+                state.progress.current_tool = None;
+            }
+            TuiEvent::TaskStart(desc) => {
+                state.set_flash(format!("Task: {}", desc));
+            }
+            TuiEvent::TaskComplete { description, success } => {
+                let status = if success { "✓" } else { "✗" };
+                state.set_flash(format!("{} {}", status, description));
+            }
+            TuiEvent::ToolCall { tool_name, args: _ } => {
+                state.progress.current_tool = Some(tool_name.clone());
+                state.progress.tool_log.push(ToolLogEntry {
+                    tool_name,
+                    success: None,
+                });
+            }
+            TuiEvent::ToolResult { tool_name, success } => {
+                state.progress.current_tool = None;
+                // Update the last matching tool log entry
+                if let Some(entry) = state
+                    .progress
+                    .tool_log
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.tool_name == tool_name && e.success.is_none())
+                {
+                    entry.success = Some(success);
+                }
+            }
+            TuiEvent::ToolError { tool_name, message } => {
+                state.progress.current_tool = None;
+                if let Some(entry) = state
+                    .progress
+                    .tool_log
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.tool_name == tool_name && e.success.is_none())
+                {
+                    entry.success = Some(false);
+                }
+                state.set_flash(format!("Tool error: {} - {}", tool_name, message));
+            }
+            TuiEvent::QuorumStart { phase, model_count } => {
+                state.progress.quorum_status = Some(QuorumStatus {
+                    phase,
+                    total: model_count,
+                    completed: 0,
+                    approved: 0,
+                });
+            }
+            TuiEvent::QuorumModelVote { model: _, approved } => {
+                if let Some(ref mut qs) = state.progress.quorum_status {
+                    qs.completed += 1;
+                    if approved {
+                        qs.approved += 1;
+                    }
+                }
+            }
+            TuiEvent::QuorumComplete {
+                phase,
+                approved,
+                feedback: _,
+            } => {
+                let status = if approved { "APPROVED" } else { "REJECTED" };
+                state.set_flash(format!("{}: {}", phase, status));
+                state.progress.quorum_status = None;
+            }
+            TuiEvent::PlanRevision { revision, feedback } => {
+                state
+                    .messages
+                    .push(DisplayMessage::system(format!(
+                        "Plan revision #{}: {}",
+                        revision, feedback
+                    )));
+            }
+            TuiEvent::EnsembleStart(count) => {
+                state.set_flash(format!("Ensemble: {} models planning...", count));
+            }
+            TuiEvent::EnsemblePlanGenerated(model) => {
+                state.set_flash(format!("Plan generated: {}", model));
+            }
+            TuiEvent::EnsembleComplete {
+                selected_model,
+                score,
+            } => {
+                state.set_flash(format!(
+                    "Selected: {} (score: {:.1})",
+                    selected_model, score
+                ));
+            }
+            TuiEvent::AgentStarting => {
+                state.progress.is_running = true;
+                state.progress.tool_log.clear();
+                state.progress.quorum_status = None;
+            }
+            TuiEvent::AgentResult { success, summary: _ } => {
+                state.progress.is_running = false;
+                state.progress.current_phase = None;
+                state.progress.current_tool = None;
+                if success {
+                    state.set_flash("Agent completed successfully");
+                } else {
+                    state.set_flash("Agent completed with issues");
+                }
+            }
+            TuiEvent::AgentError(msg) => {
+                state.progress.is_running = false;
+                state.set_flash(msg);
+            }
+            TuiEvent::Flash(msg) => {
+                state.set_flash(msg);
+            }
+            TuiEvent::HistoryCleared => {
+                // Already handled by presenter
+            }
+            TuiEvent::Exit => {
+                state.should_quit = true;
+            }
+            // Config/mode events handled by presenter already
+            TuiEvent::Welcome { .. }
+            | TuiEvent::ConfigDisplay(_)
+            | TuiEvent::ModeChanged { .. }
+            | TuiEvent::ScopeChanged(_)
+            | TuiEvent::StrategyChanged(_)
+            | TuiEvent::CommandError(_) => {}
+        }
+    }
+
+    /// Handle HiL request — show modal, store response channel
+    fn handle_hil_request(&self, state: &mut TuiState, request: HilRequest) {
+        let (title, objective, tasks, message) = match &request.kind {
+            HilKind::PlanIntervention {
+                request: _req,
+                plan,
+                review_history,
+            } => {
+                let rev_count = review_history.iter().filter(|r| !r.approved).count();
+                (
+                    "Plan Requires Human Intervention".to_string(),
+                    plan.objective.clone(),
+                    plan.tasks.iter().map(|t| t.description.clone()).collect(),
+                    format!(
+                        "Revision limit ({}) exceeded. Approve or reject?",
+                        rev_count
+                    ),
+                )
+            }
+            HilKind::ExecutionConfirmation { request: _, plan } => (
+                "Ready to Execute Plan".to_string(),
+                plan.objective.clone(),
+                plan.tasks.iter().map(|t| t.description.clone()).collect(),
+                "Approve execution?".to_string(),
+            ),
+        };
+
+        state.hil_prompt = Some(HilPrompt {
+            title,
+            objective,
+            tasks,
+            message,
+        });
+
+        // Store the response sender — will be consumed when user presses y/n
+        *self.pending_hil_tx.lock().unwrap() = Some(request.response_tx);
+    }
+
+    /// Handle key press while HiL modal is shown
+    fn handle_hil_key(&self, state: &mut TuiState, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                let _ = self.cmd_tx.send(Command::Confirm);
-                state.clear_confirm_prompt();
-                state.set_mode(Mode::Normal);
+                state.hil_prompt = None;
+                state.set_flash("Plan approved");
+                self.send_hil_response(HumanDecision::Approve);
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                let _ = self.cmd_tx.send(Command::Cancel);
-                state.clear_confirm_prompt();
-                state.set_mode(Mode::Normal);
+                state.hil_prompt = None;
+                state.set_flash("Plan rejected");
+                self.send_hil_response(HumanDecision::Reject);
             }
             _ => {}
         }
-
-        true
     }
 
-    /// Handle application UI event
-    fn handle_ui_event(
-        &mut self,
-        _state: &mut AppState,
-        _ui_event: quorum_application::UiEvent,
-    ) {
-        // Convert UiEvent to TuiEvent and update state
-        // This is handled by TuiPresenter/TuiProgressReporter in the background
-        // Here we just acknowledge that events can flow through
+    /// Send the stored HiL response (consumes the oneshot sender)
+    fn send_hil_response(&self, decision: HumanDecision) {
+        if let Some(tx) = self.pending_hil_tx.lock().unwrap().take() {
+            let _ = tx.send(decision);
+        }
     }
 }
 
-impl Drop for TuiApp {
-    fn drop(&mut self) {
-        // Restore terminal
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
-        let _ = self.terminal.show_cursor();
-    }
-}
-
-impl Default for TuiApp {
-    fn default() -> Self {
-        Self::new().expect("Failed to initialize TUI")
-    }
-}
-
-/// Controller task (Actor pattern)
+/// Background controller task (Actor)
 ///
-/// Runs in background to:
-/// 1. Receive commands from UI
-/// 2. Update application state
-/// 3. Send events back to UI
-async fn controller_task(
-    mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-    event_tx: mpsc::UnboundedSender<Event>,
+/// Owns the AgentController and processes commands from the TUI event loop.
+async fn controller_task<
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+>(
+    mut controller: AgentController<G, T, C>,
+    mut cmd_rx: mpsc::UnboundedReceiver<TuiCommand>,
+    progress_tx: mpsc::UnboundedSender<TuiEvent>,
 ) {
+    // Send welcome on startup
+    controller.send_welcome();
+
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
-            Command::Submit(input) => {
-                // Handle user input submission
-                // TODO: Integrate with RunQuorumUseCase / RunAgentUseCase
-                // For now, just echo back as event
-                let _ = event_tx.send(Event::Error(format!("Submitted: {}", input)));
+            TuiCommand::ProcessRequest(request) => {
+                let progress = TuiProgressBridge::new(progress_tx.clone());
+                controller.process_request(&request, &progress).await;
             }
-            Command::ExecuteCommand(_command) => {
-                // Handle command execution
-                // TODO: Parse and execute command (e.g., /solo, /ens, /help)
+            TuiCommand::HandleCommand(command) => {
+                if command == "__welcome" {
+                    // Already sent welcome above, skip
+                    continue;
+                }
+                if command.starts_with("__") {
+                    // Internal commands, skip
+                    continue;
+                }
+                // Prefix with / for the controller's command parser
+                let cmd_str = format!("/{}", command);
+                match controller.handle_command(&cmd_str).await {
+                    CommandAction::Exit => {
+                        break;
+                    }
+                    CommandAction::Continue => {}
+                }
             }
-            Command::SetMode(_mode) => {
-                // Mode changes are handled directly in UI
-            }
-            Command::ToggleConsensus => {
-                // TODO: Toggle consensus level and notify
-            }
-            Command::ShowHelp => {
-                // TODO: Show help
-            }
-            Command::HideHelp => {
-                // TODO: Hide help
-            }
-            Command::Confirm => {
-                // TODO: Handle confirmation
-            }
-            Command::Cancel => {
-                // TODO: Handle cancellation
-            }
-            Command::Quit => {
+            TuiCommand::Quit => {
                 break;
             }
         }
-    }
-}
-
-/// Terminal event reader task
-///
-/// Reads terminal events (key, mouse, resize) and forwards to main loop
-async fn terminal_event_task(event_tx: mpsc::UnboundedSender<Event>) {
-    let mut reader = EventStream::new();
-
-    while let Some(Ok(terminal_event)) = reader.next().await {
-        let event: Event = terminal_event.into();
-        if event_tx.send(event).is_err() {
-            break;
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_command_clone() {
-        let cmd = Command::Submit("test".to_string());
-        let _cloned = cmd.clone();
-    }
-
-    #[test]
-    fn test_command_debug() {
-        let cmd = Command::Quit;
-        let debug_str = format!("{:?}", cmd);
-        assert!(debug_str.contains("Quit"));
     }
 }

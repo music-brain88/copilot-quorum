@@ -197,19 +197,19 @@ async fn main() -> Result<()> {
 
     // No question provided -> Start TUI (default)
     if cli.question.is_none() {
-        let mut tui_app = TuiApp::new()?;
-        
-        // TODO: Pass dependencies to TUI controller
-        // - gateway: Arc<CopilotLlmGateway>
-        // - tool_executor: Arc<LocalToolExecutor>
-        // - context_loader: Arc<LocalContextLoader>
-        // - agent_config: AgentConfig
-        // - cancellation_token: CancellationToken
-        // - initial_level: ConsensusLevel
-        // - moderator: Model
-        // - working_dir: Option<String>
-        // - final_review: bool
-        
+        if let Some(dir) = &working_dir {
+            agent_config = agent_config.with_working_dir(dir);
+        }
+        if cli.final_review {
+            agent_config = agent_config.with_final_review();
+        }
+
+        let mut tui_app = TuiApp::new(
+            gateway.clone(),
+            tool_executor.clone(),
+            context_loader.clone(),
+            agent_config,
+        );
         tui_app.run().await?;
         return Ok(());
     }

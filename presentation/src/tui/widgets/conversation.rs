@@ -1,61 +1,87 @@
-//! Conversation history widget
+//! Conversation widget — message history + streaming text
 
+use crate::tui::state::TuiState;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Widget},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::tui::state::MessageEntry;
-
-/// Widget for rendering conversation history
 pub struct ConversationWidget<'a> {
-    messages: &'a [MessageEntry],
+    state: &'a TuiState,
 }
 
 impl<'a> ConversationWidget<'a> {
-    pub fn new(messages: &'a [MessageEntry]) -> Self {
-        Self { messages }
+    pub fn new(state: &'a TuiState) -> Self {
+        Self { state }
     }
 
-    fn format_message<'b>(&self, entry: &'b MessageEntry) -> ListItem<'b> {
-        let role_style = match entry.role.as_str() {
-            "user" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            "assistant" => Style::default().fg(Color::Green),
-            "system" => Style::default().fg(Color::Yellow),
-            _ => Style::default().fg(Color::White),
-        };
+    fn format_messages(&self) -> Text<'_> {
+        let mut lines: Vec<Line> = Vec::new();
 
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(format!("[{}] ", entry.role), role_style),
-                Span::styled(&entry.timestamp, Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(entry.content.as_str()),
-            Line::from(""),
-        ];
+        for msg in &self.state.messages {
+            let role_style = Style::default()
+                .fg(msg.role.color())
+                .add_modifier(Modifier::BOLD);
 
-        ListItem::new(lines)
+            lines.push(Line::from(Span::styled(
+                format!("{}: ", msg.role.label()),
+                role_style,
+            )));
+
+            for content_line in msg.content.lines() {
+                lines.push(Line::from(format!("  {}", content_line)));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // Append streaming text if present
+        if !self.state.streaming_text.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Agent: ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for content_line in self.state.streaming_text.lines() {
+                lines.push(Line::from(format!("  {}", content_line)));
+            }
+            lines.push(Line::from(Span::styled(
+                "  ▌",
+                Style::default().fg(Color::Green),
+            )));
+        }
+
+        Text::from(lines)
     }
 }
 
 impl<'a> Widget for ConversationWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let items: Vec<ListItem> = self
-            .messages
-            .iter()
-            .map(|msg| self.format_message(msg))
-            .collect();
+        let text = self.format_messages();
+        let total_lines = text.lines.len() as u16;
+        let visible_height = area.height.saturating_sub(2); // borders
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Conversation ")
-                .style(Style::default().fg(Color::White)),
-        );
+        // Calculate scroll: scroll_offset=0 means "show bottom"
+        let scroll = if total_lines > visible_height {
+            let max_scroll = total_lines - visible_height;
+            let offset = (self.state.scroll_offset as u16).min(max_scroll);
+            max_scroll - offset
+        } else {
+            0
+        };
 
-        Widget::render(list, area, buf);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Conversation ")
+            .style(Style::default().fg(Color::White));
+
+        Paragraph::new(text)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0))
+            .render(area, buf);
     }
 }

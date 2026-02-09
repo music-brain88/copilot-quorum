@@ -1,247 +1,265 @@
 //! TUI application state
 //!
-//! Manages the global state of the TUI application:
-//! - Current mode
-//! - Input buffer
-//! - Message history
-//! - Scroll position
-//! - Consensus level
-//! - Event queue for state updates
+//! Single source of truth for everything the TUI renders.
+//! Updated by TuiPresenter (UiEvent → state) and TuiProgressBridge (progress → state).
 
-use super::event::TuiEvent;
-use super::mode::Mode;
-use quorum_domain::ConsensusLevel;
-use std::collections::VecDeque;
+use super::mode::InputMode;
+use quorum_domain::{AgentPhase, ConsensusLevel, PhaseScope};
 
-/// Application state
-#[derive(Debug, Clone)]
-pub struct AppState {
-    /// Current mode
-    pub mode: Mode,
-    /// Input buffer (for Insert/Command mode)
+/// Central TUI state — owned by the TuiApp select! loop
+pub struct TuiState {
+    // -- Mode --
+    pub mode: InputMode,
+
+    // -- Input buffer --
     pub input: String,
-    /// Cursor position in input buffer
     pub cursor_pos: usize,
-    /// Message history
-    pub messages: Vec<Message>,
-    /// Scroll offset in message history
+
+    // -- Command buffer (for : mode) --
+    pub command_input: String,
+    pub command_cursor: usize,
+
+    // -- Conversation --
+    pub messages: Vec<DisplayMessage>,
+    pub streaming_text: String,
     pub scroll_offset: usize,
-    /// Current consensus level
+    pub auto_scroll: bool,
+
+    // -- Progress --
+    pub progress: ProgressState,
+
+    // -- Config display --
     pub consensus_level: ConsensusLevel,
-    /// Whether to show help overlay
+    pub phase_scope: PhaseScope,
+    pub model_name: String,
+
+    // -- Overlay --
     pub show_help: bool,
-    /// Pending confirmation prompt
-    pub confirm_prompt: Option<String>,
-    /// Error message to display
-    pub error_message: Option<String>,
-    /// Agent status
-    pub agent_status: AgentStatus,
+    pub flash_message: Option<(String, std::time::Instant)>,
+
+    // -- HiL --
+    pub hil_prompt: Option<HilPrompt>,
+
+    // -- Lifecycle --
+    pub should_quit: bool,
 }
 
-impl Default for AppState {
+impl Default for TuiState {
     fn default() -> Self {
         Self {
-            mode: Mode::default(),
+            mode: InputMode::default(),
             input: String::new(),
             cursor_pos: 0,
+            command_input: String::new(),
+            command_cursor: 0,
             messages: Vec::new(),
+            streaming_text: String::new(),
             scroll_offset: 0,
+            auto_scroll: true,
+            progress: ProgressState::default(),
             consensus_level: ConsensusLevel::Solo,
+            phase_scope: PhaseScope::Full,
+            model_name: String::new(),
             show_help: false,
-            confirm_prompt: None,
-            error_message: None,
-            agent_status: AgentStatus::Idle,
+            flash_message: None,
+            hil_prompt: None,
+            should_quit: false,
         }
     }
 }
 
-impl AppState {
-    /// Create a new application state
+impl TuiState {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set mode
-    pub fn set_mode(&mut self, mode: Mode) {
-        self.mode = mode;
-        if mode == Mode::Normal {
-            self.input.clear();
-            self.cursor_pos = 0;
-        }
-    }
+    // -- Input editing --
 
-    /// Insert character at cursor position
     pub fn insert_char(&mut self, c: char) {
-        self.input.insert(self.cursor_pos, c);
-        self.cursor_pos += c.len_utf8();
+        let cursor = self.active_cursor();
+        self.active_input_mut().insert(cursor, c);
+        *self.active_cursor_mut() += c.len_utf8();
     }
 
-    /// Delete character before cursor
     pub fn delete_char(&mut self) {
-        if self.cursor_pos > 0 {
-            let char_before = self.input[..self.cursor_pos]
+        let cursor = self.active_cursor();
+        if cursor > 0 {
+            let input = self.active_input_mut();
+            let prev_char_len = input[..cursor]
                 .chars()
-                .last()
+                .next_back()
                 .map(|c| c.len_utf8())
                 .unwrap_or(0);
-            self.input.remove(self.cursor_pos - char_before);
-            self.cursor_pos -= char_before;
+            input.remove(cursor - prev_char_len);
+            *self.active_cursor_mut() -= prev_char_len;
         }
     }
 
-    /// Move cursor left
     pub fn cursor_left(&mut self) {
-        if self.cursor_pos > 0 {
-            let char_before = self.input[..self.cursor_pos]
+        let cursor = self.active_cursor();
+        if cursor > 0 {
+            let input = self.active_input();
+            let prev_char_len = input[..cursor]
                 .chars()
-                .last()
+                .next_back()
                 .map(|c| c.len_utf8())
                 .unwrap_or(0);
-            self.cursor_pos -= char_before;
+            *self.active_cursor_mut() -= prev_char_len;
         }
     }
 
-    /// Move cursor right
     pub fn cursor_right(&mut self) {
-        if self.cursor_pos < self.input.len() {
-            let char_at = self.input[self.cursor_pos..]
+        let cursor = self.active_cursor();
+        let input = self.active_input();
+        if cursor < input.len() {
+            let next_char_len = input[cursor..]
                 .chars()
                 .next()
                 .map(|c| c.len_utf8())
                 .unwrap_or(0);
-            self.cursor_pos += char_at;
+            *self.active_cursor_mut() += next_char_len;
         }
     }
 
-    /// Move cursor to start
-    pub fn cursor_start(&mut self) {
-        self.cursor_pos = 0;
+    pub fn cursor_home(&mut self) {
+        *self.active_cursor_mut() = 0;
     }
 
-    /// Move cursor to end
     pub fn cursor_end(&mut self) {
-        self.cursor_pos = self.input.len();
+        let len = self.active_input().len();
+        *self.active_cursor_mut() = len;
     }
 
-    /// Add message to history
-    pub fn add_message(&mut self, message: Message) {
-        self.messages.push(message);
-    }
-
-    /// Clear input buffer
-    pub fn clear_input(&mut self) {
-        self.input.clear();
+    /// Take the current input buffer contents and clear it
+    pub fn take_input(&mut self) -> String {
         self.cursor_pos = 0;
+        std::mem::take(&mut self.input)
     }
 
-    /// Get current input
-    pub fn get_input(&self) -> &str {
-        &self.input
+    /// Take the command buffer contents and clear it
+    pub fn take_command(&mut self) -> String {
+        self.command_cursor = 0;
+        std::mem::take(&mut self.command_input)
     }
 
-    /// Scroll up
-    pub fn scroll_up(&mut self) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset -= 1;
+    // -- Active buffer helpers (routes to input or command based on mode) --
+
+    fn active_input(&self) -> &str {
+        match self.mode {
+            InputMode::Command => &self.command_input,
+            _ => &self.input,
         }
     }
 
-    /// Scroll down
+    fn active_input_mut(&mut self) -> &mut String {
+        match self.mode {
+            InputMode::Command => &mut self.command_input,
+            _ => &mut self.input,
+        }
+    }
+
+    fn active_cursor(&self) -> usize {
+        match self.mode {
+            InputMode::Command => self.command_cursor,
+            _ => self.cursor_pos,
+        }
+    }
+
+    fn active_cursor_mut(&mut self) -> &mut usize {
+        match self.mode {
+            InputMode::Command => &mut self.command_cursor,
+            _ => &mut self.cursor_pos,
+        }
+    }
+
+    // -- Messages --
+
+    pub fn push_message(&mut self, msg: DisplayMessage) {
+        self.messages.push(msg);
+        if self.auto_scroll {
+            self.scroll_to_bottom();
+        }
+    }
+
+    /// Finalize streaming text into a message
+    pub fn finalize_stream(&mut self) {
+        if !self.streaming_text.is_empty() {
+            let text = std::mem::take(&mut self.streaming_text);
+            self.push_message(DisplayMessage::assistant(text));
+        }
+    }
+
+    // -- Scrolling --
+
+    pub fn scroll_up(&mut self) {
+        self.auto_scroll = false;
+        self.scroll_offset = self.scroll_offset.saturating_add(1);
+    }
+
     pub fn scroll_down(&mut self) {
-        self.scroll_offset += 1;
+        if self.scroll_offset > 0 {
+            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        } else {
+            self.auto_scroll = true;
+        }
     }
 
-    /// Toggle consensus level
-    pub fn toggle_consensus(&mut self) {
-        self.consensus_level = match self.consensus_level {
-            ConsensusLevel::Solo => ConsensusLevel::Ensemble,
-            ConsensusLevel::Ensemble => ConsensusLevel::Solo,
-        };
+    pub fn scroll_to_top(&mut self) {
+        self.auto_scroll = false;
+        self.scroll_offset = usize::MAX; // Will be clamped during render
     }
 
-    /// Set consensus level
-    pub fn set_consensus_level(&mut self, level: ConsensusLevel) {
-        self.consensus_level = level;
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+        self.auto_scroll = true;
     }
 
-    /// Show help
-    pub fn show_help(&mut self) {
-        self.show_help = true;
+    // -- Flash messages --
+
+    pub fn set_flash(&mut self, msg: impl Into<String>) {
+        self.flash_message = Some((msg.into(), std::time::Instant::now()));
     }
 
-    /// Hide help
-    pub fn hide_help(&mut self) {
-        self.show_help = false;
-    }
-
-    /// Set confirmation prompt
-    pub fn set_confirm_prompt(&mut self, prompt: String) {
-        self.confirm_prompt = Some(prompt);
-        self.set_mode(Mode::Confirm);
-    }
-
-    /// Clear confirmation prompt
-    pub fn clear_confirm_prompt(&mut self) {
-        self.confirm_prompt = None;
-    }
-
-    /// Set error message
-    pub fn set_error(&mut self, error: String) {
-        self.error_message = Some(error);
-    }
-
-    /// Clear error message
-    pub fn clear_error(&mut self) {
-        self.error_message = None;
-    }
-
-    /// Set agent status
-    pub fn set_agent_status(&mut self, status: AgentStatus) {
-        self.agent_status = status;
+    /// Clear flash if older than the given duration
+    pub fn expire_flash(&mut self, max_age: std::time::Duration) {
+        if let Some((_, created)) = &self.flash_message {
+            if created.elapsed() > max_age {
+                self.flash_message = None;
+            }
+        }
     }
 }
 
-/// Message in the history
+/// A single message in the conversation panel
 #[derive(Debug, Clone)]
-pub struct Message {
-    /// Message role (User, Assistant, System)
+pub struct DisplayMessage {
     pub role: MessageRole,
-    /// Message content
     pub content: String,
-    /// Timestamp
-    pub timestamp: std::time::SystemTime,
 }
 
-impl Message {
-    /// Create a user message
+impl DisplayMessage {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::User,
             content: content.into(),
-            timestamp: std::time::SystemTime::now(),
         }
     }
 
-    /// Create an assistant message
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::Assistant,
             content: content.into(),
-            timestamp: std::time::SystemTime::now(),
         }
     }
 
-    /// Create a system message
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::System,
             content: content.into(),
-            timestamp: std::time::SystemTime::now(),
         }
     }
 }
 
-/// Message role
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageRole {
     User,
@@ -250,8 +268,7 @@ pub enum MessageRole {
 }
 
 impl MessageRole {
-    /// Get the display name
-    pub fn display(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::User => "You",
             Self::Assistant => "Agent",
@@ -259,7 +276,6 @@ impl MessageRole {
         }
     }
 
-    /// Get the color for this role
     pub fn color(&self) -> ratatui::style::Color {
         use ratatui::style::Color;
         match self {
@@ -270,48 +286,38 @@ impl MessageRole {
     }
 }
 
-/// Agent execution status
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentStatus {
-    /// Agent is idle
-    Idle,
-    /// Agent is thinking/planning
-    Thinking,
-    /// Agent is executing tools
-    Executing,
-    /// Agent is waiting for review
-    WaitingForReview,
-    /// Agent completed successfully
-    Completed,
-    /// Agent failed
-    Failed,
+/// Progress panel state
+#[derive(Debug, Clone, Default)]
+pub struct ProgressState {
+    pub current_phase: Option<AgentPhase>,
+    pub phase_name: String,
+    pub current_tool: Option<String>,
+    pub tool_log: Vec<ToolLogEntry>,
+    pub quorum_status: Option<QuorumStatus>,
+    pub is_running: bool,
 }
 
-impl AgentStatus {
-    /// Get the display name
-    pub fn display(&self) -> &'static str {
-        match self {
-            Self::Idle => "Idle",
-            Self::Thinking => "Thinking...",
-            Self::Executing => "Executing...",
-            Self::WaitingForReview => "Waiting for Review",
-            Self::Completed => "Completed",
-            Self::Failed => "Failed",
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct ToolLogEntry {
+    pub tool_name: String,
+    pub success: Option<bool>,
+}
 
-    /// Get the color for this status
-    pub fn color(&self) -> ratatui::style::Color {
-        use ratatui::style::Color;
-        match self {
-            Self::Idle => Color::Gray,
-            Self::Thinking => Color::Blue,
-            Self::Executing => Color::Yellow,
-            Self::WaitingForReview => Color::Magenta,
-            Self::Completed => Color::Green,
-            Self::Failed => Color::Red,
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct QuorumStatus {
+    pub phase: String,
+    pub total: usize,
+    pub completed: usize,
+    pub approved: usize,
+}
+
+/// Human intervention prompt data
+#[derive(Debug, Clone)]
+pub struct HilPrompt {
+    pub title: String,
+    pub objective: String,
+    pub tasks: Vec<String>,
+    pub message: String,
 }
 
 #[cfg(test)]
@@ -319,163 +325,115 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_state_input_operations() {
-        let mut state = AppState::new();
-        
+    fn test_input_editing() {
+        let mut state = TuiState::new();
+        state.mode = InputMode::Insert;
+
         state.insert_char('h');
-        state.insert_char('e');
-        state.insert_char('l');
-        state.insert_char('l');
-        state.insert_char('o');
-        
-        assert_eq!(state.get_input(), "hello");
-        assert_eq!(state.cursor_pos, 5);
-        
+        state.insert_char('i');
+        assert_eq!(state.input, "hi");
+        assert_eq!(state.cursor_pos, 2);
+
         state.delete_char();
-        assert_eq!(state.get_input(), "hell");
-        assert_eq!(state.cursor_pos, 4);
+        assert_eq!(state.input, "h");
+        assert_eq!(state.cursor_pos, 1);
     }
 
     #[test]
-    fn test_state_cursor_movement() {
-        let mut state = AppState::new();
-        state.input = "hello".to_string();
+    fn test_command_buffer_separate() {
+        let mut state = TuiState::new();
+
+        // Type in insert mode
+        state.mode = InputMode::Insert;
+        state.insert_char('a');
+        assert_eq!(state.input, "a");
+
+        // Switch to command mode - separate buffer
+        state.mode = InputMode::Command;
+        state.insert_char('q');
+        assert_eq!(state.command_input, "q");
+        assert_eq!(state.input, "a"); // Unchanged
+    }
+
+    #[test]
+    fn test_take_input_clears() {
+        let mut state = TuiState::new();
+        state.input = "hello".into();
         state.cursor_pos = 5;
-        
-        state.cursor_left();
-        assert_eq!(state.cursor_pos, 4);
-        
-        state.cursor_start();
+
+        let taken = state.take_input();
+        assert_eq!(taken, "hello");
+        assert!(state.input.is_empty());
         assert_eq!(state.cursor_pos, 0);
-        
-        state.cursor_end();
-        assert_eq!(state.cursor_pos, 5);
-        
-        state.cursor_right();
-        assert_eq!(state.cursor_pos, 5); // Can't go beyond end
     }
 
     #[test]
-    fn test_state_mode_switching() {
-        let mut state = AppState::new();
-        state.input = "test".to_string();
-        
-        assert_eq!(state.mode, Mode::Normal);
-        
-        state.set_mode(Mode::Insert);
-        assert_eq!(state.mode, Mode::Insert);
-        
-        state.set_mode(Mode::Normal);
-        assert_eq!(state.mode, Mode::Normal);
-        assert!(state.input.is_empty()); // Input cleared on Normal mode
+    fn test_scroll_behavior() {
+        let mut state = TuiState::new();
+        assert!(state.auto_scroll);
+
+        state.scroll_up();
+        assert!(!state.auto_scroll);
+        assert_eq!(state.scroll_offset, 1);
+
+        state.scroll_to_bottom();
+        assert!(state.auto_scroll);
+        assert_eq!(state.scroll_offset, 0);
     }
 
     #[test]
-    fn test_consensus_toggle() {
-        let mut state = AppState::new();
-        
-        assert_eq!(state.consensus_level, ConsensusLevel::Solo);
-        
-        state.toggle_consensus();
-        assert_eq!(state.consensus_level, ConsensusLevel::Ensemble);
-        
-        state.toggle_consensus();
-        assert_eq!(state.consensus_level, ConsensusLevel::Solo);
+    fn test_finalize_stream() {
+        let mut state = TuiState::new();
+        state.streaming_text = "Hello world".into();
+
+        state.finalize_stream();
+        assert!(state.streaming_text.is_empty());
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].content, "Hello world");
+        assert_eq!(state.messages[0].role, MessageRole::Assistant);
     }
 
     #[test]
-    fn test_message_creation() {
-        let msg = Message::user("test");
+    fn test_flash_message() {
+        let mut state = TuiState::new();
+        state.set_flash("test");
+        assert!(state.flash_message.is_some());
+
+        // Should not expire immediately
+        state.expire_flash(std::time::Duration::from_secs(5));
+        assert!(state.flash_message.is_some());
+    }
+
+    #[test]
+    fn test_message_constructors() {
+        let msg = DisplayMessage::user("hello");
         assert_eq!(msg.role, MessageRole::User);
-        assert_eq!(msg.content, "test");
-        
-        let msg = Message::assistant("response");
+        assert_eq!(msg.content, "hello");
+
+        let msg = DisplayMessage::assistant("hi");
         assert_eq!(msg.role, MessageRole::Assistant);
-        assert_eq!(msg.content, "response");
-    }
-}
 
-/// TUI-specific state (for presenter, progress, HIL)
-///
-/// This is a separate state object used by TUI adapters to:
-/// 1. Queue events for rendering
-/// 2. Track current mode (Normal/HumanIntervention)
-/// 3. Maintain rendering state separate from AppState
-#[derive(Debug, Clone)]
-pub struct TuiState {
-    /// Event queue (for future rendering)
-    event_queue: VecDeque<TuiEvent>,
-    /// Current TUI mode
-    mode: TuiMode,
-    /// Message history (for widgets)
-    pub messages: Vec<MessageEntry>,
-    /// Input buffer
-    pub input: String,
-    /// Show help overlay
-    pub show_help: bool,
-    /// Progress state
-    pub progress: ProgressState,
-}
-
-/// Message entry for widget rendering
-#[derive(Debug, Clone)]
-pub struct MessageEntry {
-    pub role: String,
-    pub content: String,
-    pub timestamp: String,
-}
-
-/// Progress state for widget rendering
-#[derive(Debug, Clone, Default)]
-pub struct ProgressState {
-    pub current_phase: Option<String>,
-    pub current_status: String,
-}
-
-impl Default for TuiState {
-    fn default() -> Self {
-        Self {
-            event_queue: VecDeque::new(),
-            mode: TuiMode::Normal,
-            messages: Vec::new(),
-            input: String::new(),
-            show_help: false,
-            progress: ProgressState::default(),
-        }
-    }
-}
-
-impl TuiState {
-    pub fn new() -> Self {
-        Self::default()
+        let msg = DisplayMessage::system("info");
+        assert_eq!(msg.role, MessageRole::System);
     }
 
-    /// Emit a TUI event (add to queue)
-    pub fn emit(&mut self, event: TuiEvent) {
-        self.event_queue.push_back(event);
-    }
+    #[test]
+    fn test_cursor_movement() {
+        let mut state = TuiState::new();
+        state.mode = InputMode::Insert;
+        state.input = "abc".into();
+        state.cursor_pos = 3;
 
-    /// Poll next event from queue
-    pub fn poll_event(&mut self) -> Option<TuiEvent> {
-        self.event_queue.pop_front()
-    }
+        state.cursor_left();
+        assert_eq!(state.cursor_pos, 2);
 
-    /// Set TUI mode
-    pub fn set_mode(&mut self, mode: TuiMode) {
-        self.mode = mode;
-    }
+        state.cursor_home();
+        assert_eq!(state.cursor_pos, 0);
 
-    /// Get current TUI mode
-    pub fn mode(&self) -> TuiMode {
-        self.mode
-    }
-}
+        state.cursor_end();
+        assert_eq!(state.cursor_pos, 3);
 
-/// TUI-specific mode (for presenter/progress/HIL)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TuiMode {
-    /// Normal operation
-    Normal,
-    /// Human intervention required
-    HumanIntervention,
+        state.cursor_right(); // Already at end
+        assert_eq!(state.cursor_pos, 3);
+    }
 }

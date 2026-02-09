@@ -1,5 +1,7 @@
-//! Input box widget
+//! Input widget — text input area with mode-aware prompt
 
+use crate::tui::mode::InputMode;
+use crate::tui::state::TuiState;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -8,77 +10,86 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::tui::mode::Mode;
-use crate::tui::state::TuiMode;
-use quorum_domain::ConsensusLevel;
-
-/// Widget for rendering input box with prompt
 pub struct InputWidget<'a> {
-    input: &'a str,
-    prompt: String,
-    color: Color,
+    state: &'a TuiState,
 }
 
 impl<'a> InputWidget<'a> {
-    pub fn new(input: &'a str, tui_mode: TuiMode) -> Self {
-        let (prompt, color) = match tui_mode {
-            TuiMode::Normal => ("normal> ".to_string(), Color::Blue),
-            TuiMode::HumanIntervention => ("intervention> ".to_string(), Color::Red),
-        };
-        Self {
-            input,
-            prompt,
-            color,
-        }
-    }
-
-    pub fn with_mode(input: &'a str, mode: Mode) -> Self {
-        let (prompt, color) = match mode {
-            Mode::Normal => ("normal> ".to_string(), Color::Blue),
-            Mode::Insert => ("insert> ".to_string(), Color::Green),
-            Mode::Command => ("command> ".to_string(), Color::Yellow),
-            Mode::Confirm => ("confirm> ".to_string(), Color::Magenta),
-        };
-        Self {
-            input,
-            prompt,
-            color,
-        }
-    }
-
-    pub fn with_consensus(input: &'a str, level: ConsensusLevel) -> Self {
-        let (prompt, color) = match level {
-            ConsensusLevel::Solo => ("solo> ".to_string(), Color::Cyan),
-            ConsensusLevel::Ensemble => ("ensemble> ".to_string(), Color::Magenta),
-        };
-        Self {
-            input,
-            prompt,
-            color,
-        }
+    pub fn new(state: &'a TuiState) -> Self {
+        Self { state }
     }
 }
 
 impl<'a> Widget for InputWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let line = Line::from(vec![
-            Span::styled(
-                &self.prompt,
-                Style::default()
-                    .fg(self.color)
-                    .add_modifier(Modifier::BOLD),
+        let (prompt, text, cursor_pos, color, active) = match self.state.mode {
+            InputMode::Insert => (
+                "> ",
+                &self.state.input,
+                self.state.cursor_pos,
+                Color::Green,
+                true,
             ),
-            Span::styled(self.input, Style::default().fg(Color::White)),
-            Span::styled("_", Style::default().fg(Color::DarkGray)), // Cursor
-        ]);
+            InputMode::Command => (
+                ":",
+                &self.state.command_input,
+                self.state.command_cursor,
+                Color::Yellow,
+                true,
+            ),
+            InputMode::Normal => ("> ", &self.state.input, self.state.cursor_pos, Color::DarkGray, false),
+        };
 
-        let paragraph = Paragraph::new(line).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Input ")
-                .style(Style::default().fg(Color::White)),
-        );
+        let mut spans = vec![Span::styled(
+            prompt,
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::BOLD),
+        )];
 
-        paragraph.render(area, buf);
+        if active {
+            // Split text at cursor position for cursor rendering
+            let before = &text[..cursor_pos.min(text.len())];
+            let after = &text[cursor_pos.min(text.len())..];
+
+            spans.push(Span::raw(before.to_string()));
+            // Cursor block
+            if after.is_empty() {
+                spans.push(Span::styled(
+                    " ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(color),
+                ));
+            } else {
+                let cursor_char = &after[..after.chars().next().map(|c| c.len_utf8()).unwrap_or(1)];
+                spans.push(Span::styled(
+                    cursor_char.to_string(),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(color),
+                ));
+                spans.push(Span::raw(after[cursor_char.len()..].to_string()));
+            }
+        } else {
+            spans.push(Span::styled(
+                text.to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        let line = Line::from(spans);
+        let border_style = if active {
+            Style::default().fg(color)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Input ")
+            .style(border_style);
+
+        Paragraph::new(line).block(block).render(area, buf);
     }
 }

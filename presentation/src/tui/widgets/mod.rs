@@ -1,89 +1,66 @@
-//! TUI Widgets - Ratatui components for rendering Agent REPL
+//! TUI widgets — ratatui components for the main layout
 //!
-//! This module contains all the widget components for the TUI:
-//! - Conversation history rendering
-//! - Progress/status indicators
-//! - Input box with mode display
-//! - Help panel
+//! Layout:
+//! ┌── Header (3) ────────────────────────────────────┐
+//! ├── Conversation (flex) ──┬── Progress (30%) ──────┤
+//! ├── Input (3) ────────────┴────────────────────────┤
+//! └── StatusBar (1) ─────────────────────────────────┘
 
-mod conversation;
-mod help;
-mod input;
-mod progress;
-mod status;
+pub mod conversation;
+pub mod header;
+pub mod input;
+pub mod progress_panel;
+pub mod status_bar;
 
-pub use conversation::ConversationWidget;
-pub use help::HelpWidget;
-pub use input::InputWidget;
-pub use progress::ProgressWidget;
-pub use status::StatusWidget;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    Frame,
-};
+/// Compute the main layout regions from a terminal area
+pub struct MainLayout {
+    pub header: Rect,
+    pub conversation: Rect,
+    pub progress: Rect,
+    pub input: Rect,
+    pub status_bar: Rect,
+}
 
-use super::state::TuiState;
-
-/// Main layout builder for the TUI
-pub struct TuiLayout;
-
-impl TuiLayout {
-    /// Create the main layout split (conversation | status, progress, input)
-    pub fn build(area: Rect) -> (Rect, Rect, Rect, Rect) {
-        let main_chunks = Layout::default()
+impl MainLayout {
+    pub fn compute(area: Rect) -> Self {
+        // Vertical split: header | main | input | status_bar
+        let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),      // Conversation area (flexible)
-                Constraint::Length(3),    // Status bar
-                Constraint::Length(5),    // Progress area
-                Constraint::Length(3),    // Input box
+                Constraint::Length(3),  // Header
+                Constraint::Min(8),    // Main (conversation + progress)
+                Constraint::Length(3), // Input
+                Constraint::Length(1), // Status bar
             ])
             .split(area);
 
-        (main_chunks[0], main_chunks[1], main_chunks[2], main_chunks[3])
-    }
+        // Horizontal split of main area: conversation (70%) | progress (30%)
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(vertical[1]);
 
-    /// Render all widgets for the current state
-    pub fn render(frame: &mut Frame, state: &TuiState) {
-        let area = frame.area();
-        let (conv_area, status_area, progress_area, input_area) = Self::build(area);
-
-        // Render conversation history
-        let conversation = ConversationWidget::new(&state.messages);
-        frame.render_widget(conversation, conv_area);
-
-        // Render status bar
-        let status = StatusWidget::new(state);
-        frame.render_widget(status, status_area);
-
-        // Render progress
-        let progress = ProgressWidget::new(&state.progress);
-        frame.render_widget(progress, progress_area);
-
-        // Render input box
-        let input = InputWidget::new(&state.input, state.mode());
-        frame.render_widget(input, input_area);
-
-        // If help is visible, render help overlay
-        if state.show_help {
-            let help = HelpWidget::new();
-            let help_area = Self::centered_rect(80, 80, area);
-            frame.render_widget(ratatui::widgets::Clear, help_area);
-            frame.render_widget(help, help_area);
+        Self {
+            header: vertical[0],
+            conversation: horizontal[0],
+            progress: horizontal[1],
+            input: vertical[2],
+            status_bar: vertical[3],
         }
     }
 
-    /// Create a centered rectangle for overlays (e.g., help dialog)
-    fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-        let popup_layout = Layout::default()
+    /// Centered overlay rectangle for help dialog
+    pub fn centered_overlay(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+        let vert = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Percentage((100 - percent_y) / 2),
                 Constraint::Percentage(percent_y),
                 Constraint::Percentage((100 - percent_y) / 2),
             ])
-            .split(r);
+            .split(area);
 
         Layout::default()
             .direction(Direction::Horizontal)
@@ -92,6 +69,6 @@ impl TuiLayout {
                 Constraint::Percentage(percent_x),
                 Constraint::Percentage((100 - percent_x) / 2),
             ])
-            .split(popup_layout[1])[1]
+            .split(vert[1])[1]
     }
 }
