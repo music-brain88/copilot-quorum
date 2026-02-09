@@ -1058,7 +1058,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             if response
                 .stop_reason
                 .as_ref()
-                .map_or(true, |r| *r != quorum_domain::StopReason::ToolUse)
+                .is_none_or(|r| *r != quorum_domain::StopReason::ToolUse)
             {
                 break;
             }
@@ -1710,7 +1710,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             if response
                 .stop_reason
                 .as_ref()
-                .map_or(true, |r| *r != quorum_domain::StopReason::ToolUse)
+                .is_none_or(|r| *r != quorum_domain::StopReason::ToolUse)
             {
                 break;
             }

@@ -329,12 +329,11 @@ impl ToolExecutorPort for LocalToolExecutor {
             }
         }
         // Check custom tools first (can await directly in async context)
-        if let Some(ref provider) = self.custom_provider {
-            if self.tool_spec.get(&call.tool_name).is_some()
-                && !self.is_builtin_tool(&call.tool_name)
-            {
-                return provider.execute(call).await;
-            }
+        if let Some(ref provider) = self.custom_provider
+            && self.tool_spec.get(&call.tool_name).is_some()
+            && !self.is_builtin_tool(&call.tool_name)
+        {
+            return provider.execute(call).await;
         }
         self.execute_internal(call)
     }
