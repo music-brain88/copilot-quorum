@@ -15,6 +15,7 @@
 | [Ensemble Mode](./ensemble-mode.md) | 研究に基づいたマルチモデル計画生成 |
 | [Tool System](./tool-system.md) | プラグインベースのツールアーキテクチャ |
 | [Native Tool Use](./native-tool-use.md) | Native Tool Use API による構造化ツール呼び出し |
+| [Modal TUI](./tui.md) | Neovim ライクなモーダルインターフェース |
 | [CLI & Configuration](./cli-and-configuration.md) | REPL コマンド、設定、コンテキスト管理 |
 
 ---
@@ -23,9 +24,10 @@
 
 ### For Users / ユーザー向け
 
-1. **[CLI & Configuration](./cli-and-configuration.md)** - 使い方と設定
-2. **[Quorum](./quorum.md)** - 合議の仕組み
-3. **[Agent System](./agent-system.md)** - エージェントの動作
+1. **[Modal TUI](./tui.md)** - モーダル TUI の使い方
+2. **[CLI & Configuration](./cli-and-configuration.md)** - 設定とコマンド
+3. **[Quorum](./quorum.md)** - 合議の仕組み
+4. **[Agent System](./agent-system.md)** - エージェントの動作
 
 ### For Contributors / コントリビューター向け
 
@@ -34,3 +36,4 @@
 3. **[Native Tool Use](./native-tool-use.md)** - Native API によるツール呼び出し
 4. **[Ensemble Mode](./ensemble-mode.md)** - 設計判断の背景
 5. **[Agent System](./agent-system.md)** - エージェントアーキテクチャ
+6. **[ARCHITECTURE.md](../ARCHITECTURE.md#tui-design-philosophy--tui-設計思想)** - TUI 設計思想
