@@ -93,6 +93,18 @@ enum PlanningResult {
     TextResponse(String),
 }
 
+/// Result of the ensemble planning phase.
+///
+/// Similar to [`PlanningResult`] but for ensemble mode. When all models return
+/// text-only responses (no plans), we treat it as a normal text response
+/// rather than an error.
+enum EnsemblePlanningOutcome {
+    /// Multiple models generated plans, voted, and selected one
+    Plans(EnsemblePlanResult),
+    /// All models returned text only (no plan needed)
+    TextResponse(String),
+}
+
 /// Input for the RunAgent use case
 #[derive(Debug, Clone)]
 pub struct RunAgentInput {
@@ -646,7 +658,18 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     )
                     .await
                 {
-                    Ok(result) => result,
+                    Ok(EnsemblePlanningOutcome::Plans(result)) => result,
+                    Ok(EnsemblePlanningOutcome::TextResponse(text)) => {
+                        state.add_thought(Thought::observation(
+                            "No plan needed for this request",
+                        ));
+                        state.complete();
+                        return Ok(RunAgentOutput {
+                            summary: text,
+                            success: true,
+                            state,
+                        });
+                    }
                     Err(e) => {
                         state.fail(format!("Ensemble planning failed: {}", e));
                         return Ok(RunAgentOutput {
@@ -1250,7 +1273,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         system_prompt: &str,
         previous_feedback: Option<&str>,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<EnsemblePlanResult, RunAgentError> {
+    ) -> Result<EnsemblePlanningOutcome, RunAgentError> {
         let models = &input.config.review_models;
 
         if models.is_empty() {
@@ -1290,14 +1313,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     .create_session_with_system_prompt(&model, &system_prompt)
                     .await?;
                 let response = session.send_with_tools(&prompt, &[plan_tool]).await?;
-                let plan = extract_plan_from_response(&response)
-                    .ok_or_else(|| GatewayError::Other("Failed to parse plan".to_string()))?;
-                Ok::<(Model, Plan), GatewayError>((model, plan))
+
+                if let Some(plan) = extract_plan_from_response(&response) {
+                    return Ok((model, Some(plan), String::new()));
+                }
+
+                // No plan — return text response
+                let text = response.text_content();
+                Ok::<(Model, Option<Plan>, String), GatewayError>((model, None, text))
             });
         }
 
         // Collect generated plans with cancellation support
         let mut candidates: Vec<PlanCandidate> = Vec::new();
+        let mut text_responses: Vec<String> = Vec::new();
 
         loop {
             let result = if let Some(ref token) = self.cancellation_token {
@@ -1318,10 +1347,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             };
 
             match result {
-                Ok(Ok((model, plan))) => {
+                Ok(Ok((model, Some(plan), _))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
                     progress.on_ensemble_plan_generated(&model);
                     candidates.push(PlanCandidate::new(model, plan));
+                }
+                Ok(Ok((model, None, text))) => {
+                    info!("Model {} returned text only (no plan)", model);
+                    if !text.is_empty() {
+                        text_responses.push(text);
+                    }
                 }
                 Ok(Err(e)) => {
                     warn!("Model failed to generate plan: {}", e);
@@ -1333,6 +1368,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         if candidates.is_empty() {
+            // All models returned text-only — treat as normal text response
+            if let Some(text) = text_responses.into_iter().next() {
+                return Ok(EnsemblePlanningOutcome::TextResponse(text));
+            }
             return Err(RunAgentError::EnsemblePlanningFailed(
                 "All models failed to generate plans".to_string(),
             ));
@@ -1341,7 +1380,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if candidates.len() == 1 {
             // Only one plan succeeded, use it directly
             info!("Only one plan generated, selecting it directly");
-            return Ok(EnsemblePlanResult::new(candidates, 0));
+            return Ok(EnsemblePlanningOutcome::Plans(EnsemblePlanResult::new(candidates, 0)));
         }
 
         // Step 2: Each model votes on the other models' plans
@@ -1426,7 +1465,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             progress.on_ensemble_complete(&selected.model, selected.average_score());
         }
 
-        Ok(result)
+        Ok(EnsemblePlanningOutcome::Plans(result))
     }
 
     /// Determine the appropriate model for a task based on tool risk level
@@ -3140,6 +3179,94 @@ Here is my evaluation:
             builder
         }
 
+        /// Ensemble + Fast minimal configuration
+        ///
+        /// 2 review models (ClaudeHaiku45, ClaudeSonnet45), each gets a planning session.
+        /// By default, both return plans — override with `with_ensemble_plan_responses()`.
+        fn ensemble_fast() -> Self {
+            let config = AgentConfig {
+                exploration_model: Model::ClaudeHaiku45,
+                decision_model: Model::ClaudeSonnet45,
+                review_models: vec![Model::ClaudeHaiku45, Model::ClaudeSonnet45],
+                consensus_level: ConsensusLevel::Ensemble,
+                phase_scope: PhaseScope::Fast,
+                require_plan_review: false,
+                require_final_review: false,
+                max_iterations: 50,
+                working_dir: None,
+                max_tool_retries: 2,
+                max_plan_revisions: 3,
+                hil_mode: HilMode::Interactive,
+                max_tool_turns: 3,
+                orchestration_strategy: Default::default(),
+            };
+            let mut gateway = ScriptedGateway::new();
+
+            // Context gathering session (exploration model)
+            gateway.add_session(
+                &Model::ClaudeHaiku45.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Context gathered",
+                ))],
+            );
+
+            // Planning sessions for each review model (default: both return plans)
+            gateway.add_session(
+                &Model::ClaudeHaiku45.to_string(),
+                vec![make_plan_response("Plan from Haiku")],
+            );
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![make_plan_response("Plan from Sonnet")],
+            );
+
+            // Voting sessions (each model votes on the other's plan)
+            gateway.add_session(
+                &Model::ClaudeHaiku45.to_string(),
+                vec![ScriptedResponse::Text("Score: 7/10".to_string())],
+            );
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![ScriptedResponse::Text("Score: 8/10".to_string())],
+            );
+
+            // Execution session (decision model)
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Task completed successfully",
+                ))],
+            );
+
+            Self {
+                config,
+                gateway,
+                tool_executor: MockToolExecutor::new(),
+                human_intervention: None,
+            }
+        }
+
+        /// Replace ensemble planning responses for all review models
+        fn with_ensemble_plan_responses(mut self, responses: Vec<(Model, ScriptedResponse)>) -> Self {
+            let mut gateway = ScriptedGateway::new();
+
+            // Context gathering session
+            gateway.add_session(
+                &self.config.exploration_model.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Context gathered",
+                ))],
+            );
+
+            // Custom planning sessions for each model
+            for (model, response) in responses {
+                gateway.add_session(&model.to_string(), vec![response]);
+            }
+
+            self.gateway = gateway;
+            self
+        }
+
         fn with_phase_scope(mut self, scope: PhaseScope) -> Self {
             self.config.phase_scope = scope;
             self
@@ -3432,5 +3559,103 @@ Here is my evaluation:
 
         // Execution phase was never entered
         assert!(!progress.has_phase(&AgentPhase::Executing));
+    }
+
+    // ==================== Ensemble Planning Flow Tests ====================
+
+    #[tokio::test]
+    async fn test_ensemble_all_text_response_succeeds() {
+        // 全モデルがテキストのみ返した場合、TextResponse で正常終了するべき
+        let (result, progress) = FlowTestBuilder::ensemble_fast()
+            .with_ensemble_plan_responses(vec![
+                (
+                    Model::ClaudeHaiku45,
+                    ScriptedResponse::Text("Hello! I can help you with that.".into()),
+                ),
+                (
+                    Model::ClaudeSonnet45,
+                    ScriptedResponse::Text("Hi there! What do you need?".into()),
+                ),
+            ])
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed with text-only response");
+        assert!(
+            output.success,
+            "Ensemble should succeed with text-only responses, got: {}",
+            output.summary
+        );
+        // Should get one of the text responses
+        assert!(
+            output.summary.contains("Hello!") || output.summary.contains("Hi there!"),
+            "Summary should contain text response, got: {}",
+            output.summary
+        );
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        assert!(
+            !progress.has_phase(&AgentPhase::Executing),
+            "Should not reach execution with text-only response"
+        );
+        assert_eq!(output.state.phase, AgentPhase::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_ensemble_partial_plan_success() {
+        // 1モデルがプラン、1モデルがテキスト → プランが使われる
+        let (result, progress) = FlowTestBuilder::ensemble_fast()
+            .with_ensemble_plan_responses(vec![
+                (
+                    Model::ClaudeHaiku45,
+                    ScriptedResponse::Text("I don't think we need a plan for this.".into()),
+                ),
+                (Model::ClaudeSonnet45, make_plan_response("Sonnet's plan")),
+            ])
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed with partial plan");
+        assert!(
+            output.success,
+            "Ensemble should succeed when at least one model returns a plan, got: {}",
+            output.summary
+        );
+        // Plan should have been set (the one that succeeded)
+        assert!(
+            output.state.plan.is_some(),
+            "Plan should be set from the successful model"
+        );
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        // With Fast mode, execution should proceed
+        assert!(progress.has_phase(&AgentPhase::Executing));
+    }
+
+    #[tokio::test]
+    async fn test_ensemble_all_models_fail_returns_error() {
+        // 全モデルがエラー（テキストも空）→ EnsemblePlanningFailed エラー
+        let (result, _progress) = FlowTestBuilder::ensemble_fast()
+            .with_ensemble_plan_responses(vec![
+                (
+                    Model::ClaudeHaiku45,
+                    ScriptedResponse::Error("API error".into()),
+                ),
+                (
+                    Model::ClaudeSonnet45,
+                    ScriptedResponse::Error("API error".into()),
+                ),
+            ])
+            .execute()
+            .await;
+
+        let output = result.expect("should return output (not panic)");
+        assert!(
+            !output.success,
+            "Ensemble should fail when all models error"
+        );
+        assert!(
+            output.summary.contains("ensemble planning"),
+            "Error message should mention ensemble planning, got: {}",
+            output.summary
+        );
     }
 }
