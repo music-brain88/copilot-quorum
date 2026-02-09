@@ -747,6 +747,12 @@ pub struct AgentConfig {
     pub max_plan_revisions: usize,
     /// Human-in-the-loop mode for handling revision limits
     pub hil_mode: HilMode,
+    /// Maximum number of tool use turns in a single Native Tool Use loop.
+    ///
+    /// Each turn consists of: LLM response with tool calls → execute tools → send results.
+    /// The loop stops when the LLM finishes (stop_reason != ToolUse) or this limit is reached.
+    /// Only used in the Native Tool Use path; ignored for prompt-based execution.
+    pub max_tool_turns: usize,
 }
 
 impl Default for AgentConfig {
@@ -770,6 +776,7 @@ impl Default for AgentConfig {
             max_tool_retries: 2,
             max_plan_revisions: 3,
             hil_mode: HilMode::Interactive,
+            max_tool_turns: 10,
         }
     }
 }
@@ -893,6 +900,12 @@ impl AgentConfig {
     /// Set human-in-the-loop mode
     pub fn with_hil_mode(mut self, mode: HilMode) -> Self {
         self.hil_mode = mode;
+        self
+    }
+
+    /// Set maximum tool use turns for Native Tool Use loop
+    pub fn with_max_tool_turns(mut self, max: usize) -> Self {
+        self.max_tool_turns = max;
         self
     }
 }

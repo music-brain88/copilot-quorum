@@ -75,15 +75,16 @@ glob_search = "fd"    # fd を使用（デフォルト: find）
 │                     ToolRegistry                            │
 │  (プロバイダーを集約、優先度でルーティング)                 │
 └─────────────────────────────────────────────────────────────┘
-          │              │              │              │
-          ▼              ▼              ▼              ▼
-   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-   │ Builtin  │   │   CLI    │   │   MCP    │   │  Script  │
-   │ Provider │   │ Provider │   │ Provider │   │ Provider │
-   └──────────┘   └──────────┘   └──────────┘   └──────────┘
-   最小限の        rg, fd, gh     MCP サーバー    ユーザー
-   フォールバック   等をラップ    を統合         スクリプト
-   (優先度: -100)  (優先度: 50)  (優先度: 100)  (優先度: 75)
+          │              │              │              │              │
+          ▼              ▼              ▼              ▼              ▼
+   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+   │ Builtin  │   │   CLI    │   │  Custom  │   │  Script  │   │   MCP    │
+   │ Provider │   │ Provider │   │ Provider │   │ Provider │   │ Provider │
+   └──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
+   最小限の        rg, fd, gh     quorum.toml     ユーザー        MCP サーバー
+   フォールバック   等をラップ    で定義した       スクリプト      を統合
+   (優先度: -100)  (優先度: 50)  カスタムツール   (優先度: 75)   (優先度: 100)
+                                 (優先度: 75)
 ```
 
 優先度が高いプロバイダーが同じ名前のツールを提供している場合、そちらが優先されます。
@@ -95,28 +96,57 @@ glob_search = "fd"    # fd を使用（デフォルト: find）
 |----------|----------|--------|-------------|
 | **Builtin** | -100 | 実装済み | 最小限の組み込みツール（フォールバック） |
 | **CLI** | 50 | 実装済み | システム CLI ツールのラッパー（grep/rg, find/fd） |
+| **Custom** | 75 | 実装済み | quorum.toml で定義するユーザーカスタムツール |
 | **Script** | 75 | 将来 | ユーザー定義スクリプト |
 | **MCP** | 100 | 将来 | MCP サーバー経由のツール |
 
-### Tool Name Alias System / ツール名エイリアスシステム
+### Custom Tools / カスタムツール
 
-LLM がツール名を間違えて呼び出す問題（`bash` → `run_command` 等）を解決するエイリアスシステムです。
-エイリアスは `resolve_tool_call()` と `resolve_plan_aliases()` で自動的に正規名に変換されるため、
-LLM への再問い合わせなしでゼロコスト解決されます。
+カスタムツールは、CLI コマンドを `quorum.toml` で定義するだけでファーストクラスのツールとして登録できる仕組みです。
+コードを書くことなく、エージェントが使えるツールを自由に追加できます。
 
-| Alias | Canonical Name |
-|-------|---------------|
-| `bash`, `shell`, `execute` | `run_command` |
-| `view`, `cat`, `open` | `read_file` |
-| `edit`, `save` | `write_file` |
-| `glob`, `find`, `find_files` | `glob_search` |
-| `grep`, `rg`, `search`, `ripgrep` | `grep_search` |
-| `fetch`, `browse` | `web_fetch` |
-| `web` | `web_search` |
+#### 特徴
 
-エイリアスは `ToolSpec::register_alias()` / `register_aliases()` で登録されます。
-`has_tool()` と `get()` は正規名のみ（exact match）で動作し、
-`resolve()` / `resolve_alias()` / `get_resolved()` がエイリアス解決を行います。
+- **コマンドテンプレート**: `{param_name}` プレースホルダーでパラメータを埋め込み
+- **シェルエスケープ**: パラメータ値は自動的にシェルエスケープされ、インジェクション攻撃を防止
+- **安全デフォルト**: リスクレベルは未指定の場合 `high`（safe by default）
+- **優先度 75**: CLI プロバイダー（50）より高く、MCP（100）より低い位置
+
+#### 設定例
+
+```toml
+# quorum.toml
+[tools.custom.gh_create_issue]
+description = "Create a GitHub issue"
+command = "gh issue create --title {title} --body {body}"
+risk_level = "high"
+
+[tools.custom.gh_create_issue.parameters.title]
+type = "string"
+description = "Issue title"
+required = true
+
+[tools.custom.gh_create_issue.parameters.body]
+type = "string"
+description = "Issue body content"
+required = true
+```
+
+```toml
+# 低リスクのカスタムツール例
+[tools.custom.list_branches]
+description = "List git branches"
+command = "git branch --list {pattern}"
+risk_level = "low"
+
+[tools.custom.list_branches.parameters.pattern]
+type = "string"
+description = "Branch name pattern (e.g., 'feat/*')"
+required = false
+```
+
+カスタムツールは `quorum.toml` に記述するだけで、エージェントのツール一覧に自動的に追加されます。
+LLM はこれらのツールを他の組み込みツールと同じように呼び出すことができます。
 
 ### Web Tools / Web ツール (`web-tools` feature)
 
@@ -170,6 +200,22 @@ enabled = true
 grep_search = "grep"    # デフォルト: grep, 推奨: rg
 glob_search = "find"    # デフォルト: find, 推奨: fd
 
+# カスタムツール（quorum.toml で CLI コマンドをツール化）
+[tools.custom.gh_create_issue]
+description = "Create a GitHub issue"
+command = "gh issue create --title {title} --body {body}"
+risk_level = "high"
+
+[tools.custom.gh_create_issue.parameters.title]
+type = "string"
+description = "Issue title"
+required = true
+
+[tools.custom.gh_create_issue.parameters.body]
+type = "string"
+description = "Issue body content"
+required = true
+
 # MCP サーバー設定（将来）
 [tools.mcp]
 enabled = true
@@ -197,6 +243,8 @@ args = ["-y", "@anthropic/mcp-server-filesystem", "/workspace"]
 | `infrastructure/src/tools/builtin/provider.rs` | `BuiltinProvider` (priority: -100) |
 | `infrastructure/src/tools/cli/provider.rs` | `CliToolProvider` (priority: 50) |
 | `infrastructure/src/tools/cli/discovery.rs` | 強化ツール検知ロジック |
+| `infrastructure/src/tools/custom_provider.rs` | `CustomToolProvider` (priority: 75) |
+| `infrastructure/src/config/file_config.rs` | `FileCustomToolConfig`（quorum.toml のカスタムツール設定） |
 | `infrastructure/src/tools/file.rs` | `read_file`, `write_file` 実装 |
 | `infrastructure/src/tools/command.rs` | `run_command` 実装 |
 | `infrastructure/src/tools/search.rs` | `glob_search`, `grep_search` 実装 |
@@ -218,8 +266,9 @@ ToolRegistry
     ├── 1. ToolCall のバリデーション (ToolValidator)
     │
     ├── 2. プロバイダー選択（優先度順）
-    │   ├── CLI Provider (50)  ← 同名ツールがあればこちら優先
-    │   └── Builtin (-100)    ← フォールバック
+    │   ├── Custom Provider (75) ← quorum.toml 定義のカスタムツール
+    │   ├── CLI Provider (50)    ← 同名ツールがあればこちら優先
+    │   └── Builtin (-100)       ← フォールバック
     │
     └── 3. ToolResult を返却
 ```
@@ -265,7 +314,29 @@ pub trait ToolExecutorPort: Send + Sync {
 
 ### Adding New Tools / ツール追加ガイド
 
-#### Option 1: CLI ツールのラッピング（最も簡単）
+#### Option 1: Custom Tool via quorum.toml（最も簡単）
+
+`quorum.toml` に設定を追加するだけで、コードを一切書かずにツールを追加できます。
+
+```toml
+# quorum.toml
+[tools.custom.my_tool]
+description = "My custom tool description"
+command = "my-cli-command {arg1} --flag {arg2}"
+risk_level = "high"    # デフォルト: high（safe by default）
+
+[tools.custom.my_tool.parameters.arg1]
+type = "string"
+description = "First argument"
+required = true
+
+[tools.custom.my_tool.parameters.arg2]
+type = "string"
+description = "Second argument"
+required = false
+```
+
+#### Option 2: CLI ツールのラッピング
 
 ```toml
 # quorum.toml
@@ -273,7 +344,7 @@ pub trait ToolExecutorPort: Send + Sync {
 my_tool = "external-cli-command"
 ```
 
-#### Option 2: BuiltinProvider への追加
+#### Option 3: BuiltinProvider への追加
 
 ```rust
 // infrastructure/src/tools/builtin/my_tool.rs
@@ -286,7 +357,7 @@ ToolDefinition::new("my_tool", "Description", RiskLevel::Low)
     .with_parameter(ToolParameter::new("arg", "Description", true))
 ```
 
-#### Option 3: 新しい ToolProvider の実装
+#### Option 4: 新しい ToolProvider の実装
 
 ```rust
 pub struct CustomToolProvider { /* ... */ }
@@ -317,4 +388,4 @@ let registry = ToolRegistry::new()
 - [Quorum Discussion & Consensus](./quorum.md) - 高リスクツールの Consensus レビュー
 - [CLI & Configuration](./cli-and-configuration.md) - ツール設定の詳細
 
-<!-- LLM Context: Tool System はプラグインベースのアーキテクチャ。5つの組み込みツール（read_file, write_file, run_command, glob_search, grep_search）+ 2つの Web ツール（web_fetch, web_search、web-tools feature flag）。RiskLevel で Low/High に分類。ToolSpec にエイリアスシステムがあり、LLM のツール名間違いをゼロコストで解決（bash→run_command 等）。ToolRegistry が優先度ベースでプロバイダーをルーティング。主要ファイルは domain/src/tool/、application/src/ports/tool_executor.rs、infrastructure/src/tools/。 -->
+<!-- LLM Context: Tool System はプラグインベースのアーキテクチャ。5つの組み込みツール（read_file, write_file, run_command, glob_search, grep_search）+ 2つの Web ツール（web_fetch, web_search、web-tools feature flag）。RiskLevel で Low/High に分類。ToolRegistry が優先度ベースでプロバイダーをルーティング（Builtin:-100, CLI:50, Custom:75, MCP:100）。Custom Provider は quorum.toml でユーザー定義の CLI コマンドをファーストクラスのツールとして登録可能。コマンドテンプレートは {param_name} プレースホルダーを使い、パラメータはシェルエスケープされる。リスクレベルはデフォルト high（safe by default）。主要ファイルは domain/src/tool/、application/src/ports/tool_executor.rs、infrastructure/src/tools/（custom_provider.rs 含む）、infrastructure/src/config/file_config.rs。 -->

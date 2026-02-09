@@ -454,6 +454,85 @@ impl Default for FileBuiltinToolsConfig {
     }
 }
 
+/// Custom tool parameter definition
+///
+/// Defines a single parameter for a custom tool registered in `quorum.toml`.
+///
+/// # Example
+///
+/// ```toml
+/// [tools.custom.gh_create_issue.parameters.title]
+/// type = "string"
+/// description = "Issue title"
+/// required = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileCustomToolParameter {
+    /// Parameter type: "string", "number", "integer", "boolean"
+    #[serde(rename = "type", default = "default_string_type")]
+    pub param_type: String,
+    /// Human-readable description of the parameter
+    pub description: String,
+    /// Whether this parameter is required (default: true)
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+fn default_string_type() -> String {
+    "string".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Custom tool definition from `quorum.toml`
+///
+/// Allows users to register external CLI commands as first-class tools.
+/// The command template uses `{param_name}` placeholders that are replaced
+/// with argument values at execution time.
+///
+/// # Security
+///
+/// All parameter values are shell-escaped before substitution to prevent
+/// command injection.
+///
+/// # Example
+///
+/// ```toml
+/// [tools.custom.gh_create_issue]
+/// description = "Create a GitHub issue in the current repository"
+/// command = "gh issue create --title {title} --body {body}"
+/// risk_level = "high"
+///
+/// [tools.custom.gh_create_issue.parameters.title]
+/// type = "string"
+/// description = "Issue title"
+/// required = true
+///
+/// [tools.custom.gh_create_issue.parameters.body]
+/// type = "string"
+/// description = "Issue body in markdown"
+/// required = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileCustomToolConfig {
+    /// Human-readable description of what this tool does
+    pub description: String,
+    /// Command template with `{param_name}` placeholders
+    pub command: String,
+    /// Risk level: "low" or "high" (default: "high" — safe by default)
+    #[serde(default = "default_high_risk")]
+    pub risk_level: String,
+    /// Parameter definitions
+    #[serde(default)]
+    pub parameters: std::collections::HashMap<String, FileCustomToolParameter>,
+}
+
+fn default_high_risk() -> String {
+    "high".to_string()
+}
+
 /// Complete tools configuration
 ///
 /// Controls which tool providers are enabled and how they behave.
@@ -476,6 +555,16 @@ impl Default for FileBuiltinToolsConfig {
 /// name = "filesystem"
 /// command = "npx"
 /// args = ["-y", "@anthropic/mcp-server-filesystem"]
+///
+/// [tools.custom.gh_create_issue]
+/// description = "Create a GitHub issue"
+/// command = "gh issue create --title {title} --body {body}"
+/// risk_level = "high"
+///
+/// [tools.custom.gh_create_issue.parameters.title]
+/// type = "string"
+/// description = "Issue title"
+/// required = true
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -501,6 +590,9 @@ pub struct FileToolsConfig {
     /// MCP tools settings
     #[serde(default)]
     pub mcp: FileMcpToolsConfig,
+    /// Custom tools — user-defined CLI commands exposed as tools
+    #[serde(default)]
+    pub custom: std::collections::HashMap<String, FileCustomToolConfig>,
 }
 
 fn default_suggest_enhanced() -> bool {
@@ -515,6 +607,7 @@ impl Default for FileToolsConfig {
             builtin: FileBuiltinToolsConfig::default(),
             cli: FileCliToolsConfig::default(),
             mcp: FileMcpToolsConfig::default(),
+            custom: std::collections::HashMap::new(),
         }
     }
 }
@@ -909,6 +1002,80 @@ enable_peer_review = false
 
         config.rule = "75%".to_string();
         assert_eq!(config.parse_rule(), QuorumRule::Percentage(75));
+    }
+
+    #[test]
+    fn test_custom_tools_config_deserialize() {
+        let toml_str = r#"
+[tools.custom.gh_create_issue]
+description = "Create a GitHub issue"
+command = "gh issue create --title {title} --body {body}"
+risk_level = "high"
+
+[tools.custom.gh_create_issue.parameters.title]
+type = "string"
+description = "Issue title"
+required = true
+
+[tools.custom.gh_create_issue.parameters.body]
+type = "string"
+description = "Issue body in markdown"
+required = true
+
+[tools.custom.aws_s3_ls]
+description = "List S3 objects"
+command = "aws s3 ls {path}"
+risk_level = "low"
+
+[tools.custom.aws_s3_ls.parameters.path]
+type = "string"
+description = "S3 path (e.g. s3://my-bucket/)"
+required = true
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.tools.custom.len(), 2);
+
+        let gh = config.tools.custom.get("gh_create_issue").unwrap();
+        assert_eq!(gh.description, "Create a GitHub issue");
+        assert_eq!(gh.command, "gh issue create --title {title} --body {body}");
+        assert_eq!(gh.risk_level, "high");
+        assert_eq!(gh.parameters.len(), 2);
+
+        let title_param = gh.parameters.get("title").unwrap();
+        assert_eq!(title_param.param_type, "string");
+        assert!(title_param.required);
+
+        let s3 = config.tools.custom.get("aws_s3_ls").unwrap();
+        assert_eq!(s3.risk_level, "low");
+    }
+
+    #[test]
+    fn test_custom_tools_config_defaults() {
+        let toml_str = r#"
+[tools.custom.simple_tool]
+description = "A simple tool"
+command = "echo {message}"
+
+[tools.custom.simple_tool.parameters.message]
+description = "Message to echo"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let tool = config.tools.custom.get("simple_tool").unwrap();
+
+        // risk_level defaults to "high"
+        assert_eq!(tool.risk_level, "high");
+
+        let param = tool.parameters.get("message").unwrap();
+        // param_type defaults to "string"
+        assert_eq!(param.param_type, "string");
+        // required defaults to true
+        assert!(param.required);
+    }
+
+    #[test]
+    fn test_custom_tools_empty_by_default() {
+        let config = FileToolsConfig::default();
+        assert!(config.custom.is_empty());
     }
 
     #[test]

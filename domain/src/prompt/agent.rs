@@ -1,61 +1,22 @@
 //! Prompt templates for the Agent system
 
 use crate::agent::{AgentContext, Plan, Task};
-use crate::tool::entities::ToolSpec;
 
 /// Templates for generating agent prompts
 pub struct AgentPromptTemplate;
 
 impl AgentPromptTemplate {
-    /// System prompt for the agent
-    pub fn agent_system(tool_spec: &ToolSpec) -> String {
-        let tool_descriptions = tool_spec
-            .all()
-            .map(|t| {
-                let params = t
-                    .parameters
-                    .iter()
-                    .map(|p| {
-                        let required = if p.required { " (required)" } else { "" };
-                        format!("    - {}: {}{}", p.name, p.description, required)
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                format!(
-                    "- **{}**: {}\n  Risk: {}\n  Parameters:\n{}",
-                    t.name, t.description, t.risk_level, params
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        format!(
-            r#"You are an autonomous coding agent that helps users with software engineering tasks.
+    /// System prompt for the agent.
+    ///
+    /// Tool definitions are passed via the Native Tool Use API, so the system
+    /// prompt only contains general agent guidelines — no tool descriptions.
+    pub fn agent_system() -> String {
+        r#"You are an autonomous coding agent that helps users with software engineering tasks.
 
 ## Your Capabilities
 
 You can analyze codebases, write code, execute commands, and help with various development tasks.
 You work by creating and executing plans, using tools to interact with the file system.
-
-## Available Tools
-
-{tool_descriptions}
-
-## How to Use Tools
-
-When you need to use a tool, output a JSON block in this format:
-
-```tool
-{{
-  "tool": "tool_name",
-  "args": {{
-    "arg1": "value1",
-    "arg2": "value2"
-  }},
-  "reasoning": "Brief explanation of why you're using this tool"
-}}
-```
 
 ## Guidelines
 
@@ -72,9 +33,10 @@ Structure your responses with clear sections:
 - **Plan**: What you intend to do (when planning)
 - **Action**: The tool call (when executing)
 - **Result**: What happened (after tool execution)
-"#,
-            tool_descriptions = tool_descriptions
-        )
+
+When you need to use a tool, simply call it using the available tool functions.
+Do not wrap tool calls in code blocks."#
+            .to_string()
     }
 
     /// Prompt for context gathering phase
@@ -479,55 +441,6 @@ IMPORTANT: Respond with ONLY the ```tool code block. Do NOT include any text out
         )
     }
 
-    /// Prompt for retrying when an unknown tool was called
-    ///
-    /// Unlike `tool_retry`, this provides the list of available tools
-    /// so the LLM can choose a valid tool instead of retrying the same one.
-    pub fn tool_not_found_retry(
-        tool_name: &str,
-        available_tools: &[&str],
-        previous_args: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> String {
-        let tools_list = available_tools
-            .iter()
-            .map(|t| format!("- `{}`", t))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let args_json = serde_json::to_string_pretty(previous_args).unwrap_or_default();
-
-        format!(
-            r#"## ERROR: Unknown Tool `{tool_name}`
-
-The tool `{tool_name}` does not exist and cannot be used.
-
-**Available tools:**
-{tools_list}
-
-**Your original arguments were:**
-```json
-{args_json}
-```
-
-## CRITICAL FORMAT REQUIREMENT
-
-You MUST respond with ONLY a ```tool code block.
-- Do NOT include ANY text before or after the code block.
-- Do NOT explain or apologize.
-- Start your response IMMEDIATELY with ```tool
-
-```tool
-{{
-  "tool": "<choose from available list>",
-  "args": {{ ... }},
-  "reasoning": "brief explanation"
-}}
-```"#,
-            tool_name = tool_name,
-            tools_list = tools_list,
-            args_json = args_json
-        )
-    }
-
     /// Prompt for analyzing project context (used in /init command)
     pub fn context_analysis(project_files: &str) -> String {
         format!(
@@ -699,30 +612,14 @@ Provide:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool::entities::{RiskLevel, ToolDefinition, ToolParameter};
-
-    fn create_test_tool_spec() -> ToolSpec {
-        ToolSpec::new()
-            .register(
-                ToolDefinition::new("read_file", "Read file contents", RiskLevel::Low)
-                    .with_parameter(ToolParameter::new("path", "File path", true)),
-            )
-            .register(ToolDefinition::new(
-                "write_file",
-                "Write to file",
-                RiskLevel::High,
-            ))
-    }
 
     #[test]
     fn test_agent_system_prompt() {
-        let spec = create_test_tool_spec();
-        let prompt = AgentPromptTemplate::agent_system(&spec);
+        let prompt = AgentPromptTemplate::agent_system();
 
         assert!(prompt.contains("autonomous coding agent"));
-        assert!(prompt.contains("read_file"));
-        assert!(prompt.contains("write_file"));
-        assert!(prompt.contains("Available Tools"));
+        // Native mode: no tool descriptions in prompt
+        assert!(!prompt.contains("Available Tools"));
     }
 
     #[test]
@@ -846,44 +743,6 @@ mod tests {
         assert!(prompt.contains("README.md"));
         assert!(prompt.contains("Tool Execution Failed"));
         assert!(prompt.contains("validation error"));
-    }
-
-    #[test]
-    fn test_tool_not_found_retry_prompt() {
-        let mut args = std::collections::HashMap::new();
-        args.insert("command".to_string(), serde_json::json!("cargo test"));
-
-        let available = vec![
-            "read_file",
-            "write_file",
-            "run_command",
-            "glob_search",
-            "grep_search",
-        ];
-        let prompt = AgentPromptTemplate::tool_not_found_retry("bash", &available, &args);
-
-        // Should mention the unknown tool
-        assert!(prompt.contains("bash"));
-        assert!(prompt.contains("Unknown Tool"));
-        // Should list available tools
-        assert!(prompt.contains("read_file"));
-        assert!(prompt.contains("run_command"));
-        assert!(prompt.contains("glob_search"));
-        // Should include previous args for context
-        assert!(prompt.contains("cargo test"));
-        // Should strongly instruct tool call format
-        assert!(prompt.contains("CRITICAL FORMAT REQUIREMENT"));
-        assert!(prompt.contains("Do NOT include ANY text"));
-        // Should NOT contain the unknown tool name in the example
-        assert!(!prompt.contains("\"tool\": \"bash\""));
-    }
-
-    #[test]
-    fn test_tool_not_found_retry_critical_format() {
-        let args = std::collections::HashMap::new();
-        let prompt = AgentPromptTemplate::tool_not_found_retry("bash", &["run_command"], &args);
-        assert!(prompt.contains("CRITICAL FORMAT REQUIREMENT"));
-        assert!(prompt.contains("Do NOT include ANY text"));
     }
 
     #[test]
