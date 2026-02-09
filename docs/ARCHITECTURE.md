@@ -343,6 +343,124 @@ presentation/
 | ユースケースにジェネリクス使用 | 実行時DI（Box<dyn>）ではなくコンパイル時DI |
 | インフラ層でプロトコル詳細を隠蔽 | JSON-RPC, LSPヘッダーなどの詳細はドメインに漏れない |
 
+### TUI Design Philosophy / TUI 設計思想
+
+> See also: [Discussion #58: Neovim-Style Extensible TUI](https://github.com/music-brain88/copilot-quorum/discussions/58)
+
+copilot-quorum の TUI は「Vim キーバインド付きの REPL」ではなく、
+**LLM オーケストレーションに最適化されたモーダルインターフェース**として設計されています。
+
+#### Core Principle: Orchestrator, Not Editor / 核心原則: オーケストレーター、エディタではない
+
+copilot-quorum の本質は **LLM 群を指揮するオーケストレーター**です。
+テキスト編集は本業ではありません。
+
+この原則から導かれる設計判断:
+
+| 判断 | 理由 |
+|------|------|
+| NORMAL モードがホームポジション | 「指揮者の操作盤」= オーケストレーション操作が主 |
+| $EDITOR 委譲（`I`） | エディタを再実装せず、ユーザーの本物の vim/neovim を呼ぶ |
+| INSERT は対話的入力に特化 | 内蔵エディタの完成度を競わない |
+| NORMAL キーバインドはオーケストレーション操作 | `d` = Discuss, `s` = Solo, `e` = Ensemble（vim の delete/substitute ではない） |
+
+他のツールとの差別化:
+
+| ツール | テキスト入力 | 本業 |
+|--------|-------------|------|
+| Claude Code | 内蔵エディタ | 会話 |
+| OpenCode | 内蔵 vim 風 | 会話 |
+| **copilot-quorum** | **$EDITOR 委譲** | **オーケストレーション** |
+
+#### Input Granularity Model / 入力粒度モデル
+
+LLM への入力を **3 つのニーズ粒度** に分類し、それぞれを **vim の自然な操作** にマッピングします。
+
+```
+操作コスト:  低 ──────────────────────────────── 高
+
+             :ask            i (INSERT)       I ($EDITOR)
+             ↓               ↓                ↓
+ニーズ:      一言で済む       対話的            複雑なプロンプト
+             "Fix the bug"   応答を見ながら    システム設計の依頼
+                             追加質問          コード片を含む指示
+```
+
+| キー | モード | 用途 | vim との対応 |
+|------|--------|------|-------------|
+| `:ask <prompt>` | COMMAND | 最速の一言質問。入力して即実行 | `:!command` と同じ即時性 |
+| `i` | INSERT | 応答パネルを見ながらの対話的入力 | `i` = INSERT モードに入る |
+| `I` | $EDITOR | がっつり書く。本物の vim/neovim で編集 | `I` = "大きい" INSERT |
+
+**なぜこの 3 段階か:**
+
+- **`:ask`** — ex コマンドの即時性。`:w` で保存するように `:ask Fix the bug` で質問。INSERT モードへの遷移不要
+- **`i`** — 応答パネルが表示されたまま入力。LLM の出力を参照しながら追加質問や修正指示を出す対話フロー
+- **`I`** — `$EDITOR`（vim/neovim）を子プロセスとして起動。`git commit` が `$EDITOR` を呼ぶのと同じ Unix の伝統的パターン。ユーザーの vim 設定・プラグイン・スニペットが全て使える
+
+#### First-Class COMMAND Mode Commands / COMMAND モードのファーストクラスコマンド
+
+`:ask` と `:discuss` は COMMAND モードのファーストクラスコマンドです。
+「コマンドの種類（何をするか）」と「入力手段（どれくらい書くか）」は直交する 2 軸として設計されています。
+
+```
+                    :command (即時)    i (対話)     I (がっつり)
+                    ─────────────────────────────────────────
+Solo 質問            :ask              i で入力     I で起動
+Quorum Discussion    :discuss          ─            I で起動
+```
+
+`:ask` = Solo Agent 実行、`:discuss` = Quorum Discussion。
+同じ「LLM にテキストを送る」行為でも、vim のモーダル文法で粒度が自然に分かれます。
+
+#### $EDITOR Delegation / $EDITOR 委譲
+
+`I` キーで `$EDITOR` を全画面起動します。`git commit` が `$EDITOR` を呼ぶのと同じパターンです。
+
+```
+[NORMAL] ← ホームポジション
+    │
+    I → $EDITOR 起動 → プロンプトを書く → :wq で送信 / :q! でキャンセル
+    │
+    ▼
+[NORMAL] に戻る（応答表示後）
+```
+
+起動時にコンテキスト情報をコメント行で表示:
+
+```
+# --- Quorum Prompt ---
+# Mode: Ensemble | Strategy: Quorum
+# Buffers: src/auth.rs, README.md
+#
+# Write your prompt below. Lines starting with # are ignored.
+# :wq to send, :q! to cancel
+# ---------------------
+
+```
+
+この設計により:
+- **実装コスト**: エディタ再実装不要（子プロセス起動のみ）
+- **ユーザー体験**: 使い慣れた本物のエディタでプロンプトを書ける
+- **責務分離**: copilot-quorum はオーケストレーションに全力集中
+
+#### Modal Architecture / モーダルアーキテクチャ
+
+```
+┌───────────┐    Esc    ┌───────────┐    :     ┌──────────────┐
+│  INSERT   │ ────────► │  NORMAL   │ ──────► │   COMMAND    │
+│           │ ◄──────── │           │ ◄────── │              │
+└───────────┘   i / a   └───────────┘   Esc   └──────────────┘
+                              │
+                              │ v (将来)
+                              ▼
+                        ┌───────────┐
+                        │  VISUAL   │
+                        └───────────┘
+```
+
+VISUAL モードは Phase 2 以降。Normal + Insert + Command で十分な初期体験を提供した後に追加。
+
 ---
 
 ## Layer Structure / レイヤー構成
