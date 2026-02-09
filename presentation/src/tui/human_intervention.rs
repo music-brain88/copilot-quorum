@@ -209,4 +209,103 @@ impl HumanInterventionPort for TuiHumanIntervention {
             }
         }
     }
+
+    async fn request_execution_confirmation(
+        &self,
+        _request: &str,
+        plan: &Plan,
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        // Update state
+        {
+            let mut state = self.state.lock().unwrap();
+            state.set_mode(TuiMode::HumanIntervention);
+            state.emit(TuiEvent::HumanInterventionPrompt {
+                request: "Execution confirmation".to_string(),
+                objective: plan.objective.clone(),
+                tasks: plan
+                    .tasks
+                    .iter()
+                    .map(|t| t.description.clone())
+                    .collect(),
+                review_count: 0,
+            });
+        }
+
+        println!();
+        println!(
+            "{}",
+            "═══════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "  🚀 Ready to Execute Plan".cyan().bold()
+        );
+        println!(
+            "{}",
+            "═══════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
+        println!();
+
+        println!("{}", "Plan Objective:".cyan().bold());
+        println!("  {}", plan.objective);
+        println!();
+
+        if !plan.tasks.is_empty() {
+            println!("{}", "Tasks to execute:".cyan().bold());
+            for (i, task) in plan.tasks.iter().enumerate() {
+                let risk = if task.requires_review { " ⚠️" } else { "" };
+                println!("  {}. {}{}", i + 1, task.description, risk);
+            }
+            println!();
+        }
+
+        println!("{}", "Commands:".cyan().bold());
+        println!("  {}  - Execute this plan", "/approve".green());
+        println!("  {}   - Cancel execution (keep plan)", "/reject".red());
+        println!();
+
+        loop {
+            let input = self.read_command()?;
+
+            match input.to_lowercase().as_str() {
+                "/approve" | "approve" | "a" | "y" | "yes" => {
+                    {
+                        let mut state = self.state.lock().unwrap();
+                        state.emit(TuiEvent::HumanDecision {
+                            decision: "approve_execution".to_string(),
+                        });
+                        state.set_mode(TuiMode::Normal);
+                    }
+
+                    println!();
+                    println!("{}", "✓ Execution approved".green());
+                    return Ok(HumanDecision::Approve);
+                }
+                "/reject" | "reject" | "r" | "n" | "no" | "q" => {
+                    {
+                        let mut state = self.state.lock().unwrap();
+                        state.emit(TuiEvent::HumanDecision {
+                            decision: "reject_execution".to_string(),
+                        });
+                        state.set_mode(TuiMode::Normal);
+                    }
+
+                    println!();
+                    println!("{}", "✗ Execution cancelled".yellow());
+                    return Ok(HumanDecision::Reject);
+                }
+                "" => continue,
+                _ => {
+                    println!();
+                    println!("{} Unknown command: {}", "⚠️".yellow(), input.red());
+                    println!("Available commands: /approve, /reject");
+                    println!();
+                }
+            }
+        }
+    }
 }

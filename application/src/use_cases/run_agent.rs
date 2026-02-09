@@ -1,12 +1,17 @@
 //! Run Agent use case
 //!
-//! Orchestrates the agent execution flow with quorum integration:
-//! 1. Context Gathering - Understand the project
-//! 2. Planning - Create a task plan (single model)
-//! 3. Plan Review - Quorum reviews the plan (REQUIRED)
-//! 4. Executing - Execute tasks using tools
-//!    - Action Review - Quorum reviews high-risk operations
-//! 5. Final Review - Quorum reviews results (optional)
+//! Orchestrates the agent execution flow with quorum integration.
+//! Phases are controlled by [`PhaseScope`](quorum_domain::PhaseScope):
+//!
+//! | Phase                    | Full | Fast  | PlanOnly    |
+//! |--------------------------|------|-------|-------------|
+//! | 1. Context Gathering     | yes  | yes   | yes         |
+//! | 2. Planning              | yes  | yes   | yes         |
+//! | 3. Plan Review (Quorum)  | yes  | skip  | skip        |
+//! | 3b. Execution Confirm    | yes  | skip  | skip        |
+//! | 4. Executing             | yes  | yes   | skip+return |
+//! |    - Action Review       | yes  | skip  | N/A         |
+//! | 5. Final Review          | opt  | skip  | N/A         |
 
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
@@ -272,6 +277,11 @@ pub trait AgentProgressNotifier: Send + Sync {
         _max_revisions: usize,
     ) {
     }
+
+    /// Called when execution confirmation is required before task execution.
+    ///
+    /// Only triggered when `PhaseScope::Full` is active.
+    fn on_execution_confirmation_required(&self, _request: &str, _plan: &Plan) {}
 
     // ==================== Ensemble Planning Callbacks ====================
 
@@ -695,7 +705,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             state.set_plan(plan);
 
-            // Phase 3: Plan Review (Quorum) - REQUIRED for Solo mode
+            // Phase 3: Plan Review (Quorum) - controlled by PhaseScope
+            if !input.config.phase_scope.includes_plan_review() {
+                // Skip plan review (Fast/PlanOnly) — auto-approve
+                state.approve_plan();
+                state.add_thought(Thought::observation(format!(
+                    "Plan review skipped (scope: {})",
+                    input.config.phase_scope
+                )));
+                break;
+            }
+
             progress.on_phase_change(&AgentPhase::PlanReview);
             state.set_phase(AgentPhase::PlanReview);
 
@@ -803,6 +823,45 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             );
         }
 
+        // ==================== PlanOnly Early Return ====================
+        if !input.config.phase_scope.includes_execution() {
+            let plan_summary = state
+                .plan
+                .as_ref()
+                .map(|p| p.objective.clone())
+                .unwrap_or_default();
+            state.complete();
+            info!("PlanOnly scope: skipping execution, returning plan");
+            return Ok(RunAgentOutput {
+                summary: format!("Plan created (plan-only mode): {}", plan_summary),
+                success: true,
+                state,
+            });
+        }
+
+        // ==================== Execution Confirmation Gate ====================
+        if input.config.phase_scope.requires_execution_confirmation() {
+            let decision = self
+                .handle_execution_confirmation(&input, &state, progress)
+                .await?;
+            match decision {
+                HumanDecision::Approve => {
+                    info!("Execution confirmation: approved");
+                }
+                _ => {
+                    // Reject or Edit — stop execution gracefully
+                    info!("Execution confirmation: rejected, stopping");
+                    state.complete();
+                    return Ok(RunAgentOutput {
+                        summary: "Plan approved but not executed (user declined execution)"
+                            .to_string(),
+                        success: true,
+                        state,
+                    });
+                }
+            }
+        }
+
         // ==================== Phase 4: Task Execution ====================
         // Model selection is now dynamic based on tool risk level:
         // - Low-risk tools (read_file, glob_search, grep_search): exploration_model
@@ -826,8 +885,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
         };
 
-        // Phase 5: Final Review (optional)
-        if input.config.require_final_review {
+        // Phase 5: Final Review (optional, requires action review scope)
+        if input.config.require_final_review && input.config.phase_scope.includes_action_review() {
             progress.on_phase_change(&AgentPhase::FinalReview);
             state.set_phase(AgentPhase::FinalReview);
 
@@ -1781,6 +1840,53 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
+    /// Handle execution confirmation gate (PhaseScope::Full only)
+    ///
+    /// This is the "are you sure?" gate between plan approval and task execution.
+    /// The decision source depends on `HilMode`:
+    /// - `Interactive` → `HumanInterventionPort::request_execution_confirmation()`
+    /// - `AutoApprove` → automatically approve
+    /// - `AutoReject` → automatically reject (plan created but not executed)
+    async fn handle_execution_confirmation(
+        &self,
+        input: &RunAgentInput,
+        state: &AgentState,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<HumanDecision, RunAgentError> {
+        let plan = state
+            .plan
+            .as_ref()
+            .ok_or_else(|| RunAgentError::PlanningFailed("No plan available".to_string()))?;
+
+        progress.on_execution_confirmation_required(&input.request, plan);
+
+        match input.config.hil_mode {
+            HilMode::AutoApprove => {
+                info!("Execution confirmation auto-approved (HilMode::AutoApprove)");
+                Ok(HumanDecision::Approve)
+            }
+            HilMode::AutoReject => {
+                info!("Execution confirmation auto-rejected (HilMode::AutoReject)");
+                Ok(HumanDecision::Reject)
+            }
+            HilMode::Interactive => {
+                if let Some(ref intervention) = self.human_intervention {
+                    intervention
+                        .request_execution_confirmation(&input.request, plan)
+                        .await
+                        .map_err(|e| match e {
+                            HumanInterventionError::Cancelled => RunAgentError::Cancelled,
+                            _ => RunAgentError::HumanInterventionFailed(e.to_string()),
+                        })
+                } else {
+                    // No intervention handler → auto-approve (backwards compatible)
+                    info!("No intervention handler for execution confirmation, auto-approving");
+                    Ok(HumanDecision::Approve)
+                }
+            }
+        }
+    }
+
     /// Check if a tool is high-risk (requires quorum review)
     fn is_high_risk_tool(&self, tool_name: &str) -> bool {
         if let Some(definition) = self.tool_executor.get_tool(tool_name) {
@@ -2400,5 +2506,613 @@ Here is my evaluation:
         let error = RunAgentError::EnsemblePlanningFailed("test error".to_string());
         assert_eq!(error.to_string(), "Ensemble planning failed: test error");
         assert!(!error.is_cancelled());
+    }
+
+    // ==================== Flow Test Infrastructure ====================
+
+    use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
+    use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
+    use crate::ports::tool_executor::ToolExecutorPort;
+    use async_trait::async_trait;
+    use quorum_domain::session::response::LlmResponse;
+    use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
+    use quorum_domain::tool::value_objects::ToolResult;
+    use quorum_domain::{ConsensusLevel, PhaseScope};
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::{Arc, Mutex};
+
+    /// A scripted response for the mock session
+    #[derive(Debug, Clone)]
+    enum ScriptedResponse {
+        /// Plain text response (for send() / send_streaming())
+        Text(String),
+        /// Structured LlmResponse (for send_with_tools() / send_tool_results())
+        Response(LlmResponse),
+        /// Return an error
+        Error(String),
+    }
+
+    /// Mock session that returns scripted responses in order
+    struct ScriptedSession {
+        model: Model,
+        responses: Mutex<VecDeque<ScriptedResponse>>,
+    }
+
+    impl ScriptedSession {
+        fn new(model: Model, responses: Vec<ScriptedResponse>) -> Self {
+            Self {
+                model,
+                responses: Mutex::new(responses.into()),
+            }
+        }
+
+        fn next_response(&self) -> ScriptedResponse {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(ScriptedResponse::Text("(no more responses)".to_string()))
+        }
+    }
+
+    #[async_trait]
+    impl LlmSession for ScriptedSession {
+        fn model(&self) -> &Model {
+            &self.model
+        }
+
+        async fn send(&self, _content: &str) -> Result<String, GatewayError> {
+            match self.next_response() {
+                ScriptedResponse::Text(t) => Ok(t),
+                ScriptedResponse::Response(r) => Ok(r.text_content()),
+                ScriptedResponse::Error(e) => Err(GatewayError::RequestFailed(e)),
+            }
+        }
+
+        async fn send_with_tools(
+            &self,
+            _content: &str,
+            _tools: &[serde_json::Value],
+        ) -> Result<LlmResponse, GatewayError> {
+            match self.next_response() {
+                ScriptedResponse::Text(t) => Ok(LlmResponse::from_text(t)),
+                ScriptedResponse::Response(r) => Ok(r),
+                ScriptedResponse::Error(e) => Err(GatewayError::RequestFailed(e)),
+            }
+        }
+
+        async fn send_tool_results(
+            &self,
+            _results: &[ToolResultMessage],
+        ) -> Result<LlmResponse, GatewayError> {
+            match self.next_response() {
+                ScriptedResponse::Text(t) => Ok(LlmResponse::from_text(t)),
+                ScriptedResponse::Response(r) => Ok(r),
+                ScriptedResponse::Error(e) => Err(GatewayError::RequestFailed(e)),
+            }
+        }
+    }
+
+    /// Mock gateway that creates ScriptedSessions based on model matching
+    struct ScriptedGateway {
+        /// Sessions keyed by model name — each key maps to a queue of response sets
+        session_queues: Mutex<HashMap<String, VecDeque<Vec<ScriptedResponse>>>>,
+        /// Fallback responses for any model not explicitly configured
+        fallback_responses: Mutex<VecDeque<Vec<ScriptedResponse>>>,
+        /// Track which sessions were created (for test assertions)
+        created_sessions: Mutex<Vec<String>>,
+    }
+
+    impl ScriptedGateway {
+        fn new() -> Self {
+            Self {
+                session_queues: Mutex::new(HashMap::new()),
+                fallback_responses: Mutex::new(VecDeque::new()),
+                created_sessions: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// Add a session script for a specific model
+        fn add_session(&mut self, model: &str, responses: Vec<ScriptedResponse>) {
+            self.session_queues
+                .lock()
+                .unwrap()
+                .entry(model.to_string())
+                .or_default()
+                .push_back(responses);
+        }
+
+        /// Add a fallback session script (used when no model-specific session exists)
+        fn add_fallback_session(&mut self, responses: Vec<ScriptedResponse>) {
+            self.fallback_responses
+                .lock()
+                .unwrap()
+                .push_back(responses);
+        }
+
+        fn get_session_responses(&self, model: &str) -> Vec<ScriptedResponse> {
+            // Try model-specific queue first
+            if let Some(queue) = self.session_queues.lock().unwrap().get_mut(model) {
+                if let Some(responses) = queue.pop_front() {
+                    return responses;
+                }
+            }
+            // Try fallback
+            if let Some(responses) = self.fallback_responses.lock().unwrap().pop_front() {
+                return responses;
+            }
+            // Default: return a simple text response
+            vec![ScriptedResponse::Text("(default response)".to_string())]
+        }
+    }
+
+    #[async_trait]
+    impl LlmGateway for ScriptedGateway {
+        async fn create_session(&self, model: &Model) -> Result<Box<dyn LlmSession>, GatewayError> {
+            let model_str = model.to_string();
+            self.created_sessions
+                .lock()
+                .unwrap()
+                .push(model_str.clone());
+            let responses = self.get_session_responses(&model_str);
+            Ok(Box::new(ScriptedSession::new(model.clone(), responses)))
+        }
+
+        async fn create_session_with_system_prompt(
+            &self,
+            model: &Model,
+            _system_prompt: &str,
+        ) -> Result<Box<dyn LlmSession>, GatewayError> {
+            self.create_session(model).await
+        }
+
+        async fn available_models(&self) -> Result<Vec<Model>, GatewayError> {
+            Ok(vec![Model::ClaudeSonnet45])
+        }
+    }
+
+    /// Mock tool executor that records calls and returns success
+    struct MockToolExecutor {
+        spec: ToolSpec,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl MockToolExecutor {
+        fn new() -> Self {
+            let spec = ToolSpec::new()
+                .register(ToolDefinition::new(
+                    "read_file",
+                    "Read a file",
+                    quorum_domain::RiskLevel::Low,
+                ))
+                .register(ToolDefinition::new(
+                    "write_file",
+                    "Write a file",
+                    quorum_domain::RiskLevel::High,
+                ));
+            Self {
+                spec,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolExecutorPort for MockToolExecutor {
+        fn tool_spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        async fn execute(&self, call: &ToolCall) -> ToolResult {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(call.tool_name.clone());
+            ToolResult::success(&call.tool_name, "ok")
+        }
+
+        fn execute_sync(&self, call: &ToolCall) -> ToolResult {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(call.tool_name.clone());
+            ToolResult::success(&call.tool_name, "ok")
+        }
+    }
+
+    /// Mock HumanIntervention that returns a pre-configured decision
+    struct MockHumanIntervention {
+        intervention_decision: Mutex<HumanDecision>,
+        execution_confirmation_decision: Mutex<HumanDecision>,
+        /// Track how many times each method was called
+        intervention_calls: Mutex<usize>,
+        execution_confirmation_calls: Mutex<usize>,
+    }
+
+    impl MockHumanIntervention {
+        fn with_execution_confirmation(decision: HumanDecision) -> Self {
+            Self {
+                intervention_decision: Mutex::new(HumanDecision::Approve),
+                execution_confirmation_decision: Mutex::new(decision),
+                intervention_calls: Mutex::new(0),
+                execution_confirmation_calls: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl HumanInterventionPort for MockHumanIntervention {
+        async fn request_intervention(
+            &self,
+            _request: &str,
+            _plan: &Plan,
+            _review_history: &[ReviewRound],
+        ) -> Result<HumanDecision, HumanInterventionError> {
+            *self.intervention_calls.lock().unwrap() += 1;
+            Ok(self.intervention_decision.lock().unwrap().clone())
+        }
+
+        async fn request_execution_confirmation(
+            &self,
+            _request: &str,
+            _plan: &Plan,
+        ) -> Result<HumanDecision, HumanInterventionError> {
+            *self.execution_confirmation_calls.lock().unwrap() += 1;
+            Ok(self.execution_confirmation_decision.lock().unwrap().clone())
+        }
+    }
+
+    /// Tracking progress notifier that records phase transitions
+    struct TrackingProgress {
+        phases: Mutex<Vec<AgentPhase>>,
+        execution_confirmation_count: Mutex<usize>,
+    }
+
+    impl TrackingProgress {
+        fn new() -> Self {
+            Self {
+                phases: Mutex::new(Vec::new()),
+                execution_confirmation_count: Mutex::new(0),
+            }
+        }
+
+        fn phases(&self) -> Vec<AgentPhase> {
+            self.phases.lock().unwrap().clone()
+        }
+
+        fn has_phase(&self, phase: &AgentPhase) -> bool {
+            self.phases.lock().unwrap().contains(phase)
+        }
+
+        fn execution_confirmation_count(&self) -> usize {
+            *self.execution_confirmation_count.lock().unwrap()
+        }
+    }
+
+    impl AgentProgressNotifier for TrackingProgress {
+        fn on_phase_change(&self, phase: &AgentPhase) {
+            self.phases.lock().unwrap().push(phase.clone());
+        }
+
+        fn on_execution_confirmation_required(&self, _request: &str, _plan: &Plan) {
+            *self.execution_confirmation_count.lock().unwrap() += 1;
+        }
+    }
+
+    /// Helper to create a plan JSON that the planner will return
+    fn make_plan_response(objective: &str) -> String {
+        format!(
+            r#"```plan
+{{
+  "objective": "{}",
+  "reasoning": "test reasoning",
+  "tasks": [
+    {{
+      "id": "1",
+      "description": "Read file",
+      "tool": "read_file",
+      "args": {{"path": "test.txt"}},
+      "depends_on": []
+    }}
+  ]
+}}
+```"#,
+            objective
+        )
+    }
+
+    /// Helper to create an "APPROVE" review response
+    fn approve_response() -> String {
+        "I APPROVE this plan. It looks good.".to_string()
+    }
+
+    /// Helper to create a "REJECT" review response
+    fn reject_response() -> String {
+        "I REJECT this plan. It needs changes.".to_string()
+    }
+
+    /// Builder for configuring and executing flow tests
+    struct FlowTestBuilder {
+        config: AgentConfig,
+        gateway: ScriptedGateway,
+        tool_executor: MockToolExecutor,
+        human_intervention: Option<Arc<dyn HumanInterventionPort>>,
+    }
+
+    impl FlowTestBuilder {
+        /// Solo + Full minimal configuration
+        fn solo_full() -> Self {
+            let config = AgentConfig {
+                exploration_model: Model::ClaudeHaiku45,
+                decision_model: Model::ClaudeSonnet45,
+                review_models: vec![Model::ClaudeSonnet45],
+                consensus_level: ConsensusLevel::Solo,
+                phase_scope: PhaseScope::Full,
+                require_plan_review: true,
+                require_final_review: false,
+                max_iterations: 50,
+                working_dir: None,
+                max_tool_retries: 2,
+                max_plan_revisions: 3,
+                hil_mode: HilMode::Interactive,
+                max_tool_turns: 3,
+                orchestration_strategy: Default::default(),
+            };
+            let mut gateway = ScriptedGateway::new();
+
+            // Context gathering session (exploration model) - ends immediately
+            gateway.add_session(
+                &Model::ClaudeHaiku45.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Context gathered",
+                ))],
+            );
+
+            // Planning session (decision model) - returns a plan
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![ScriptedResponse::Text(make_plan_response("Test plan"))],
+            );
+
+            // Plan review session (review model) - APPROVE
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![ScriptedResponse::Text(approve_response())],
+            );
+
+            // Execution session (decision model) - simple completion
+            gateway.add_session(
+                &Model::ClaudeSonnet45.to_string(),
+                vec![ScriptedResponse::Response(LlmResponse::from_text(
+                    "Task completed successfully",
+                ))],
+            );
+
+            Self {
+                config,
+                gateway,
+                tool_executor: MockToolExecutor::new(),
+                human_intervention: None,
+            }
+        }
+
+        /// Solo + PlanOnly minimal configuration
+        fn solo_plan_only() -> Self {
+            let mut builder = Self::solo_full();
+            builder.config.phase_scope = PhaseScope::PlanOnly;
+            builder
+        }
+
+        /// Solo + Fast minimal configuration
+        fn solo_fast() -> Self {
+            let mut builder = Self::solo_full();
+            builder.config.phase_scope = PhaseScope::Fast;
+            // Fast skips plan review, so remove the review session
+            // and ensure execution session is available
+            builder
+        }
+
+        fn with_phase_scope(mut self, scope: PhaseScope) -> Self {
+            self.config.phase_scope = scope;
+            self
+        }
+
+        fn with_human_intervention(mut self, intervention: Arc<dyn HumanInterventionPort>) -> Self {
+            self.human_intervention = Some(intervention);
+            self
+        }
+
+        fn with_hil_mode(mut self, mode: HilMode) -> Self {
+            self.config.hil_mode = mode;
+            self
+        }
+
+        async fn execute(self) -> (Result<RunAgentOutput, RunAgentError>, TrackingProgress) {
+            let progress = TrackingProgress::new();
+            let gateway = Arc::new(self.gateway);
+            let executor = Arc::new(self.tool_executor);
+
+            let mut use_case = RunAgentUseCase::new(gateway, executor);
+
+            if let Some(intervention) = self.human_intervention {
+                use_case = use_case.with_human_intervention(intervention);
+            }
+
+            let input = RunAgentInput::new("Test request", self.config);
+            let result = use_case.execute_with_progress(input, &progress).await;
+
+            (result, progress)
+        }
+    }
+
+    // ==================== Flow Tests ====================
+
+    #[tokio::test]
+    async fn test_solo_full_flow_happy_path() {
+        let (result, progress) = FlowTestBuilder::solo_full().execute().await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+        assert_eq!(output.state.phase, AgentPhase::Completed);
+
+        // Verify expected phase transitions
+        assert!(progress.has_phase(&AgentPhase::ContextGathering));
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        assert!(progress.has_phase(&AgentPhase::PlanReview));
+        assert!(progress.has_phase(&AgentPhase::Executing));
+    }
+
+    #[tokio::test]
+    async fn test_plan_only_skips_execution() {
+        let (result, progress) = FlowTestBuilder::solo_plan_only().execute().await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+        assert!(output.summary.contains("plan-only"));
+        assert!(output.state.plan.is_some());
+        assert_eq!(output.state.phase, AgentPhase::Completed);
+
+        // Plan is created but execution never happens
+        assert!(progress.has_phase(&AgentPhase::ContextGathering));
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        // PlanOnly skips both plan review and execution
+        assert!(!progress.has_phase(&AgentPhase::PlanReview));
+        assert!(!progress.has_phase(&AgentPhase::Executing));
+    }
+
+    #[tokio::test]
+    async fn test_fast_skips_plan_review() {
+        let (result, progress) = FlowTestBuilder::solo_fast().execute().await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+        assert_eq!(output.state.phase, AgentPhase::Completed);
+
+        // Fast mode: planning happens, review is skipped, execution proceeds
+        assert!(progress.has_phase(&AgentPhase::ContextGathering));
+        assert!(progress.has_phase(&AgentPhase::Planning));
+        assert!(!progress.has_phase(&AgentPhase::PlanReview));
+        assert!(progress.has_phase(&AgentPhase::Executing));
+    }
+
+    #[tokio::test]
+    async fn test_full_includes_plan_review() {
+        let (result, progress) = FlowTestBuilder::solo_full().execute().await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+
+        // Full mode includes plan review
+        assert!(progress.has_phase(&AgentPhase::PlanReview));
+    }
+
+    #[tokio::test]
+    async fn test_full_execution_confirmation_reject_stops() {
+        let mock_hil = Arc::new(MockHumanIntervention::with_execution_confirmation(
+            HumanDecision::Reject,
+        ));
+
+        let (result, progress) = FlowTestBuilder::solo_full()
+            .with_human_intervention(mock_hil.clone())
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed (graceful stop, not error)");
+        assert!(output.success);
+        assert!(output.summary.contains("not executed"));
+
+        // Plan review happened but execution did not
+        assert!(progress.has_phase(&AgentPhase::PlanReview));
+        assert!(!progress.has_phase(&AgentPhase::Executing));
+        assert_eq!(output.state.phase, AgentPhase::Completed);
+
+        // Execution confirmation was called
+        assert_eq!(*mock_hil.execution_confirmation_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_full_execution_confirmation_approve_continues() {
+        let mock_hil = Arc::new(MockHumanIntervention::with_execution_confirmation(
+            HumanDecision::Approve,
+        ));
+
+        let (result, progress) = FlowTestBuilder::solo_full()
+            .with_human_intervention(mock_hil.clone())
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+
+        // Both plan review and execution happened
+        assert!(progress.has_phase(&AgentPhase::PlanReview));
+        assert!(progress.has_phase(&AgentPhase::Executing));
+
+        // Execution confirmation was called
+        assert_eq!(*mock_hil.execution_confirmation_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fast_skips_execution_confirmation() {
+        let mock_hil = Arc::new(MockHumanIntervention::with_execution_confirmation(
+            HumanDecision::Reject, // Would reject if called
+        ));
+
+        let (result, _progress) = FlowTestBuilder::solo_fast()
+            .with_human_intervention(mock_hil.clone())
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+
+        // Fast mode never calls execution confirmation
+        assert_eq!(*mock_hil.execution_confirmation_calls.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_plan_only_skips_execution_confirmation() {
+        let mock_hil = Arc::new(MockHumanIntervention::with_execution_confirmation(
+            HumanDecision::Reject,
+        ));
+
+        let (result, _progress) = FlowTestBuilder::solo_plan_only()
+            .with_human_intervention(mock_hil.clone())
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+
+        // PlanOnly never calls execution confirmation
+        assert_eq!(*mock_hil.execution_confirmation_calls.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_hil_auto_approve_skips_execution_confirmation_prompt() {
+        // With auto_approve hil_mode, execution confirmation should auto-approve
+        let (result, _progress) = FlowTestBuilder::solo_full()
+            .with_hil_mode(HilMode::AutoApprove)
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed");
+        assert!(output.success);
+        assert!(output.state.phase == AgentPhase::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_hil_auto_reject_stops_at_execution_confirmation() {
+        let (result, progress) = FlowTestBuilder::solo_full()
+            .with_hil_mode(HilMode::AutoReject)
+            .execute()
+            .await;
+
+        let output = result.expect("should succeed (graceful stop)");
+        assert!(output.success);
+        assert!(output.summary.contains("not executed"));
+
+        // Execution phase was never entered
+        assert!(!progress.has_phase(&AgentPhase::Executing));
     }
 }

@@ -512,6 +512,14 @@ impl AgentProgressNotifier for TuiProgressReporter {
         );
     }
 
+    fn on_execution_confirmation_required(&self, _request: &str, _plan: &quorum_domain::Plan) {
+        {
+            let mut state = self.state.lock().unwrap();
+            state.emit(TuiEvent::HumanInterventionRequired { max_revisions: 0 });
+        }
+        self.finish_current_phase();
+    }
+
     fn on_ensemble_start(&self, model_count: usize) {
         let pb = self.multi.add(ProgressBar::new(model_count as u64));
         pb.set_style(Self::quorum_style());

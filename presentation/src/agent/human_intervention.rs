@@ -226,4 +226,71 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
             }
         }
     }
+
+    async fn request_execution_confirmation(
+        &self,
+        _request: &str,
+        plan: &Plan,
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        println!();
+        println!(
+            "{}",
+            "═══════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "  🚀 Ready to Execute Plan".cyan().bold()
+        );
+        println!(
+            "{}",
+            "═══════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
+        println!();
+
+        println!("{}", "Plan Objective:".cyan().bold());
+        println!("  {}", plan.objective);
+        println!();
+
+        if !plan.tasks.is_empty() {
+            println!("{}", "Tasks to execute:".cyan().bold());
+            for (i, task) in plan.tasks.iter().enumerate() {
+                let risk = if task.requires_review { " ⚠️" } else { "" };
+                println!("  {}. {}{}", i + 1, task.description, risk);
+            }
+            println!();
+        }
+
+        println!("{}", "Commands:".cyan().bold());
+        println!("  {}  - Execute this plan", "/approve".green());
+        println!("  {}   - Cancel execution (keep plan)", "/reject".red());
+        println!();
+
+        loop {
+            let input = self.read_command()?;
+
+            match input.to_lowercase().as_str() {
+                "/approve" | "approve" | "a" | "y" | "yes" => {
+                    println!();
+                    println!("{}", "✓ Execution approved".green());
+                    return Ok(HumanDecision::Approve);
+                }
+                "/reject" | "reject" | "r" | "n" | "no" | "q" => {
+                    println!();
+                    println!("{}", "✗ Execution cancelled".yellow());
+                    return Ok(HumanDecision::Reject);
+                }
+                "" => continue,
+                _ => {
+                    println!();
+                    println!("{} Unknown command: {}", "⚠️".yellow(), input.red());
+                    println!("Available commands: /approve, /reject");
+                    println!();
+                }
+            }
+        }
+    }
 }
