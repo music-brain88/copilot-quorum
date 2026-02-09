@@ -56,6 +56,10 @@ pub enum CopilotError {
     /// Error during tool call processing.
     #[error("Tool call error: {0}")]
     ToolCallError(String),
+
+    /// The message router background task has stopped.
+    #[error("Message router stopped")]
+    RouterStopped,
 }
 
 impl CopilotError {
