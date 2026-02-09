@@ -2996,10 +2996,7 @@ Here is my evaluation:
             );
 
             // Custom planning session
-            gateway.add_session(
-                &self.config.decision_model.to_string(),
-                vec![response],
-            );
+            gateway.add_session(&self.config.decision_model.to_string(), vec![response]);
 
             self.gateway = gateway;
             self
