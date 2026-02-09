@@ -1037,10 +1037,7 @@ required = true
 
         let gh = config.tools.custom.get("gh_create_issue").unwrap();
         assert_eq!(gh.description, "Create a GitHub issue");
-        assert_eq!(
-            gh.command,
-            "gh issue create --title {title} --body {body}"
-        );
+        assert_eq!(gh.command, "gh issue create --title {title} --body {body}");
         assert_eq!(gh.risk_level, "high");
         assert_eq!(gh.parameters.len(), 2);
 

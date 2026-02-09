@@ -1029,9 +1029,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             context = context.with_project_type("rust");
                         } else if output.contains("package.json") {
                             context = context.with_project_type("nodejs");
-                        } else if output.contains("pyproject.toml")
-                            || output.contains("setup.py")
-                        {
+                        } else if output.contains("pyproject.toml") || output.contains("setup.py") {
                             context = context.with_project_type("python");
                         }
                     }
@@ -1607,10 +1605,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             if !low_risk_calls.is_empty() {
                 let mut futures = Vec::new();
                 for call in &low_risk_calls {
-                    progress.on_tool_call(
-                        &call.tool_name,
-                        &format!("{:?}", call.arguments),
-                    );
+                    progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
                     futures.push(self.tool_executor.execute(call));
                 }
 
@@ -1681,10 +1676,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     }
                 }
 
-                progress.on_tool_call(
-                    &call.tool_name,
-                    &format!("{:?}", call.arguments),
-                );
+                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
 
                 let result = self.tool_executor.execute(call).await;
                 let is_error = !result.is_success();
@@ -2411,5 +2403,4 @@ Here is my evaluation:
         assert_eq!(error.to_string(), "Ensemble planning failed: test error");
         assert!(!error.is_cancelled());
     }
-
 }

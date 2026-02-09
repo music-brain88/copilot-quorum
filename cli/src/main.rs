@@ -138,10 +138,7 @@ async fn main() -> Result<()> {
     // Register custom tools from config
     if !config.tools.custom.is_empty() {
         tool_executor = tool_executor.with_custom_tools(&config.tools.custom);
-        info!(
-            "Registered {} custom tool(s)",
-            config.tools.custom.len()
-        );
+        info!("Registered {} custom tool(s)", config.tools.custom.len());
     }
     let tool_executor = Arc::new(tool_executor);
 

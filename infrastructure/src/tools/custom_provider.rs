@@ -143,8 +143,8 @@ impl CustomToolProvider {
                 let mut is_placeholder = false;
                 for c in chars.by_ref() {
                     if c == '}' {
-                        is_placeholder =
-                            !placeholder.is_empty() && placeholder.chars().all(|c| c.is_alphanumeric() || c == '_');
+                        is_placeholder = !placeholder.is_empty()
+                            && placeholder.chars().all(|c| c.is_alphanumeric() || c == '_');
                         break;
                     }
                     placeholder.push(c);
@@ -404,7 +404,12 @@ mod tests {
         let mut configs = HashMap::new();
         configs.insert(
             "risky".to_string(),
-            make_config("Risky tool", "rm {path}", "high", vec![("path", "Path", true)]),
+            make_config(
+                "Risky tool",
+                "rm {path}",
+                "high",
+                vec![("path", "Path", true)],
+            ),
         );
 
         let provider = CustomToolProvider::from_config(&configs);
@@ -467,10 +472,7 @@ mod tests {
         let call = ToolCall::new("gh_issue")
             .with_arg("title", "Bug fix")
             .with_arg("body", "Fixed the bug");
-        let cmd = provider.build_command(
-            "gh issue create --title {title} --body {body}",
-            &call,
-        );
+        let cmd = provider.build_command("gh issue create --title {title} --body {body}", &call);
         assert_eq!(
             cmd,
             "gh issue create --title 'Bug fix' --body 'Fixed the bug'"
@@ -504,10 +506,7 @@ mod tests {
         assert!(!empty.is_available().await);
 
         let mut configs = HashMap::new();
-        configs.insert(
-            "t".to_string(),
-            make_config("T", "echo hi", "low", vec![]),
-        );
+        configs.insert("t".to_string(), make_config("T", "echo hi", "low", vec![]));
         let with_tool = CustomToolProvider::from_config(&configs);
         assert!(with_tool.is_available().await);
     }
