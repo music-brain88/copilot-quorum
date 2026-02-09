@@ -18,7 +18,7 @@ use crate::ports::human_intervention::{HumanInterventionError, HumanIntervention
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::core::string::truncate;
-use quorum_domain::session::response::LlmResponse;
+use quorum_domain::session::response::{ContentBlock, LlmResponse};
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
     HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
@@ -449,6 +449,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     ///
     /// Uses `send_streaming()` to receive incremental chunks, forwarding each
     /// to `progress.on_llm_chunk()` for real-time display.
+    ///
+    /// Note: Currently unused after migrating `create_plan()` to Native Tool Use.
+    /// Kept for future text-only LLM interactions (e.g., plan review, summaries).
+    #[allow(dead_code)]
     async fn send_with_cancellation(
         &self,
         session: &dyn LlmSession,
@@ -1136,7 +1140,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         Ok(context)
     }
 
-    /// Create a plan for the task
+    /// Create a plan for the task using Native Tool Use API.
+    ///
+    /// Sends the `create_plan` virtual tool schema so the LLM returns a
+    /// structured plan via tool use. Falls back to text parsing if the
+    /// provider doesn't support tool use.
     async fn create_plan(
         &self,
         session: &dyn LlmSession,
@@ -1147,9 +1155,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     ) -> Result<Plan, RunAgentError> {
         let prompt =
             AgentPromptTemplate::planning_with_feedback(request, context, previous_feedback);
+        let plan_tool = AgentPromptTemplate::plan_tool_schema();
 
         let response = match self
-            .send_with_cancellation(session, &prompt, progress)
+            .send_with_tools_cancellable(session, &prompt, &[plan_tool], progress)
             .await
         {
             Ok(response) => response,
@@ -1157,8 +1166,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Err(e) => return Err(RunAgentError::PlanningFailed(e.to_string())),
         };
 
-        // Parse the plan from the response
-        parse_plan(&response).ok_or_else(|| {
+        // Extract plan from tool use or fallback to text parsing
+        extract_plan_from_response(&response).ok_or_else(|| {
             RunAgentError::PlanningFailed("Failed to parse plan from model response".to_string())
         })
     }
@@ -1233,6 +1242,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         let prompt =
             AgentPromptTemplate::planning_with_feedback(&input.request, context, previous_feedback);
+        let plan_tool = AgentPromptTemplate::plan_tool_schema();
 
         let mut join_set = JoinSet::new();
 
@@ -1241,13 +1251,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let model = model.clone();
             let prompt = prompt.clone();
             let system_prompt = system_prompt.to_string();
+            let plan_tool = plan_tool.clone();
 
             join_set.spawn(async move {
                 let session = gateway
                     .create_session_with_system_prompt(&model, &system_prompt)
                     .await?;
-                let response = session.send(&prompt).await?;
-                let plan = parse_plan(&response)
+                let response = session.send_with_tools(&prompt, &[plan_tool]).await?;
+                let plan = extract_plan_from_response(&response)
                     .ok_or_else(|| GatewayError::Other("Failed to parse plan".to_string()))?;
                 Ok::<(Model, Plan), GatewayError>((model, plan))
             });
@@ -2306,6 +2317,32 @@ fn parse_vote_score(response: &str) -> f64 {
     5.0
 }
 
+/// Extract a plan from a structured LlmResponse.
+///
+/// 1. First looks for a `create_plan` ToolUse block (Native Tool Use path).
+/// 2. Falls back to text-based `parse_plan()` (for providers that don't support tool use).
+fn extract_plan_from_response(response: &LlmResponse) -> Option<Plan> {
+    // 1. Look for create_plan tool call
+    for block in &response.content {
+        if let ContentBlock::ToolUse { name, input, .. } = block
+            && name == "create_plan"
+        {
+            let json = serde_json::Value::Object(
+                input.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            );
+            return parse_plan_json(&json);
+        }
+    }
+
+    // 2. Fallback: parse from text content (for providers without Native Tool Use)
+    let text = response.text_content();
+    if !text.is_empty() {
+        return parse_plan(&text);
+    }
+
+    None
+}
+
 /// Parse a plan from model response
 fn parse_plan(response: &str) -> Option<Plan> {
     // Look for ```plan ... ``` blocks
@@ -2499,6 +2536,103 @@ Here's my plan:
         );
     }
 
+    // ==================== extract_plan_from_response Tests ====================
+
+    #[test]
+    fn test_extract_plan_from_tool_call() {
+        use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
+        use std::collections::HashMap;
+
+        let mut input = HashMap::new();
+        input.insert("objective".to_string(), serde_json::json!("Fix the bug"));
+        input.insert(
+            "reasoning".to_string(),
+            serde_json::json!("Bug is critical"),
+        );
+        input.insert(
+            "tasks".to_string(),
+            serde_json::json!([
+                {
+                    "id": "1",
+                    "description": "Read the buggy file",
+                    "tool": "read_file",
+                    "args": {"path": "src/main.rs"}
+                },
+                {
+                    "id": "2",
+                    "description": "Fix the bug",
+                    "tool": "write_file",
+                    "args": {"path": "src/main.rs", "content": "fixed"},
+                    "depends_on": ["1"]
+                }
+            ]),
+        );
+
+        let response = LlmResponse {
+            content: vec![
+                ContentBlock::Text("Let me create a plan.".to_string()),
+                ContentBlock::ToolUse {
+                    id: "toolu_abc123".to_string(),
+                    name: "create_plan".to_string(),
+                    input,
+                },
+            ],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        };
+
+        let plan =
+            extract_plan_from_response(&response).expect("should extract plan from tool call");
+        assert_eq!(plan.objective, "Fix the bug");
+        assert_eq!(plan.reasoning, "Bug is critical");
+        assert_eq!(plan.tasks.len(), 2);
+        assert_eq!(plan.tasks[0].tool_name, Some("read_file".to_string()));
+        assert_eq!(plan.tasks[1].depends_on, vec![TaskId::new("1")]);
+    }
+
+    #[test]
+    fn test_extract_plan_from_text_fallback() {
+        // When provider doesn't support tool use, falls back to text parsing
+        let text_plan = r#"```plan
+{
+  "objective": "Update README",
+  "reasoning": "Needs updating",
+  "tasks": [
+    {"id": "1", "description": "Read README", "tool": "read_file"}
+  ]
+}
+```"#;
+        let response = LlmResponse::from_text(text_plan);
+
+        let plan =
+            extract_plan_from_response(&response).expect("should extract plan from text fallback");
+        assert_eq!(plan.objective, "Update README");
+        assert_eq!(plan.tasks.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_plan_from_response_no_plan() {
+        // Neither tool use nor parseable text
+        let response = LlmResponse::from_text("I'll think about this.");
+        assert!(extract_plan_from_response(&response).is_none());
+    }
+
+    #[test]
+    fn test_plan_tool_schema_structure() {
+        let schema = AgentPromptTemplate::plan_tool_schema();
+        assert_eq!(schema["name"], "create_plan");
+        assert!(schema["description"].as_str().unwrap().contains("MUST"));
+        assert_eq!(schema["input_schema"]["type"], "object");
+
+        let required = schema["input_schema"]["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("objective")));
+        assert!(required.contains(&serde_json::json!("reasoning")));
+        assert!(required.contains(&serde_json::json!("tasks")));
+
+        // tasks has minItems: 1
+        assert_eq!(schema["input_schema"]["properties"]["tasks"]["minItems"], 1);
+    }
+
     #[test]
     fn test_run_agent_error_cancelled() {
         let error = RunAgentError::Cancelled;
@@ -2578,7 +2712,7 @@ Here is my evaluation:
     use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
     use crate::ports::tool_executor::ToolExecutorPort;
     use async_trait::async_trait;
-    use quorum_domain::session::response::LlmResponse;
+    use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::tool::value_objects::ToolResult;
     use quorum_domain::{ConsensusLevel, PhaseScope};
@@ -2854,26 +2988,33 @@ Here is my evaluation:
         }
     }
 
-    /// Helper to create a plan JSON that the planner will return
-    fn make_plan_response(objective: &str) -> String {
-        format!(
-            r#"```plan
-{{
-  "objective": "{}",
-  "reasoning": "test reasoning",
-  "tasks": [
-    {{
-      "id": "1",
-      "description": "Read file",
-      "tool": "read_file",
-      "args": {{"path": "test.txt"}},
-      "depends_on": []
-    }}
-  ]
-}}
-```"#,
-            objective
-        )
+    /// Helper to create a plan as a ToolUse LlmResponse (Native Tool Use path)
+    fn make_plan_response(objective: &str) -> ScriptedResponse {
+        let mut input = HashMap::new();
+        input.insert("objective".to_string(), serde_json::json!(objective));
+        input.insert("reasoning".to_string(), serde_json::json!("test reasoning"));
+        input.insert(
+            "tasks".to_string(),
+            serde_json::json!([
+                {
+                    "id": "1",
+                    "description": "Read file",
+                    "tool": "read_file",
+                    "args": {"path": "test.txt"},
+                    "depends_on": []
+                }
+            ]),
+        );
+
+        ScriptedResponse::Response(LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "toolu_plan_001".to_string(),
+                name: "create_plan".to_string(),
+                input,
+            }],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        })
     }
 
     /// Helper to create an "APPROVE" review response
@@ -2926,7 +3067,7 @@ Here is my evaluation:
             // Planning session (decision model) - returns a plan
             gateway.add_session(
                 &Model::ClaudeSonnet45.to_string(),
-                vec![ScriptedResponse::Text(make_plan_response("Test plan"))],
+                vec![make_plan_response("Test plan")],
             );
 
             // Plan review session (review model) - APPROVE
