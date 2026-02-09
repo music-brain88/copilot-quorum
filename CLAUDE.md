@@ -107,8 +107,8 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 
 | Layer | Crate | Description |
 |-------|-------|-------------|
-| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy) |
-| application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort) |
+| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy, LlmResponse, ContentBlock, StopReason) |
+| application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort, ToolMode, ToolResultMessage) |
 | infrastructure | `quorum-infrastructure` | Copilot CLI adapter, LocalToolExecutor (file, command, search tools) |
 | presentation | `quorum-presentation` | CLI commands, ChatRepl, ConsoleFormatter, ProgressReporter |
 | cli | `copilot-quorum` | main.rs with dependency injection |
@@ -132,7 +132,7 @@ domain/src/
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolSpec (with aliases), ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
-├── session/        # Message, LlmSessionRepository
+├── session/        # Message, LlmSessionRepository, LlmResponse, ContentBlock, StopReason
 ├── context/        # ProjectContext, KnownContextFile (/init用)
 └── config/         # OutputFormat
 ```
@@ -201,10 +201,17 @@ The agent system extends quorum to autonomous task execution with safety through
 - High-risk (write/command): Requires quorum review before execution
 
 **Key Components**:
-- `domain/agent/`: AgentState, Plan, Task, AgentConfig
-- `domain/tool/`: ToolDefinition, ToolCall, ToolResult, RiskLevel
-- `application/use_cases/run_agent.rs`: RunAgentUseCase orchestrates the flow
+- `domain/agent/`: AgentState, Plan, Task, AgentConfig (max_tool_turns)
+- `domain/tool/`: ToolDefinition, ToolCall (native_id), ToolResult, RiskLevel
+- `domain/session/response.rs`: LlmResponse, ContentBlock, StopReason
+- `application/use_cases/run_agent.rs`: RunAgentUseCase orchestrates the flow (dual-path: PromptBased / Native)
+- `application/ports/llm_gateway.rs`: LlmSession trait (tool_mode, send_with_tools, send_tool_results)
 - `infrastructure/tools/`: LocalToolExecutor implements ToolExecutorPort
+
+**Native Tool Use**: `LlmSession::tool_mode()` が `Native` を返す場合、構造化 API 経由でツールを呼び出す。
+- ツール定義は `ToolSpec::to_api_tools()` で JSON Schema に変換
+- Multi-turn loop: `send_with_tools()` → ToolUse stop → execute → `send_tool_results()` → repeat
+- Low-risk ツールは `futures::join_all()` で並列実行、High-risk は順次 + Quorum Review
 
 詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照。
 
@@ -218,4 +225,5 @@ The agent system extends quorum to autonomous task execution with safety through
 | [agent-system.md](docs/features/agent-system.md) | Agent System + HiL |
 | [ensemble-mode.md](docs/features/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
 | [tool-system.md](docs/features/tool-system.md) | Tool System（プラグイン、リスク分類） |
+| [native-tool-use.md](docs/features/native-tool-use.md) | Native Tool Use API（構造化ツール呼び出し） |
 | [cli-and-configuration.md](docs/features/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |
