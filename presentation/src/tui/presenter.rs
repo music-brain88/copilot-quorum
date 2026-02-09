@@ -29,6 +29,10 @@ impl TuiPresenter {
             UiEvent::ConfigDisplay(snapshot) => self.handle_config(state, snapshot),
             UiEvent::ModeChanged { level, description } => {
                 state.consensus_level = *level;
+                state.messages.push(DisplayMessage::system(format!(
+                    "Mode changed: {} ({})",
+                    level, description
+                )));
                 self.emit(TuiEvent::ModeChanged {
                     level: *level,
                     description: description.clone(),
@@ -111,8 +115,8 @@ impl TuiPresenter {
         state.model_name = info.decision_model.to_string();
         state.consensus_level = info.consensus_level;
         state.messages.push(DisplayMessage::system(format!(
-            "Welcome! Model: {} | Mode: {}",
-            info.decision_model, info.consensus_level
+            "Welcome! Model: {}",
+            info.decision_model
         )));
         self.emit(TuiEvent::Welcome {
             decision_model: info.decision_model.to_string(),
@@ -246,6 +250,8 @@ mod tests {
         );
         assert_eq!(state.consensus_level, ConsensusLevel::Ensemble);
         assert!(state.flash_message.is_some());
+        assert_eq!(state.messages.len(), 1);
+        assert!(state.messages[0].content.contains("ensemble"));
     }
 
     #[test]
