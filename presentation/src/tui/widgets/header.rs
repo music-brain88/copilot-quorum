@@ -29,10 +29,7 @@ impl<'a> Widget for HeaderWidget<'a> {
         };
 
         let phase_text = if self.state.progress.is_running {
-            self.state
-                .progress
-                .phase_name
-                .as_str()
+            self.state.progress.phase_name.as_str()
         } else {
             "Ready"
         };
@@ -41,15 +38,10 @@ impl<'a> Widget for HeaderWidget<'a> {
             Span::styled("◉ ", Style::default().fg(Color::Green)),
             Span::styled(
                 mode_label,
-                Style::default()
-                    .fg(mode_color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" | "),
-            Span::styled(
-                &self.state.model_name,
-                Style::default().fg(Color::White),
-            ),
+            Span::styled(&self.state.model_name, Style::default().fg(Color::White)),
             Span::raw(" | "),
             Span::styled(phase_text, Style::default().fg(Color::Yellow)),
         ]);

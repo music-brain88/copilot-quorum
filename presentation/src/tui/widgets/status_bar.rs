@@ -24,9 +24,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
         // Fill background
         let bg_style = Style::default().bg(Color::DarkGray).fg(Color::White);
         for x in area.left()..area.right() {
-            buf[(x, area.y)]
-                .set_style(bg_style)
-                .set_char(' ');
+            buf[(x, area.y)].set_style(bg_style).set_char(' ');
         }
 
         let mode = &self.state.mode;
@@ -48,9 +46,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
                 crate::tui::mode::InputMode::Normal => {
                     "i:insert  ::command  j/k:scroll  ?:help  Ctrl+C:quit".into()
                 }
-                crate::tui::mode::InputMode::Insert => {
-                    "Enter:send  Esc:normal  Ctrl+C:quit".into()
-                }
+                crate::tui::mode::InputMode::Insert => "Enter:send  Esc:normal  Ctrl+C:quit".into(),
                 crate::tui::mode::InputMode::Command => {
                     "Enter:execute  Esc:cancel  q:quit  help:commands".into()
                 }

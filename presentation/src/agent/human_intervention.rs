@@ -239,10 +239,7 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
                 .cyan()
                 .bold()
         );
-        println!(
-            "{}",
-            "  🚀 Ready to Execute Plan".cyan().bold()
-        );
+        println!("{}", "  🚀 Ready to Execute Plan".cyan().bold());
         println!(
             "{}",
             "═══════════════════════════════════════════════════════════════"

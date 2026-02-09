@@ -2624,10 +2624,7 @@ Here is my evaluation:
 
         /// Add a fallback session script (used when no model-specific session exists)
         fn add_fallback_session(&mut self, responses: Vec<ScriptedResponse>) {
-            self.fallback_responses
-                .lock()
-                .unwrap()
-                .push_back(responses);
+            self.fallback_responses.lock().unwrap().push_back(responses);
         }
 
         fn get_session_responses(&self, model: &str) -> Vec<ScriptedResponse> {
@@ -2704,18 +2701,12 @@ Here is my evaluation:
         }
 
         async fn execute(&self, call: &ToolCall) -> ToolResult {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(call.tool_name.clone());
+            self.calls.lock().unwrap().push(call.tool_name.clone());
             ToolResult::success(&call.tool_name, "ok")
         }
 
         fn execute_sync(&self, call: &ToolCall) -> ToolResult {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(call.tool_name.clone());
+            self.calls.lock().unwrap().push(call.tool_name.clone());
             ToolResult::success(&call.tool_name, "ok")
         }
     }

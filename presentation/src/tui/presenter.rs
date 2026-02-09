@@ -54,10 +54,7 @@ impl TuiPresenter {
                 state.set_flash("History cleared");
             }
             UiEvent::VerboseStatus { enabled } => {
-                state.set_flash(format!(
-                    "Verbose: {}",
-                    if *enabled { "ON" } else { "OFF" }
-                ));
+                state.set_flash(format!("Verbose: {}", if *enabled { "ON" } else { "OFF" }));
             }
             UiEvent::AgentStarting { mode } => {
                 state.progress.is_running = true;
@@ -150,7 +147,11 @@ impl TuiPresenter {
         state.progress.current_phase = None;
         state.progress.current_tool = None;
 
-        let status = if result.success { "completed" } else { "failed" };
+        let status = if result.success {
+            "completed"
+        } else {
+            "failed"
+        };
         state
             .messages
             .push(DisplayMessage::system(format!("Agent {}", status)));

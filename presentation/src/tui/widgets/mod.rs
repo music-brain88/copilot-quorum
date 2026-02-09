@@ -29,7 +29,7 @@ impl MainLayout {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Header
+                Constraint::Length(3), // Header
                 Constraint::Min(8),    // Main (conversation + progress)
                 Constraint::Length(3), // Input
                 Constraint::Length(1), // Status bar

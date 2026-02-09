@@ -264,7 +264,10 @@ mod tests {
         bridge.on_quorum_model_complete(&Model::ClaudeSonnet45, true);
         bridge.on_quorum_complete("Plan Review", true, Some("LGTM"));
 
-        assert!(matches!(rx.try_recv().unwrap(), TuiEvent::QuorumStart { .. }));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            TuiEvent::QuorumStart { .. }
+        ));
         assert!(matches!(
             rx.try_recv().unwrap(),
             TuiEvent::QuorumModelVote { .. }

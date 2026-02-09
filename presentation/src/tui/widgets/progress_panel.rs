@@ -62,10 +62,7 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
         if let Some(ref tool) = progress.current_tool {
             lines.push(Line::from(vec![
                 Span::styled("Tool: ", Style::default().fg(Color::White)),
-                Span::styled(
-                    format!("🔧 {}", tool),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(format!("🔧 {}", tool), Style::default().fg(Color::Cyan)),
             ]));
         }
 

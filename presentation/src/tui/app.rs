@@ -15,24 +15,22 @@ use super::event::{HilKind, HilRequest, TuiCommand, TuiEvent};
 use super::mode::{self, InputMode, KeyAction};
 use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
-use super::state::{
-    DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiState,
-};
+use super::state::{DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiState};
 use super::widgets::{
-    conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
-    progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget, MainLayout,
+    MainLayout, conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
+    progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget,
 };
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture, EventStream},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::stream::StreamExt;
 use quorum_application::{
     AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort, UiEvent,
 };
 use quorum_domain::{AgentConfig, ConsensusLevel, HumanDecision, Model};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -101,8 +99,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             ui_tx,
         );
 
-        let controller_handle =
-            tokio::spawn(controller_task(controller, cmd_rx, progress_tx));
+        let controller_handle = tokio::spawn(controller_task(controller, cmd_rx, progress_tx));
 
         Self {
             cmd_tx,
@@ -166,7 +163,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let mut tick = tokio::time::interval(Duration::from_millis(250));
 
         // Send welcome
-        let _ = self.cmd_tx.send(TuiCommand::HandleCommand("__welcome".into()));
+        let _ = self
+            .cmd_tx
+            .send(TuiCommand::HandleCommand("__welcome".into()));
 
         loop {
             // Render
@@ -342,11 +341,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Handle a terminal (crossterm) event
-    fn handle_terminal_event(
-        &self,
-        state: &mut TuiState,
-        event: crossterm::event::Event,
-    ) {
+    fn handle_terminal_event(&self, state: &mut TuiState, event: crossterm::event::Event) {
         match event {
             crossterm::event::Event::Key(key) => {
                 // If HiL modal is showing, handle y/n/Esc
@@ -456,7 +451,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             TuiEvent::TaskStart(desc) => {
                 state.set_flash(format!("Task: {}", desc));
             }
-            TuiEvent::TaskComplete { description, success } => {
+            TuiEvent::TaskComplete {
+                description,
+                success,
+            } => {
                 let status = if success { "✓" } else { "✗" };
                 state.set_flash(format!("{} {}", status, description));
             }
@@ -519,12 +517,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 state.progress.quorum_status = None;
             }
             TuiEvent::PlanRevision { revision, feedback } => {
-                state
-                    .messages
-                    .push(DisplayMessage::system(format!(
-                        "Plan revision #{}: {}",
-                        revision, feedback
-                    )));
+                state.messages.push(DisplayMessage::system(format!(
+                    "Plan revision #{}: {}",
+                    revision, feedback
+                )));
             }
             TuiEvent::EnsembleStart(count) => {
                 state.set_flash(format!("Ensemble: {} models planning...", count));
@@ -546,7 +542,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 state.progress.tool_log.clear();
                 state.progress.quorum_status = None;
             }
-            TuiEvent::AgentResult { success, summary: _ } => {
+            TuiEvent::AgentResult {
+                success,
+                summary: _,
+            } => {
                 state.progress.is_running = false;
                 state.progress.current_phase = None;
                 state.progress.current_tool = None;

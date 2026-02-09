@@ -37,14 +37,18 @@ impl<'a> Widget for InputWidget<'a> {
                 Color::Yellow,
                 true,
             ),
-            InputMode::Normal => ("> ", &self.state.input, self.state.cursor_pos, Color::DarkGray, false),
+            InputMode::Normal => (
+                "> ",
+                &self.state.input,
+                self.state.cursor_pos,
+                Color::DarkGray,
+                false,
+            ),
         };
 
         let mut spans = vec![Span::styled(
             prompt,
-            Style::default()
-                .fg(color)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         )];
 
         if active {
@@ -57,17 +61,13 @@ impl<'a> Widget for InputWidget<'a> {
             if after.is_empty() {
                 spans.push(Span::styled(
                     " ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(color),
+                    Style::default().fg(Color::Black).bg(color),
                 ));
             } else {
                 let cursor_char = &after[..after.chars().next().map(|c| c.len_utf8()).unwrap_or(1)];
                 spans.push(Span::styled(
                     cursor_char.to_string(),
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(color),
+                    Style::default().fg(Color::Black).bg(color),
                 ));
                 spans.push(Span::raw(after[cursor_char.len()..].to_string()));
             }

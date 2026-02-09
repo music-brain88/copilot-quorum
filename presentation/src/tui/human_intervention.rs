@@ -44,9 +44,9 @@ impl HumanInterventionPort for TuiHumanIntervention {
             response_tx,
         };
 
-        self.hil_tx.send(hil_request).map_err(|_| {
-            HumanInterventionError::IoError("TUI channel closed".to_string())
-        })?;
+        self.hil_tx
+            .send(hil_request)
+            .map_err(|_| HumanInterventionError::IoError("TUI channel closed".to_string()))?;
 
         response_rx.await.map_err(|_| {
             HumanInterventionError::IoError("TUI response channel dropped".to_string())
@@ -68,9 +68,9 @@ impl HumanInterventionPort for TuiHumanIntervention {
             response_tx,
         };
 
-        self.hil_tx.send(hil_request).map_err(|_| {
-            HumanInterventionError::IoError("TUI channel closed".to_string())
-        })?;
+        self.hil_tx
+            .send(hil_request)
+            .map_err(|_| HumanInterventionError::IoError("TUI channel closed".to_string()))?;
 
         response_rx.await.map_err(|_| {
             HumanInterventionError::IoError("TUI response channel dropped".to_string())
