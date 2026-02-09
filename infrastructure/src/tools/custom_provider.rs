@@ -409,14 +409,8 @@ mod tests {
 
     #[test]
     fn test_shell_escape_windows() {
-        assert_eq!(
-            shell_escape_windows("hello world"),
-            "\"hello world\""
-        );
-        assert_eq!(
-            shell_escape_windows("say \"hi\""),
-            "\"say \\\"hi\\\"\""
-        );
+        assert_eq!(shell_escape_windows("hello world"), "\"hello world\"");
+        assert_eq!(shell_escape_windows("say \"hi\""), "\"say \\\"hi\\\"\"");
         assert_eq!(shell_escape_windows("100%"), "\"100%%\"");
         assert_eq!(shell_escape_windows("wow!"), "\"wow^!\"");
     }

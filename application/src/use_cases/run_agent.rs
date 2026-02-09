@@ -1051,7 +1051,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         is_error,
                     });
                 } else {
-                    warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                    warn!(
+                        "Missing native_id for tool call '{}'; skipping result.",
+                        call.tool_name
+                    );
                 }
             }
 
@@ -1628,7 +1631,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             is_error,
                         });
                     } else {
-                        warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                        warn!(
+                            "Missing native_id for tool call '{}'; skipping result.",
+                            call.tool_name
+                        );
                     }
                 }
             }
@@ -1664,7 +1670,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                                 is_error: true,
                             });
                         } else {
-                            warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                            warn!(
+                                "Missing native_id for tool call '{}'; skipping result.",
+                                call.tool_name
+                            );
                         }
                         continue;
                     }
@@ -1697,7 +1706,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         is_error,
                     });
                 } else {
-                    warn!("Missing native_id for tool call '{}'; skipping result.", call.tool_name);
+                    warn!(
+                        "Missing native_id for tool call '{}'; skipping result.",
+                        call.tool_name
+                    );
                 }
             }
 
