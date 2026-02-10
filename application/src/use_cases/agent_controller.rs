@@ -4,6 +4,7 @@
 //! Manages command processing, state changes, and use case orchestration.
 //! Emits UiEvent messages to a channel for the presentation layer to render.
 
+use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::NoProgress;
@@ -13,7 +14,7 @@ use crate::ports::ui_event::{
     UiEvent, WelcomeInfo,
 };
 use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
-use crate::use_cases::run_agent::{AgentProgressNotifier, RunAgentInput, RunAgentUseCase};
+use crate::use_cases::run_agent::{RunAgentInput, RunAgentUseCase};
 use crate::use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
 use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;

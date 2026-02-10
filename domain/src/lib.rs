@@ -55,8 +55,14 @@ pub use session::{
 pub use tool::{
     entities::{RiskLevel, ToolCall, ToolDefinition, ToolParameter, ToolSpec},
     traits::{DefaultToolValidator, ToolValidator},
-    value_objects::{ToolError, ToolResult, ToolResultMetadata},
+    value_objects::{ErrorCategory, ToolError, ToolResult, ToolResultMetadata},
 };
 
 // Re-export quorum types
-pub use quorum::{ConsensusOutcome, ConsensusRound, QuorumRule, Vote, VoteResult};
+pub use quorum::{
+    ConsensusOutcome, ConsensusRound, QuorumRule, Vote, VoteResult, parse_final_review_response,
+    parse_review_response, parse_vote_score,
+};
+
+// Re-export plan parser
+pub use agent::plan_parser::{extract_plan_from_response, parse_plan, parse_plan_json};

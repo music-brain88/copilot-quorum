@@ -89,6 +89,55 @@ impl std::fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
+/// Error category for display purposes.
+///
+/// Classifies [`ToolError`] codes into broad categories for UI display
+/// and retry strategy selection. Determined from `ToolError.code`.
+///
+/// | Category | Error Codes | Retryable? |
+/// |----------|-------------|-----------|
+/// | `UnknownTool` | `NOT_FOUND` | Yes |
+/// | `ValidationError` | `INVALID_ARGUMENT` | Yes |
+/// | `ExecutionError` | All others | No |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Tool doesn't exist (e.g., multi_tool_use.parallel)
+    UnknownTool,
+    /// Tool arguments are invalid
+    ValidationError,
+    /// Tool execution failed
+    ExecutionError,
+}
+
+impl ErrorCategory {
+    /// Get emoji for this error category
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            ErrorCategory::UnknownTool => "🔧",
+            ErrorCategory::ValidationError => "⚠️",
+            ErrorCategory::ExecutionError => "❌",
+        }
+    }
+
+    /// Get description for this error category
+    pub fn description(&self) -> &'static str {
+        match self {
+            ErrorCategory::UnknownTool => "Unknown tool requested",
+            ErrorCategory::ValidationError => "Invalid arguments",
+            ErrorCategory::ExecutionError => "Execution failed",
+        }
+    }
+
+    /// Determine category from error code
+    pub fn from_error_code(code: &str) -> Self {
+        match code {
+            "NOT_FOUND" => ErrorCategory::UnknownTool,
+            "INVALID_ARGUMENT" => ErrorCategory::ValidationError,
+            _ => ErrorCategory::ExecutionError,
+        }
+    }
+}
+
 /// Result of a tool execution, carrying output or error information.
 ///
 /// Produced by tool executors (file, command, search, web) and consumed
