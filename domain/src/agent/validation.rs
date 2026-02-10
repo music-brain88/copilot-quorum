@@ -57,7 +57,10 @@ impl AgentConfig {
     /// Returns a list of issues. An empty list means the combination is valid.
     pub fn validate_combination(&self) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
-        let is_debate = matches!(self.orchestration_strategy, OrchestrationStrategy::Debate(_));
+        let is_debate = matches!(
+            self.orchestration_strategy,
+            OrchestrationStrategy::Debate(_)
+        );
 
         if is_debate {
             if self.consensus_level == ConsensusLevel::Solo {
@@ -132,15 +135,15 @@ mod tests {
 
     #[test]
     fn solo_full_quorum_is_valid() {
-        let issues = make_config(ConsensusLevel::Solo, PhaseScope::Full, quorum())
-            .validate_combination();
+        let issues =
+            make_config(ConsensusLevel::Solo, PhaseScope::Full, quorum()).validate_combination();
         assert!(issues.is_empty());
     }
 
     #[test]
     fn solo_fast_quorum_is_valid() {
-        let issues = make_config(ConsensusLevel::Solo, PhaseScope::Fast, quorum())
-            .validate_combination();
+        let issues =
+            make_config(ConsensusLevel::Solo, PhaseScope::Fast, quorum()).validate_combination();
         assert!(issues.is_empty());
     }
 
@@ -211,8 +214,8 @@ mod tests {
 
     #[test]
     fn solo_full_debate_is_error() {
-        let issues = make_config(ConsensusLevel::Solo, PhaseScope::Full, debate())
-            .validate_combination();
+        let issues =
+            make_config(ConsensusLevel::Solo, PhaseScope::Full, debate()).validate_combination();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, Severity::Error);
         assert_eq!(issues[0].code, ConfigIssueCode::SoloWithDebate);
@@ -220,8 +223,8 @@ mod tests {
 
     #[test]
     fn solo_fast_debate_is_error() {
-        let issues = make_config(ConsensusLevel::Solo, PhaseScope::Fast, debate())
-            .validate_combination();
+        let issues =
+            make_config(ConsensusLevel::Solo, PhaseScope::Fast, debate()).validate_combination();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, Severity::Error);
         assert_eq!(issues[0].code, ConfigIssueCode::SoloWithDebate);
@@ -240,8 +243,8 @@ mod tests {
 
     #[test]
     fn has_errors_returns_true_for_errors() {
-        let issues = make_config(ConsensusLevel::Solo, PhaseScope::Full, debate())
-            .validate_combination();
+        let issues =
+            make_config(ConsensusLevel::Solo, PhaseScope::Full, debate()).validate_combination();
         assert!(AgentConfig::has_errors(&issues));
     }
 
