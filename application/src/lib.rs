@@ -23,10 +23,10 @@ pub use use_cases::init_context::{
     InitContextError, InitContextInput, InitContextOutput, InitContextProgressNotifier,
     InitContextUseCase, NoInitContextProgress,
 };
-pub use use_cases::run_agent::{
-    AgentProgressNotifier, ErrorCategory, NoAgentProgress, RunAgentError, RunAgentInput,
-    RunAgentOutput, RunAgentUseCase,
-};
+pub use ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
+pub use use_cases::run_agent::{RunAgentError, RunAgentInput, RunAgentOutput, RunAgentUseCase};
+// Re-export ErrorCategory from domain (was previously in run_agent)
+pub use quorum_domain::ErrorCategory;
 pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
 
 // UI event types (output port for presentation layer)
