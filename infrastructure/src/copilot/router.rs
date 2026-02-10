@@ -139,15 +139,13 @@ impl SessionChannel {
                         trace!("Ignoring event type: {}", other);
                     }
                 },
-                RoutedMessage::ToolCall {
-                    request_id,
-                    params,
-                } => {
+                RoutedMessage::ToolCall { request_id, params } => {
                     warn!(
                         "Unexpected tool.call in read_streaming: {}, rejecting",
                         params.tool_name
                     );
-                    let result = ToolCallResult::error("Tool not available in this session context");
+                    let result =
+                        ToolCallResult::error("Tool not available in this session context");
                     let response = JsonRpcResponseOut::new(
                         request_id,
                         serde_json::to_value(result).unwrap_or_default(),
@@ -275,15 +273,13 @@ impl SessionChannel {
                         trace!("Ignoring event type: {}", other);
                     }
                 },
-                RoutedMessage::ToolCall {
-                    request_id,
-                    params,
-                } => {
+                RoutedMessage::ToolCall { request_id, params } => {
                     warn!(
                         "Unexpected tool.call in read_streaming_with_cancellation: {}, rejecting",
                         params.tool_name
                     );
-                    let result = ToolCallResult::error("Tool not available in this session context");
+                    let result =
+                        ToolCallResult::error("Tool not available in this session context");
                     let response = JsonRpcResponseOut::new(
                         request_id,
                         serde_json::to_value(result).unwrap_or_default(),
