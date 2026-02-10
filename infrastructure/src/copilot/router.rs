@@ -352,8 +352,8 @@ pub struct MessageRouter {
     /// responses for orphaned `tool.call` requests (sessions already dropped).
     writer: Arc<Mutex<BufWriter<OwnedWriteHalf>>>,
 
-    /// Copilot CLI child process.
-    _child: Child,
+    /// Copilot CLI child process (killed on Drop to prevent orphans).
+    child: Child,
 }
 
 impl MessageRouter {
@@ -370,12 +370,23 @@ impl MessageRouter {
     pub async fn spawn_with_command(cmd: &str) -> Result<Arc<Self>> {
         debug!("Spawning Copilot CLI: {} --server", cmd);
 
-        let mut child = Command::new(cmd)
-            .arg("--server")
+        let mut cmd = Command::new(cmd);
+        cmd.arg("--server")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+            .stderr(Stdio::inherit());
+
+        // Linux: request kernel to send SIGTERM to child when parent dies.
+        // This catches cases where Drop doesn't run (SIGKILL, OOM kill).
+        #[cfg(target_os = "linux")]
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+
+        let mut child = cmd.spawn()?;
 
         // Read stdout to get the port number
         let stdout = child.stdout.take().ok_or_else(|| {
@@ -440,7 +451,7 @@ impl MessageRouter {
             session_start_rx: Mutex::new(session_start_rx),
             create_lock: Mutex::new(()),
             writer,
-            _child: child,
+            child,
         });
 
         Ok(router)
@@ -819,5 +830,12 @@ impl MessageRouter {
         if routes.remove(session_id).is_some() {
             debug!("Router: deregistered session {}", session_id);
         }
+    }
+}
+
+impl Drop for MessageRouter {
+    fn drop(&mut self) {
+        debug!("MessageRouter dropping, killing copilot-cli child process");
+        let _ = self.child.start_kill();
     }
 }
