@@ -50,8 +50,8 @@ pub enum CopilotError {
     TransportClosed,
 
     /// Request timed out waiting for response.
-    #[error("Request timeout")]
-    Timeout,
+    #[error("Request timeout: {0}")]
+    Timeout(String),
 
     /// Specified model is not supported.
     #[error("Invalid model: {0}")]
