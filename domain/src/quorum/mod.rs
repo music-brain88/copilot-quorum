@@ -56,10 +56,12 @@
 //! ```
 
 pub mod consensus;
+pub mod parsing;
 pub mod rule;
 pub mod vote;
 
 // Re-export main types
 pub use consensus::{ConsensusOutcome, ConsensusRound};
+pub use parsing::{parse_final_review_response, parse_review_response, parse_vote_score};
 pub use rule::QuorumRule;
 pub use vote::{Vote, VoteResult};
