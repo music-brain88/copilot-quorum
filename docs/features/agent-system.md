@@ -210,6 +210,24 @@ agent-hil>
 一方、`StrategyExecutor` は戦略の実行ロジックを定義する **trait** です。
 enum が「何を使うか」を、trait が「どう実行するか」を担います。
 
+### Combination Validation / 組み合わせバリデーション
+
+3 軸の全 12 通り（2×3×2）の組み合わせのうち、無効・未サポートなものは起動時にバリデーションされます。
+`AgentConfig::validate_combination()` が `Vec<ConfigIssue>` を返し、CLI 層で Warning 表示 or Error 中断します。
+
+| ConsensusLevel | PhaseScope | Strategy | Severity | Code | 理由 |
+|---|---|---|---|---|---|
+| Solo | * | Debate | **Error** | `SoloWithDebate` | ソロでは議論不可能（1モデルで対立的議論は成立しない） |
+| Ensemble | * | Debate | Warning | `DebateNotImplemented` | StrategyExecutor が未実装 |
+| Ensemble | Fast | * | Warning | `EnsembleWithFast` | レビュースキップにより Ensemble の価値が減少 |
+
+- Solo + Debate は **Error**（実行不可）として即座に `bail!` します
+- Ensemble + Debate は Warning のみ（将来の実装に備えて設定自体は受け付ける）
+- Ensemble + Fast は Warning（動作はするが、マルチモデル合議のメリットが薄れる）
+- Solo + Debate の場合は `DebateNotImplemented` Warning は省略されます（Error が優先）
+
+定義ファイル: `domain/src/agent/validation.rs`（`Severity`, `ConfigIssueCode`, `ConfigIssue`）
+
 ### AgentConfig
 
 ```rust
@@ -268,6 +286,7 @@ review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
 | File | Description |
 |------|-------------|
 | `domain/src/agent/entities.rs` | `AgentState`, `AgentConfig`, `Plan`, `Task`, `AgentPhase` |
+| `domain/src/agent/validation.rs` | `ConfigIssue`, `ConfigIssueCode`, `Severity`（組み合わせバリデーション） |
 | `domain/src/agent/value_objects.rs` | `AgentId`, `AgentContext`, `TaskResult`, `Thought` |
 | `domain/src/tool/entities.rs` | `ToolDefinition`, `ToolCall`, `ToolSpec`, `RiskLevel` |
 | `domain/src/tool/value_objects.rs` | `ToolResult`, `ToolError` |
@@ -397,4 +416,4 @@ pub enum HumanDecision {
 - [Tool System](./tool-system.md) - エージェントが使用するツールの詳細
 - [CLI & Configuration](./cli-and-configuration.md) - エージェントの設定と REPL コマンド
 
-<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。AgentConfig は ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）の3つの直交軸で設定。主要ファイルは domain/src/agent/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->
+<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。AgentConfig は ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）の3つの直交軸で設定。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。定義は domain/src/agent/validation.rs。主要ファイルは domain/src/agent/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->

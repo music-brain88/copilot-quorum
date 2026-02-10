@@ -73,6 +73,7 @@
 
 pub mod entities;
 pub mod plan_parser;
+pub mod validation;
 pub mod value_objects;
 
 pub use entities::{
@@ -80,4 +81,5 @@ pub use entities::{
     Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
 };
 pub use plan_parser::{extract_plan_from_response, parse_plan, parse_plan_json};
+pub use validation::{ConfigIssue, ConfigIssueCode, Severity};
 pub use value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};

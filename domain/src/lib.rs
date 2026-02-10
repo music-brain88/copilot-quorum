@@ -33,6 +33,7 @@ pub use agent::{
         AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
         Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
     },
+    validation::{ConfigIssue, ConfigIssueCode, Severity},
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
 pub use config::OutputFormat;

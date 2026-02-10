@@ -108,6 +108,20 @@ REPL では 2 つの合意レベルが利用可能です。`/mode <level>` ま�
 
 定義ファイル: `domain/src/orchestration/strategy.rs`（`OrchestrationStrategy` enum）
 
+### Combination Validation / 組み合わせバリデーション
+
+上記 3 軸の一部の組み合わせは無効・未サポートです。起動時に自動検出され、Warning または Error が表示されます。
+
+| 組み合わせ | Severity | 理由 |
+|------------|----------|------|
+| Solo + Debate | **Error** | 1モデルで対立的議論は不可能 |
+| Ensemble + Debate | Warning | StrategyExecutor 未実装 |
+| Ensemble + Fast | Warning | レビュースキップで Ensemble の価値が減少 |
+
+Error の場合は実行が中断されます。詳細は [Agent System](./agent-system.md) を参照。
+
+定義ファイル: `domain/src/agent/validation.rs`（`Severity`, `ConfigIssueCode`, `ConfigIssue`）
+
 ### Prompt Display / プロンプト表示
 
 REPL のプロンプトは現在のモードに応じて色が変わります:
@@ -279,4 +293,4 @@ CLI Arguments / REPL Input
 - [Ensemble Mode](./ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
 - [Tool System](./tool-system.md) - ツール設定の詳細
 
-<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /discuss, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。ConsensusLevel（Solo/Ensemble）が唯一のモード軸、PhaseScope と OrchestrationStrategy は直交オプション。設定優先順位は CLI > project > global > defaults。主要ファイルは presentation/src/agent/repl.rs と infrastructure/src/config/。 -->
+<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /discuss, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。ConsensusLevel（Solo/Ensemble）が唯一のモード軸、PhaseScope と OrchestrationStrategy は直交オプション。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning（domain/src/agent/validation.rs）。設定優先順位は CLI > project > global > defaults。主要ファイルは presentation/src/agent/repl.rs と infrastructure/src/config/。 -->

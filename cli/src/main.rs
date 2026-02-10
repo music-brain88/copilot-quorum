@@ -6,7 +6,7 @@
 use anyhow::{Result, bail};
 use clap::Parser;
 use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase};
-use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat};
+use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, Severity};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
 };
@@ -272,6 +272,18 @@ async fn main() -> Result<()> {
     } else {
         agent_config.consensus_level
     };
+
+    // Validate configuration combination
+    let issues = agent_config.validate_combination();
+    for issue in &issues {
+        match issue.severity {
+            Severity::Warning => eprintln!("Warning: {}", issue.message),
+            Severity::Error => eprintln!("Error: {}", issue.message),
+        }
+    }
+    if AgentConfig::has_errors(&issues) {
+        bail!("Invalid configuration combination");
+    }
 
     // No question provided -> Start TUI (default)
     if cli.question.is_none() {
