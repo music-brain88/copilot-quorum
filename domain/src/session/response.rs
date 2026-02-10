@@ -184,6 +184,27 @@ impl LlmResponse {
             .iter()
             .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
     }
+
+    /// Returns `true` if the response contains a tool use request with the given name.
+    pub fn has_tool_use(&self, name: &str) -> bool {
+        self.content.iter().any(|b| match b {
+            ContentBlock::ToolUse {
+                name: tool_name, ..
+            } => tool_name == name,
+            _ => false,
+        })
+    }
+
+    /// Returns the `id` of the first `ToolUse` block, if any.
+    ///
+    /// Useful for sending error responses back to specific tool calls
+    /// (e.g., when `create_plan` is called with empty arguments).
+    pub fn first_tool_use_id(&self) -> Option<&str> {
+        self.content.iter().find_map(|b| match b {
+            ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -287,5 +308,53 @@ mod tests {
             StopReason::Other("custom".to_string()),
             StopReason::Other("custom".to_string())
         );
+    }
+
+    #[test]
+    fn has_tool_use_by_name() {
+        let response = LlmResponse {
+            content: vec![
+                ContentBlock::Text("Planning...".to_string()),
+                ContentBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "create_plan".to_string(),
+                    input: HashMap::new(),
+                },
+            ],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        };
+
+        assert!(response.has_tool_use("create_plan"));
+        assert!(!response.has_tool_use("read_file"));
+    }
+
+    #[test]
+    fn first_tool_use_id_returns_first() {
+        let response = LlmResponse {
+            content: vec![
+                ContentBlock::Text("text".to_string()),
+                ContentBlock::ToolUse {
+                    id: "toolu_first".to_string(),
+                    name: "create_plan".to_string(),
+                    input: HashMap::new(),
+                },
+                ContentBlock::ToolUse {
+                    id: "toolu_second".to_string(),
+                    name: "read_file".to_string(),
+                    input: HashMap::new(),
+                },
+            ],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        };
+
+        assert_eq!(response.first_tool_use_id(), Some("toolu_first"));
+    }
+
+    #[test]
+    fn first_tool_use_id_returns_none_for_text_only() {
+        let response = LlmResponse::from_text("Hello!");
+        assert_eq!(response.first_tool_use_id(), None);
     }
 }

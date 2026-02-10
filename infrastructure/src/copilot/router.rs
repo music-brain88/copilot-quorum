@@ -20,7 +20,7 @@
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
     CreateSessionParams, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, JsonRpcResponseOut,
-    ToolCallParams,
+    ToolCallParams, ToolCallResult,
 };
 use crate::copilot::transport::{MessageKind, StreamingOutcome, classify_message};
 use std::collections::HashMap;
@@ -139,8 +139,20 @@ impl SessionChannel {
                         trace!("Ignoring event type: {}", other);
                     }
                 },
-                RoutedMessage::ToolCall { .. } => {
-                    warn!("Unexpected tool.call in read_streaming, ignoring");
+                RoutedMessage::ToolCall {
+                    request_id,
+                    params,
+                } => {
+                    warn!(
+                        "Unexpected tool.call in read_streaming: {}, rejecting",
+                        params.tool_name
+                    );
+                    let result = ToolCallResult::error("Tool not available in this session context");
+                    let response = JsonRpcResponseOut::new(
+                        request_id,
+                        serde_json::to_value(result).unwrap_or_default(),
+                    );
+                    let _ = self.router.send_response(&response).await;
                 }
             }
         }
@@ -263,8 +275,20 @@ impl SessionChannel {
                         trace!("Ignoring event type: {}", other);
                     }
                 },
-                RoutedMessage::ToolCall { .. } => {
-                    warn!("Unexpected tool.call in read_streaming_with_cancellation, ignoring");
+                RoutedMessage::ToolCall {
+                    request_id,
+                    params,
+                } => {
+                    warn!(
+                        "Unexpected tool.call in read_streaming_with_cancellation: {}, rejecting",
+                        params.tool_name
+                    );
+                    let result = ToolCallResult::error("Tool not available in this session context");
+                    let response = JsonRpcResponseOut::new(
+                        request_id,
+                        serde_json::to_value(result).unwrap_or_default(),
+                    );
+                    let _ = self.router.send_response(&response).await;
                 }
             }
         }

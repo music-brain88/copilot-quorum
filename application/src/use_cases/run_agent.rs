@@ -2485,6 +2485,25 @@ async fn generate_plan_from_session(
         return Ok(PlanningResult::Plan(plan));
     }
 
+    // create_plan was called with empty/invalid arguments — send error and retry once
+    if response.has_tool_use("create_plan") {
+        if let Some(tool_use_id) = response.first_tool_use_id() {
+            debug!("create_plan called with empty arguments, sending error for retry");
+            let results = vec![ToolResultMessage {
+                tool_use_id: tool_use_id.to_string(),
+                tool_name: "create_plan".to_string(),
+                output: "Error: create_plan requires 'objective', 'reasoning', and 'tasks' \
+                         fields. Please call create_plan again with all required arguments."
+                    .to_string(),
+                is_error: true,
+            }];
+            let retry = session.send_tool_results(&results).await?;
+            if let Some(plan) = extract_plan_from_response(&retry) {
+                return Ok(PlanningResult::Plan(plan));
+            }
+        }
+    }
+
     // No plan found — LLM responded with text only
     let text = response.text_content();
     if !text.is_empty() {
