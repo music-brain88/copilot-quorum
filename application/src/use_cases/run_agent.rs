@@ -1311,6 +1311,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         );
         progress.on_ensemble_start(models.len());
 
+        let session_timeout = input.config.ensemble_session_timeout;
         let mut join_set = JoinSet::new();
 
         for model in models {
@@ -1322,40 +1323,40 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let feedback = previous_feedback.map(|s| s.to_string());
 
             join_set.spawn(async move {
-                let session = match gateway
-                    .create_session_with_system_prompt(&model, &system_prompt)
-                    .await
-                {
-                    Ok(s) => s,
-                    Err(e) => return (model, Err(e.to_string())),
-                };
+                let plan_future = async {
+                    let session = gateway
+                        .create_session_with_system_prompt(&model, &system_prompt)
+                        .await
+                        .map_err(|e| e.to_string())?;
 
-                // Retry once on failure
-                for attempt in 0..2u8 {
-                    match generate_plan_from_session(
+                    generate_plan_from_session(
                         session.as_ref(),
                         &request,
                         &context,
                         feedback.as_deref(),
                     )
                     .await
-                    {
-                        Ok(result @ PlanningResult::Plan(_)) => return (model, Ok(result)),
-                        Ok(result @ PlanningResult::TextResponse(_)) => return (model, Ok(result)),
-                        Err(e) if attempt == 0 => {
-                            warn!("Model {} attempt 1 failed, retrying: {}", model, e);
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        }
-                        Err(e) => return (model, Err(e.to_string())),
+                    .map_err(|e| e.to_string())
+                };
+
+                // Wrap with timeout if configured
+                let result = if let Some(timeout) = session_timeout {
+                    match tokio::time::timeout(timeout, plan_future).await {
+                        Ok(r) => r,
+                        Err(_) => Err(format!("session timed out after {}s", timeout.as_secs())),
                     }
-                }
-                unreachable!()
+                } else {
+                    plan_future.await
+                };
+
+                (model, result)
             });
         }
 
         // Collect generated plans with cancellation support
         let mut candidates: Vec<PlanCandidate> = Vec::new();
         let mut text_responses: Vec<(String, String)> = Vec::new();
+        let mut timed_out_models: Vec<Model> = Vec::new();
         let mut failed_count = 0usize;
 
         loop {
@@ -1386,6 +1387,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     info!("Model {} returned text response (no plan)", model);
                     text_responses.push((model.to_string(), text));
                 }
+                Ok((model, Err(e))) if e.contains("timed out") => {
+                    warn!("Model {} timed out, will retry after backoff: {}", model, e);
+                    progress.on_ensemble_model_failed(&model, &e);
+                    timed_out_models.push(model);
+                }
                 Ok((model, Err(e))) => {
                     warn!("Model {} failed to generate plan: {}", model, e);
                     progress.on_ensemble_model_failed(&model, &e);
@@ -1394,6 +1400,58 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 Err(e) => {
                     warn!("Task join error: {}", e);
                     failed_count += 1;
+                }
+            }
+        }
+
+        // Step 1b: Retry timed-out models sequentially after backoff
+        if !timed_out_models.is_empty() {
+            info!(
+                "Retrying {} timed-out models after backoff",
+                timed_out_models.len()
+            );
+            // Brief backoff to let CLI finish processing the previous session
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            for model in timed_out_models {
+                self.check_cancelled()?;
+                info!("Retrying timed-out model: {}", model);
+
+                let session = match self
+                    .gateway
+                    .create_session_with_system_prompt(&model, system_prompt)
+                    .await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Model {} retry: session creation failed: {}", model, e);
+                        failed_count += 1;
+                        continue;
+                    }
+                };
+
+                match generate_plan_from_session(
+                    session.as_ref(),
+                    &input.request,
+                    context,
+                    previous_feedback,
+                )
+                .await
+                {
+                    Ok(PlanningResult::Plan(plan)) => {
+                        info!("Model {} generated plan on retry: {}", model, plan.objective);
+                        progress.on_ensemble_plan_generated(&model);
+                        candidates.push(PlanCandidate::new(model, plan));
+                    }
+                    Ok(PlanningResult::TextResponse(text)) => {
+                        info!("Model {} returned text response on retry (no plan)", model);
+                        text_responses.push((model.to_string(), text));
+                    }
+                    Err(e) => {
+                        warn!("Model {} retry failed: {}", model, e);
+                        progress.on_ensemble_model_failed(&model, &e.to_string());
+                        failed_count += 1;
+                    }
                 }
             }
         }
@@ -3249,6 +3307,7 @@ Here is my evaluation:
                 hil_mode: HilMode::Interactive,
                 max_tool_turns: 3,
                 orchestration_strategy: Default::default(),
+                ensemble_session_timeout: None,
             };
             let mut gateway = ScriptedGateway::new();
 
@@ -3324,6 +3383,7 @@ Here is my evaluation:
                 hil_mode: HilMode::Interactive,
                 max_tool_turns: 3,
                 orchestration_strategy: Default::default(),
+                ensemble_session_timeout: None,
             };
             let mut gateway = ScriptedGateway::new();
 
