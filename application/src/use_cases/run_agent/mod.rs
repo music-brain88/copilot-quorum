@@ -999,15 +999,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             if let Some(plan) = &mut state.plan
                 && let Some(task) = plan.get_task_mut(&task_id)
+                && !task.status.is_terminal()
             {
-                if !task.status.is_terminal() {
-                    if success {
-                        task.mark_completed(quorum_domain::TaskResult::success(&output));
-                    } else {
-                        task.mark_failed(quorum_domain::TaskResult::failure(&output));
-                    }
-                    progress.on_task_complete(task, success);
+                if success {
+                    task.mark_completed(quorum_domain::TaskResult::success(&output));
+                } else {
+                    task.mark_failed(quorum_domain::TaskResult::failure(&output));
                 }
+                progress.on_task_complete(task, success);
             }
 
             results.push(format!(
