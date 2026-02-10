@@ -39,6 +39,10 @@ anyhow = "1.0"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# DateTime
+chrono = "0.4"
 
 # Terminal UI
 indicatif = "0.17"

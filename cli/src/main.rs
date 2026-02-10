@@ -13,10 +13,98 @@ use quorum_infrastructure::{
 use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
 };
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
+use tracing_subscriber::fmt;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+/// Resolve the log directory path.
+///
+/// Priority: CLI `--log-dir` → `dirs::data_dir()/copilot-quorum/logs/` → `.copilot-quorum/logs/`
+fn resolve_log_dir(override_path: Option<&Path>) -> PathBuf {
+    if let Some(path) = override_path {
+        return path.to_path_buf();
+    }
+    if let Some(data_dir) = dirs::data_dir() {
+        return data_dir.join("copilot-quorum").join("logs");
+    }
+    PathBuf::from(".copilot-quorum").join("logs")
+}
+
+/// Generate a timestamped log filename for this session.
+fn generate_log_filename() -> String {
+    let now = chrono::Utc::now();
+    format!("session-{}.log", now.format("%Y-%m-%dT%H-%M-%S"))
+}
+
+/// Initialize multi-layer logging (console + optional file).
+///
+/// Returns an `Option<WorkerGuard>` that must be held until program exit
+/// to ensure all buffered log entries are flushed to disk.
+fn init_logging(
+    verbose: u8,
+    log_dir_override: Option<&Path>,
+    no_log_file: bool,
+) -> Option<WorkerGuard> {
+    // Console layer: stderr, same behavior as before
+    let console_filter = match verbose {
+        0 => EnvFilter::new("warn"),
+        1 => EnvFilter::new("info"),
+        2 => EnvFilter::new("debug"),
+        _ => EnvFilter::new("trace"),
+    };
+    let console_layer = fmt::layer()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_filter(console_filter);
+
+    if no_log_file {
+        tracing_subscriber::registry().with(console_layer).init();
+        return None;
+    }
+
+    // File layer: debug by default, trace at -vvv
+    let log_dir = resolve_log_dir(log_dir_override);
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        // Fallback: console only
+        eprintln!(
+            "Warning: Could not create log directory {}: {}",
+            log_dir.display(),
+            e
+        );
+        tracing_subscriber::registry().with(console_layer).init();
+        return None;
+    }
+
+    let log_filename = generate_log_filename();
+    let file_appender = tracing_appender::rolling::never(&log_dir, &log_filename);
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let file_filter = match verbose {
+        0..=2 => EnvFilter::new("debug"),
+        _ => EnvFilter::new("trace"),
+    };
+    let file_layer = fmt::layer()
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_names(true)
+        .with_writer(non_blocking)
+        .with_filter(file_filter);
+
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(file_layer)
+        .init();
+
+    info!("Log file: {}", log_dir.join(&log_filename).display());
+    Some(guard)
+}
 
 /// Convert FileConfig + CLI args to layer-specific configs
 /// This is the single place where FileConfig is translated to application/presentation types
@@ -67,18 +155,8 @@ async fn main() -> Result<()> {
         bail!("Invalid configuration: {}", e);
     }
 
-    // Initialize logging based on verbosity level
-    let filter = match cli.verbose {
-        0 => EnvFilter::new("warn"),
-        1 => EnvFilter::new("info"),
-        2 => EnvFilter::new("debug"),
-        _ => EnvFilter::new("trace"), // -vvv or more
-    };
-
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .init();
+    // Initialize logging (console + file)
+    let _log_guard = init_logging(cli.verbose, cli.log_dir.as_deref(), cli.no_log_file);
 
     info!("Starting Copilot Quorum");
 

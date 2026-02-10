@@ -117,6 +117,14 @@ pub struct Cli {
     #[arg(short, long)]
     pub quiet: bool,
 
+    /// Override log file directory (default: ~/.local/share/copilot-quorum/logs/)
+    #[arg(long, value_name = "PATH")]
+    pub log_dir: Option<PathBuf>,
+
+    /// Disable file logging entirely
+    #[arg(long)]
+    pub no_log_file: bool,
+
     /// Path to configuration file
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
