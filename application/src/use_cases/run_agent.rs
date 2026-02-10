@@ -2551,6 +2551,7 @@ async fn generate_plan_from_session(
     }
 
     // create_plan was called with empty/invalid arguments — send error and retry once
+    let mut retry_response: Option<LlmResponse> = None;
     if response.has_tool_use("create_plan")
         && let Some(tool_use_id) = response.first_tool_use_id()
     {
@@ -2567,10 +2568,16 @@ async fn generate_plan_from_session(
         if let Some(plan) = extract_plan_from_response(&retry) {
             return Ok(PlanningResult::Plan(plan));
         }
+        retry_response = Some(retry);
     }
 
     // No plan found — LLM responded with text only
-    let text = response.text_content();
+    // Prefer retry response text (if retry happened), fall back to original response
+    let text = retry_response
+        .as_ref()
+        .map(|r| r.text_content())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| response.text_content());
     if !text.is_empty() {
         return Ok(PlanningResult::TextResponse(text));
     }
@@ -3736,13 +3743,31 @@ Here is my evaluation:
             model: None,
         };
 
-        let (result, progress) = FlowTestBuilder::solo_fast()
-            .with_plan_response(ScriptedResponse::Response(response))
-            .execute()
-            .await;
+        // After extract fails, generate_plan_from_session retries by sending
+        // a tool_result error. Provide a second response for that retry —
+        // the LLM gives up on tools and responds with text only.
+        let mut builder = FlowTestBuilder::solo_fast();
+        let mut gateway = ScriptedGateway::new();
+        gateway.add_session(
+            &builder.config.exploration_model.to_string(),
+            vec![ScriptedResponse::Response(LlmResponse::from_text(
+                "Context gathered",
+            ))],
+        );
+        gateway.add_session(
+            &builder.config.decision_model.to_string(),
+            vec![
+                ScriptedResponse::Response(response),
+                // Retry response: LLM gives up on tool use, returns text
+                ScriptedResponse::Text("I'll help with that.".to_string()),
+            ],
+        );
+        builder.gateway = gateway;
+
+        let (result, progress) = builder.execute().await;
 
         let output = result.expect("should return output (not panic)");
-        // Empty tasks → extract fails → text fallback → success
+        // Empty tasks → extract fails → retry → text fallback → success
         assert!(
             output.success,
             "Agent should succeed with text fallback, got: {}",

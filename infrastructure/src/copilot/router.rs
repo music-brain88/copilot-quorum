@@ -121,7 +121,7 @@ impl SessionChannel {
                             full_content.push_str(content);
                         }
                     }
-                    "assistant.message" => {
+                    "assistant.message" | "assistant.message.completed" => {
                         if let Some(data) = event.get("data")
                             && let Some(content) = data.get("content").and_then(|c| c.as_str())
                             && !content.is_empty()
@@ -184,7 +184,7 @@ impl SessionChannel {
                             full_content.push_str(content);
                         }
                     }
-                    "assistant.message" => {
+                    "assistant.message" | "assistant.message.completed" => {
                         if let Some(data) = event.get("data")
                             && let Some(content) = data.get("content").and_then(|c| c.as_str())
                             && !content.is_empty()
@@ -255,7 +255,7 @@ impl SessionChannel {
                             full_content.push_str(content);
                         }
                     }
-                    "assistant.message" => {
+                    "assistant.message" | "assistant.message.completed" => {
                         if let Some(data) = event.get("data")
                             && let Some(content) = data.get("content").and_then(|c| c.as_str())
                             && !content.is_empty()
