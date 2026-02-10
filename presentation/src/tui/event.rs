@@ -12,6 +12,10 @@ pub enum TuiCommand {
     ProcessRequest(String),
     /// User issued a slash-command from Command mode (e.g. "q", "help", "solo")
     HandleCommand(String),
+    /// Set verbose mode
+    SetVerbose(bool),
+    /// Set cancellation token
+    SetCancellation(tokio_util::sync::CancellationToken),
     /// Graceful shutdown
     #[allow(dead_code)]
     Quit,

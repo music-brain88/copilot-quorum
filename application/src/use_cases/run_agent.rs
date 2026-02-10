@@ -21,8 +21,8 @@ use quorum_domain::core::string::truncate;
 use quorum_domain::session::response::{ContentBlock, LlmResponse};
 use quorum_domain::{
     AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, EnsemblePlanResult,
-    HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, ReviewRound,
-    StreamEvent, Task, TaskId, Thought,
+    HilMode, HumanDecision, Model, ModelVote, Plan, PlanCandidate, ProjectContext, PromptTemplate,
+    ReviewRound, StreamEvent, Task, TaskId, Thought,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -101,6 +101,8 @@ enum PlanningResult {
 enum EnsemblePlanningOutcome {
     /// Multiple models generated plans, voted, and selected one
     Plans(EnsemblePlanResult),
+    /// All models returned text responses (no plan needed) — moderator-synthesized
+    TextResponse(String),
 }
 
 /// Input for the RunAgent use case
@@ -408,6 +410,23 @@ pub struct RunAgentUseCase<
     human_intervention: Option<Arc<dyn HumanInterventionPort>>,
 }
 
+impl<G, T, C> Clone for RunAgentUseCase<G, T, C>
+where
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            gateway: self.gateway.clone(),
+            tool_executor: self.tool_executor.clone(),
+            context_loader: self.context_loader.clone(),
+            cancellation_token: self.cancellation_token.clone(),
+            human_intervention: self.human_intervention.clone(),
+        }
+    }
+}
+
 /// No-op context loader for backwards compatibility
 pub struct NoContextLoader;
 
@@ -695,6 +714,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             selected.average_score()
                         )));
                         break; // Exit loop and proceed to Phase 4
+                    }
+                    Ok(EnsemblePlanningOutcome::TextResponse(text)) => {
+                        // All ensemble models returned text (no plans needed).
+                        // The moderator has already synthesized the responses.
+                        // This is the correct path for greetings, questions, etc.
+                        state.add_thought(Thought::observation(
+                            "No plan needed — ensemble text responses synthesized",
+                        ));
+                        state.complete();
+                        return Ok(RunAgentOutput {
+                            summary: text,
+                            success: true,
+                            state,
+                        });
                     }
                     Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
                     Err(e) => {
@@ -1281,6 +1314,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         );
         progress.on_ensemble_start(models.len());
 
+        let session_timeout = input.config.ensemble_session_timeout;
         let mut join_set = JoinSet::new();
 
         for model in models {
@@ -1292,39 +1326,40 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let feedback = previous_feedback.map(|s| s.to_string());
 
             join_set.spawn(async move {
-                let session = match gateway
-                    .create_session_with_system_prompt(&model, &system_prompt)
-                    .await
-                {
-                    Ok(s) => s,
-                    Err(e) => return (model, Err(e.to_string())),
-                };
+                let plan_future = async {
+                    let session = gateway
+                        .create_session_with_system_prompt(&model, &system_prompt)
+                        .await
+                        .map_err(|e| e.to_string())?;
 
-                // Retry once on failure
-                for attempt in 0..2u8 {
-                    match generate_plan_from_session(
+                    generate_plan_from_session(
                         session.as_ref(),
                         &request,
                         &context,
                         feedback.as_deref(),
                     )
                     .await
-                    {
-                        Ok(PlanningResult::Plan(plan)) => return (model, Ok(Some(plan))),
-                        Ok(_) => return (model, Ok(None)), // text-only
-                        Err(e) if attempt == 0 => {
-                            warn!("Model {} attempt 1 failed, retrying: {}", model, e);
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        }
-                        Err(e) => return (model, Err(e.to_string())),
+                    .map_err(|e| e.to_string())
+                };
+
+                // Wrap with timeout if configured
+                let result = if let Some(timeout) = session_timeout {
+                    match tokio::time::timeout(timeout, plan_future).await {
+                        Ok(r) => r,
+                        Err(_) => Err(format!("session timed out after {}s", timeout.as_secs())),
                     }
-                }
-                unreachable!()
+                } else {
+                    plan_future.await
+                };
+
+                (model, result)
             });
         }
 
         // Collect generated plans with cancellation support
         let mut candidates: Vec<PlanCandidate> = Vec::new();
+        let mut text_responses: Vec<(String, String)> = Vec::new();
+        let mut retryable_models: Vec<Model> = Vec::new();
         let mut failed_count = 0usize;
 
         loop {
@@ -1346,20 +1381,22 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             };
 
             match result {
-                Ok((model, Ok(Some(plan)))) => {
+                Ok((model, Ok(PlanningResult::Plan(plan)))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
                     progress.on_ensemble_plan_generated(&model);
                     candidates.push(PlanCandidate::new(model, plan));
                 }
-                Ok((model, Ok(None))) => {
-                    info!("Model {} returned text only (no plan)", model);
-                    progress.on_ensemble_model_failed(&model, "returned text only (no plan)");
-                    failed_count += 1;
+                Ok((model, Ok(PlanningResult::TextResponse(text)))) => {
+                    info!("Model {} returned text response (no plan)", model);
+                    text_responses.push((model.to_string(), text));
                 }
                 Ok((model, Err(e))) => {
-                    warn!("Model {} failed to generate plan: {}", model, e);
+                    // All errors are retryable (timeout, transport close, router stopped, etc.)
+                    // since the Copilot CLI may serialize session.send internally, causing
+                    // later sessions to fail when earlier ones complete and close the transport.
+                    warn!("Model {} failed (will retry after backoff): {}", model, e);
                     progress.on_ensemble_model_failed(&model, &e);
-                    failed_count += 1;
+                    retryable_models.push(model);
                 }
                 Err(e) => {
                     warn!("Task join error: {}", e);
@@ -1368,7 +1405,80 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
         }
 
+        // Step 1b: Retry failed models sequentially after backoff
+        // Copilot CLI serializes session.send internally, so later sessions often fail
+        // when earlier ones complete and the CLI closes the transport. A brief backoff
+        // followed by sequential retry gives each model a fresh chance.
+        if !retryable_models.is_empty() {
+            info!(
+                "Retrying {} failed models after backoff",
+                retryable_models.len()
+            );
+            // Brief backoff to let CLI finish processing and stabilize
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            for model in retryable_models {
+                self.check_cancelled()?;
+                info!("Retrying timed-out model: {}", model);
+
+                let session = match self
+                    .gateway
+                    .create_session_with_system_prompt(&model, system_prompt)
+                    .await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Model {} retry: session creation failed: {}", model, e);
+                        failed_count += 1;
+                        continue;
+                    }
+                };
+
+                match generate_plan_from_session(
+                    session.as_ref(),
+                    &input.request,
+                    context,
+                    previous_feedback,
+                )
+                .await
+                {
+                    Ok(PlanningResult::Plan(plan)) => {
+                        info!(
+                            "Model {} generated plan on retry: {}",
+                            model, plan.objective
+                        );
+                        progress.on_ensemble_plan_generated(&model);
+                        candidates.push(PlanCandidate::new(model, plan));
+                    }
+                    Ok(PlanningResult::TextResponse(text)) => {
+                        info!("Model {} returned text response on retry (no plan)", model);
+                        text_responses.push((model.to_string(), text));
+                    }
+                    Err(e) => {
+                        warn!("Model {} retry failed: {}", model, e);
+                        progress.on_ensemble_model_failed(&model, &e.to_string());
+                        failed_count += 1;
+                    }
+                }
+            }
+        }
+
         if candidates.is_empty() {
+            if !text_responses.is_empty() {
+                // All models returned text responses — synthesize via moderator
+                info!(
+                    "All models returned text responses ({} total), synthesizing via moderator",
+                    text_responses.len()
+                );
+                let synthesized = self
+                    .synthesize_text_responses(
+                        &input.request,
+                        &text_responses,
+                        &input.config.decision_model,
+                    )
+                    .await?;
+                return Ok(EnsemblePlanningOutcome::TextResponse(synthesized));
+            }
             return Err(RunAgentError::EnsemblePlanningFailed(format!(
                 "All {} models failed to generate plans",
                 failed_count
@@ -1466,6 +1576,34 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         Ok(EnsemblePlanningOutcome::Plans(result))
+    }
+
+    /// Synthesize text responses from multiple models using a moderator.
+    ///
+    /// Reuses the Quorum Discussion synthesis pattern
+    /// ([`PromptTemplate::synthesis_system`] + [`PromptTemplate::synthesis_prompt_no_reviews`]).
+    async fn synthesize_text_responses(
+        &self,
+        question: &str,
+        responses: &[(String, String)],
+        moderator: &Model,
+    ) -> Result<String, RunAgentError> {
+        let session = self
+            .gateway
+            .create_session_with_system_prompt(moderator, PromptTemplate::synthesis_system())
+            .await
+            .map_err(|e| {
+                RunAgentError::EnsemblePlanningFailed(format!(
+                    "Failed to create synthesis session: {}",
+                    e
+                ))
+            })?;
+
+        let prompt = PromptTemplate::synthesis_prompt_no_reviews(question, responses);
+
+        session.send(&prompt).await.map_err(|e| {
+            RunAgentError::EnsemblePlanningFailed(format!("Text synthesis failed: {}", e))
+        })
     }
 
     /// Determine the appropriate model for a task based on tool risk level
@@ -2412,6 +2550,25 @@ async fn generate_plan_from_session(
         return Ok(PlanningResult::Plan(plan));
     }
 
+    // create_plan was called with empty/invalid arguments — send error and retry once
+    if response.has_tool_use("create_plan")
+        && let Some(tool_use_id) = response.first_tool_use_id()
+    {
+        debug!("create_plan called with empty arguments, sending error for retry");
+        let results = vec![ToolResultMessage {
+            tool_use_id: tool_use_id.to_string(),
+            tool_name: "create_plan".to_string(),
+            output: "Error: create_plan requires 'objective', 'reasoning', and 'tasks' \
+                     fields. Please call create_plan again with all required arguments."
+                .to_string(),
+            is_error: true,
+        }];
+        let retry = session.send_tool_results(&results).await?;
+        if let Some(plan) = extract_plan_from_response(&retry) {
+            return Ok(PlanningResult::Plan(plan));
+        }
+    }
+
     // No plan found — LLM responded with text only
     let text = response.text_content();
     if !text.is_empty() {
@@ -3157,6 +3314,7 @@ Here is my evaluation:
                 hil_mode: HilMode::Interactive,
                 max_tool_turns: 3,
                 orchestration_strategy: Default::default(),
+                ensemble_session_timeout: None,
             };
             let mut gateway = ScriptedGateway::new();
 
@@ -3232,6 +3390,7 @@ Here is my evaluation:
                 hil_mode: HilMode::Interactive,
                 max_tool_turns: 3,
                 orchestration_strategy: Default::default(),
+                ensemble_session_timeout: None,
             };
             let mut gateway = ScriptedGateway::new();
 
@@ -3295,8 +3454,20 @@ Here is my evaluation:
             );
 
             // Custom planning sessions for each model
+            // For error responses, add two sessions: one for the initial attempt in the
+            // JoinSet, and one for the sequential retry (retryable_models backoff).
             for (model, response) in responses {
-                gateway.add_session(&model.to_string(), vec![response]);
+                match &response {
+                    ScriptedResponse::Error(_) => {
+                        // Initial attempt session
+                        gateway.add_session(&model.to_string(), vec![response.clone()]);
+                        // Retry attempt session (same error)
+                        gateway.add_session(&model.to_string(), vec![response]);
+                    }
+                    _ => {
+                        gateway.add_session(&model.to_string(), vec![response]);
+                    }
+                }
             }
 
             self.gateway = gateway;
@@ -3600,8 +3771,8 @@ Here is my evaluation:
     // ==================== Ensemble Planning Flow Tests ====================
 
     #[tokio::test]
-    async fn test_ensemble_all_text_response_falls_back_to_solo() {
-        // 全モデルがテキストのみ返した場合、Solo フォールバックで成功するべき
+    async fn test_ensemble_all_text_response_synthesized() {
+        // 全モデルがテキストのみ返した場合、モデレーター合成で成功するべき
         let mut builder = FlowTestBuilder::ensemble_fast().with_ensemble_plan_responses(vec![
             (
                 Model::ClaudeHaiku45,
@@ -3613,32 +3784,32 @@ Here is my evaluation:
             ),
         ]);
 
-        // Solo fallback needs a planning session for decision_model
+        // Moderator synthesis session (decision_model = ClaudeSonnet45)
         builder.gateway.add_session(
             &Model::ClaudeSonnet45.to_string(),
-            vec![make_plan_response("Solo fallback plan")],
-        );
-        // Solo execution session
-        builder.gateway.add_session(
-            &Model::ClaudeSonnet45.to_string(),
-            vec![ScriptedResponse::Response(LlmResponse::from_text(
-                "Task completed",
-            ))],
+            vec![ScriptedResponse::Text(
+                "Synthesized: Both models offered to help.".into(),
+            )],
         );
 
         let (result, progress) = builder.execute().await;
 
-        let output = result.expect("should succeed via solo fallback");
+        let output = result.expect("should succeed via text synthesis");
         assert!(
             output.success,
-            "Should succeed via solo fallback, got: {}",
+            "Should succeed with synthesized text response, got: {}",
             output.summary
         );
         assert!(progress.has_phase(&AgentPhase::Planning));
-        // Solo fallback should create a plan
+        // No plan should be set — text responses don't generate plans
         assert!(
-            output.state.plan.is_some(),
-            "Plan should be set from solo fallback"
+            output.state.plan.is_none(),
+            "No plan should be set for text-only responses"
+        );
+        assert!(
+            output.summary.contains("Synthesized"),
+            "Summary should contain synthesized text, got: {}",
+            output.summary
         );
     }
 

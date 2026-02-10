@@ -20,7 +20,7 @@
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
     CreateSessionParams, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, JsonRpcResponseOut,
-    ToolCallParams,
+    ToolCallParams, ToolCallResult,
 };
 use crate::copilot::transport::{MessageKind, StreamingOutcome, classify_message};
 use std::collections::HashMap;
@@ -34,6 +34,9 @@ use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
+
+/// Timeout for session creation (waiting for `session.start` event).
+const SESSION_CREATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A message routed to a specific session's channel.
 ///
@@ -136,8 +139,18 @@ impl SessionChannel {
                         trace!("Ignoring event type: {}", other);
                     }
                 },
-                RoutedMessage::ToolCall { .. } => {
-                    warn!("Unexpected tool.call in read_streaming, ignoring");
+                RoutedMessage::ToolCall { request_id, params } => {
+                    warn!(
+                        "Unexpected tool.call in read_streaming: {}, rejecting",
+                        params.tool_name
+                    );
+                    let result =
+                        ToolCallResult::error("Tool not available in this session context");
+                    let response = JsonRpcResponseOut::new(
+                        request_id,
+                        serde_json::to_value(result).unwrap_or_default(),
+                    );
+                    let _ = self.router.send_response(&response).await;
                 }
             }
         }
@@ -260,8 +273,18 @@ impl SessionChannel {
                         trace!("Ignoring event type: {}", other);
                     }
                 },
-                RoutedMessage::ToolCall { .. } => {
-                    warn!("Unexpected tool.call in read_streaming_with_cancellation, ignoring");
+                RoutedMessage::ToolCall { request_id, params } => {
+                    warn!(
+                        "Unexpected tool.call in read_streaming_with_cancellation: {}, rejecting",
+                        params.tool_name
+                    );
+                    let result =
+                        ToolCallResult::error("Tool not available in this session context");
+                    let response = JsonRpcResponseOut::new(
+                        request_id,
+                        serde_json::to_value(result).unwrap_or_default(),
+                    );
+                    let _ = self.router.send_response(&response).await;
                 }
             }
         }
@@ -306,7 +329,12 @@ pub struct MessageRouter {
     _reader_handle: JoinHandle<()>,
 
     /// Session-specific event channels (session_id -> sender).
-    routes: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>>,
+    ///
+    /// Uses `std::sync::RwLock` (not `tokio::sync::RwLock`) so that
+    /// [`deregister_session`](Self::deregister_session) can be called
+    /// synchronously from [`SessionChannel::drop`]. The lock is only held
+    /// briefly for HashMap insert/remove, so blocking is negligible.
+    routes: Arc<std::sync::RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>>,
 
     /// Request-response correlation (request_id -> oneshot sender).
     pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
@@ -384,8 +412,8 @@ impl MessageRouter {
         let stream = TcpStream::connect(format!("127.0.0.1:{}", port)).await?;
         let (read_half, write_half) = stream.into_split();
 
-        let routes: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        let routes: Arc<std::sync::RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>> =
+            Arc::new(std::sync::RwLock::new(HashMap::new()));
         let pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let (session_start_tx, session_start_rx) = mpsc::unbounded_channel();
@@ -428,7 +456,7 @@ impl MessageRouter {
     /// `None` / `RecvError`, which propagates as [`CopilotError::RouterStopped`].
     async fn reader_loop(
         read_half: OwnedReadHalf,
-        routes: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>>,
+        routes: Arc<std::sync::RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>>,
         pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
         session_start_tx: mpsc::UnboundedSender<SessionStartEvent>,
     ) {
@@ -523,7 +551,7 @@ impl MessageRouter {
                             };
 
                             let session_id = params.session_id.clone();
-                            let routes_read = routes.read().await;
+                            let routes_read = routes.read().unwrap_or_else(|e| e.into_inner());
                             if let Some(tx) = routes_read.get(&session_id) {
                                 let _ = tx.send(RoutedMessage::ToolCall {
                                     request_id: id,
@@ -575,7 +603,7 @@ impl MessageRouter {
                                 }
 
                                 // Route to session channel
-                                let routes_read = routes.read().await;
+                                let routes_read = routes.read().unwrap_or_else(|e| e.into_inner());
                                 if let Some(tx) = routes_read.get(&sid) {
                                     let _ = tx.send(RoutedMessage::SessionEvent {
                                         event_type,
@@ -604,7 +632,7 @@ impl MessageRouter {
         // Reader ended — drop all senders so receivers get None
         info!("Router: reader loop ended, closing all session channels");
         {
-            let mut routes_w = routes.write().await;
+            let mut routes_w = routes.write().unwrap_or_else(|e| e.into_inner());
             routes_w.clear();
         }
         {
@@ -658,10 +686,18 @@ impl MessageRouter {
 
         self.send_request(&request).await?;
 
-        // Wait for session.start event
+        // Wait for session.start event with timeout
         let start_event = {
             let mut rx = self.session_start_rx.lock().await;
-            rx.recv().await.ok_or(CopilotError::RouterStopped)?
+            match tokio::time::timeout(SESSION_CREATE_TIMEOUT, rx.recv()).await {
+                Ok(Some(event)) => event,
+                Ok(None) => return Err(CopilotError::RouterStopped),
+                Err(_) => {
+                    return Err(CopilotError::Timeout(
+                        "session.create timed out waiting for session.start".into(),
+                    ));
+                }
+            }
         };
 
         let session_id = start_event.session_id;
@@ -670,7 +706,7 @@ impl MessageRouter {
         // Create the channel pair and register
         let (tx, rx) = mpsc::unbounded_channel();
         {
-            let mut routes = self.routes.write().await;
+            let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
             routes.insert(session_id.clone(), tx);
         }
 
@@ -693,13 +729,19 @@ impl MessageRouter {
     /// for `session.send` and similar request–response pairs.
     pub async fn request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let (tx, rx) = oneshot::channel();
+        let request_id = request.id;
 
         {
             let mut pending = self.pending_responses.write().await;
-            pending.insert(request.id, tx);
+            pending.insert(request_id, tx);
         }
 
-        self.send_request(request).await?;
+        if let Err(e) = self.send_request(request).await {
+            // Clean up the pending entry to prevent leaks
+            let mut pending = self.pending_responses.write().await;
+            pending.remove(&request_id);
+            return Err(e);
+        }
 
         rx.await.map_err(|_| CopilotError::RouterStopped)
     }
@@ -742,13 +784,9 @@ impl MessageRouter {
     /// Automatically called by [`SessionChannel::drop`] — callers do not
     /// normally need to invoke this directly.
     pub fn deregister_session(&self, session_id: &str) {
-        let routes = Arc::clone(&self.routes);
-        let session_id = session_id.to_string();
-        tokio::spawn(async move {
-            let mut routes = routes.write().await;
-            if routes.remove(&session_id).is_some() {
-                debug!("Router: deregistered session {}", session_id);
-            }
-        });
+        let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
+        if routes.remove(session_id).is_some() {
+            debug!("Router: deregistered session {}", session_id);
+        }
     }
 }

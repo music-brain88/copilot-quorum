@@ -153,6 +153,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self.verbose
     }
 
+    /// Set verbose output dynamically
+    pub fn set_verbose(&mut self, verbose: bool) {
+        self.verbose = verbose;
+    }
+
+    /// Set cancellation token dynamically
+    pub fn set_cancellation(&mut self, token: CancellationToken) {
+        self.cancellation_token = Some(token.clone());
+        self.use_case = self.use_case.clone().with_cancellation(token);
+    }
+
     /// Generate the prompt string for the REPL
     pub fn prompt_string(&self) -> String {
         match self.consensus_level {

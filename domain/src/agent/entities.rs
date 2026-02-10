@@ -25,6 +25,7 @@ use crate::orchestration::scope::PhaseScope;
 use crate::orchestration::strategy::OrchestrationStrategy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Human-in-the-loop mode for handling plan revision limits.
 ///
@@ -753,6 +754,14 @@ pub struct AgentConfig {
     /// The loop stops when the LLM finishes (stop_reason != ToolUse) or this limit is reached.
     /// Only used in the Native Tool Use path; ignored for prompt-based execution.
     pub max_tool_turns: usize,
+    /// Timeout for each ensemble session's plan generation.
+    ///
+    /// When a model exceeds this timeout during ensemble planning, it is recorded
+    /// as timed out and retried once after a backoff period. This works around
+    /// Copilot CLI's internal serialization of concurrent `session.send` requests.
+    ///
+    /// Default: 90 seconds. Set to `None` to disable the timeout.
+    pub ensemble_session_timeout: Option<Duration>,
 }
 
 impl Default for AgentConfig {
@@ -777,6 +786,7 @@ impl Default for AgentConfig {
             max_plan_revisions: 3,
             hil_mode: HilMode::Interactive,
             max_tool_turns: 10,
+            ensemble_session_timeout: Some(Duration::from_secs(90)),
         }
     }
 }
@@ -906,6 +916,12 @@ impl AgentConfig {
     /// Set maximum tool use turns for Native Tool Use loop
     pub fn with_max_tool_turns(mut self, max: usize) -> Self {
         self.max_tool_turns = max;
+        self
+    }
+
+    /// Set the timeout for ensemble session plan generation
+    pub fn with_ensemble_session_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.ensemble_session_timeout = timeout;
         self
     }
 }
