@@ -558,8 +558,7 @@ impl MessageRouter {
 
                             let session_id = params.session_id.clone();
                             let routed = {
-                                let routes_read =
-                                    routes.read().unwrap_or_else(|e| e.into_inner());
+                                let routes_read = routes.read().unwrap_or_else(|e| e.into_inner());
                                 if let Some(tx) = routes_read.get(&session_id) {
                                     let _ = tx.send(RoutedMessage::ToolCall {
                                         request_id: id,
@@ -585,8 +584,7 @@ impl MessageRouter {
                                     serde_json::to_value(result).unwrap_or_default(),
                                 );
                                 if let Ok(json) = serde_json::to_string(&response) {
-                                    let header =
-                                        format!("Content-Length: {}\r\n\r\n", json.len());
+                                    let header = format!("Content-Length: {}\r\n\r\n", json.len());
                                     let mut w = writer.lock().await;
                                     let _ = w.write_all(header.as_bytes()).await;
                                     let _ = w.write_all(json.as_bytes()).await;
