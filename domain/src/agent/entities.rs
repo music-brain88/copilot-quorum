@@ -444,12 +444,19 @@ impl Plan {
     }
 
     pub fn with_task(mut self, task: Task) -> Self {
-        self.tasks.push(task);
+        self.add_task(task);
         self
     }
 
     pub fn add_task(&mut self, task: Task) {
-        self.tasks.push(task);
+        if self.tasks.iter().any(|t| t.id == task.id) {
+            let new_id = TaskId::new(format!("{}-{}", task.id, self.tasks.len() + 1));
+            let mut renamed = task;
+            renamed.id = new_id;
+            self.tasks.push(renamed);
+        } else {
+            self.tasks.push(task);
+        }
     }
 
     pub fn approve(&mut self) {
@@ -1376,5 +1383,17 @@ mod tests {
 
         assert!(summary.contains("Plan 1"));
         assert!(summary.contains("avg 7.0/10"));
+    }
+
+    #[test]
+    fn test_plan_add_task_deduplicates_ids() {
+        let mut plan = Plan::new("Test", "Reasoning");
+        plan.add_task(Task::new("1", "First task"));
+        plan.add_task(Task::new("1", "Duplicate ID task"));
+
+        assert_eq!(plan.tasks.len(), 2);
+        assert_eq!(plan.tasks[0].id, TaskId::new("1"));
+        // Duplicate gets renamed to "1-2"
+        assert_eq!(plan.tasks[1].id, TaskId::new("1-2"));
     }
 }
