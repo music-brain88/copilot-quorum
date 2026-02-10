@@ -183,8 +183,13 @@ where
                     candidates.push(PlanCandidate::new(model, plan));
                 }
                 Ok((model, Ok(PlanningResult::TextResponse(text)))) => {
-                    info!("Model {} returned text response (no plan)", model);
-                    text_responses.push((model.to_string(), text));
+                    if text.trim().is_empty() {
+                        warn!("Model {} returned empty text response, discarding", model);
+                        failed_count += 1;
+                    } else {
+                        info!("Model {} returned text response (no plan)", model);
+                        text_responses.push((model.to_string(), text));
+                    }
                 }
                 Ok((model, Err(e))) => {
                     // All errors are retryable (timeout, transport close, router stopped, etc.)
@@ -247,8 +252,16 @@ where
                         candidates.push(PlanCandidate::new(model, plan));
                     }
                     Ok(PlanningResult::TextResponse(text)) => {
-                        info!("Model {} returned text response on retry (no plan)", model);
-                        text_responses.push((model.to_string(), text));
+                        if text.trim().is_empty() {
+                            warn!(
+                                "Model {} returned empty text response on retry, discarding",
+                                model
+                            );
+                            failed_count += 1;
+                        } else {
+                            info!("Model {} returned text response on retry (no plan)", model);
+                            text_responses.push((model.to_string(), text));
+                        }
                     }
                     Err(e) => {
                         warn!("Model {} retry failed: {}", model, e);

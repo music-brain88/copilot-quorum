@@ -53,32 +53,36 @@ Do not wrap tool calls in code blocks."#
     pub fn plan_tool_schema() -> serde_json::Value {
         json!({
             "name": "create_plan",
-            "description": "Create an execution plan. You MUST call this tool to submit your plan.",
+            "description": "Create an execution plan with all required fields. You MUST provide: 'objective' (string describing the goal), 'reasoning' (string explaining your approach), and 'tasks' (array of task objects). Do NOT call this tool with empty arguments.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "objective": {
                         "type": "string",
-                        "description": "What we're trying to accomplish"
+                        "description": "A clear description of what we're trying to accomplish. Must not be empty.",
+                        "minLength": 1
                     },
                     "reasoning": {
                         "type": "string",
-                        "description": "Why this approach makes sense"
+                        "description": "Explanation of why this approach makes sense and what alternatives were considered. Must not be empty.",
+                        "minLength": 1
                     },
                     "tasks": {
                         "type": "array",
-                        "description": "Ordered list of tasks to execute",
+                        "description": "Ordered list of tasks to execute. Must contain at least one task.",
                         "minItems": 1,
                         "items": {
                             "type": "object",
                             "properties": {
                                 "id": {
                                     "type": "string",
-                                    "description": "Unique task identifier"
+                                    "description": "Unique task identifier (e.g. 'task-1', 'task-2')",
+                                    "minLength": 1
                                 },
                                 "description": {
                                     "type": "string",
-                                    "description": "What this task does"
+                                    "description": "What this task does",
+                                    "minLength": 1
                                 },
                                 "tool": {
                                     "type": "string",
@@ -94,11 +98,13 @@ Do not wrap tool calls in code blocks."#
                                     "description": "IDs of tasks this depends on"
                                 }
                             },
-                            "required": ["id", "description"]
+                            "required": ["id", "description"],
+                            "additionalProperties": false
                         }
                     }
                 },
-                "required": ["objective", "reasoning", "tasks"]
+                "required": ["objective", "reasoning", "tasks"],
+                "additionalProperties": false
             }
         })
     }
