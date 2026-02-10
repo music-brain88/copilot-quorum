@@ -716,6 +716,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         break; // Exit loop and proceed to Phase 4
                     }
                     Ok(EnsemblePlanningOutcome::TextResponse(text)) => {
+                        // All ensemble models returned text (no plans needed).
+                        // The moderator has already synthesized the responses.
+                        // This is the correct path for greetings, questions, etc.
                         state.add_thought(Thought::observation(
                             "No plan needed — ensemble text responses synthesized",
                         ));
@@ -1356,7 +1359,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Collect generated plans with cancellation support
         let mut candidates: Vec<PlanCandidate> = Vec::new();
         let mut text_responses: Vec<(String, String)> = Vec::new();
-        let mut timed_out_models: Vec<Model> = Vec::new();
+        let mut retryable_models: Vec<Model> = Vec::new();
         let mut failed_count = 0usize;
 
         loop {
@@ -1387,15 +1390,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     info!("Model {} returned text response (no plan)", model);
                     text_responses.push((model.to_string(), text));
                 }
-                Ok((model, Err(e))) if e.contains("timed out") => {
-                    warn!("Model {} timed out, will retry after backoff: {}", model, e);
-                    progress.on_ensemble_model_failed(&model, &e);
-                    timed_out_models.push(model);
-                }
                 Ok((model, Err(e))) => {
-                    warn!("Model {} failed to generate plan: {}", model, e);
+                    // All errors are retryable (timeout, transport close, router stopped, etc.)
+                    // since the Copilot CLI may serialize session.send internally, causing
+                    // later sessions to fail when earlier ones complete and close the transport.
+                    warn!(
+                        "Model {} failed (will retry after backoff): {}",
+                        model, e
+                    );
                     progress.on_ensemble_model_failed(&model, &e);
-                    failed_count += 1;
+                    retryable_models.push(model);
                 }
                 Err(e) => {
                     warn!("Task join error: {}", e);
@@ -1404,16 +1408,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
         }
 
-        // Step 1b: Retry timed-out models sequentially after backoff
-        if !timed_out_models.is_empty() {
+        // Step 1b: Retry failed models sequentially after backoff
+        // Copilot CLI serializes session.send internally, so later sessions often fail
+        // when earlier ones complete and the CLI closes the transport. A brief backoff
+        // followed by sequential retry gives each model a fresh chance.
+        if !retryable_models.is_empty() {
             info!(
-                "Retrying {} timed-out models after backoff",
-                timed_out_models.len()
+                "Retrying {} failed models after backoff",
+                retryable_models.len()
             );
-            // Brief backoff to let CLI finish processing the previous session
+            // Brief backoff to let CLI finish processing and stabilize
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-            for model in timed_out_models {
+            for model in retryable_models {
                 self.check_cancelled()?;
                 info!("Retrying timed-out model: {}", model);
 
@@ -3447,14 +3454,20 @@ Here is my evaluation:
             );
 
             // Custom planning sessions for each model
-            // Error responses are duplicated so the retry attempt also gets an error
-            // (otherwise the retry would get a default text response from ScriptedSession)
+            // For error responses, add two sessions: one for the initial attempt in the
+            // JoinSet, and one for the sequential retry (retryable_models backoff).
             for (model, response) in responses {
-                let responses = match &response {
-                    ScriptedResponse::Error(_) => vec![response.clone(), response],
-                    _ => vec![response],
-                };
-                gateway.add_session(&model.to_string(), responses);
+                match &response {
+                    ScriptedResponse::Error(_) => {
+                        // Initial attempt session
+                        gateway.add_session(&model.to_string(), vec![response.clone()]);
+                        // Retry attempt session (same error)
+                        gateway.add_session(&model.to_string(), vec![response]);
+                    }
+                    _ => {
+                        gateway.add_session(&model.to_string(), vec![response]);
+                    }
+                }
             }
 
             self.gateway = gateway;
