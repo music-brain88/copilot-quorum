@@ -930,6 +930,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             if let Some(plan) = &mut state.plan
                 && let Some(task) = plan.get_task_mut(&task_id)
             {
+                if task.status.is_terminal() {
+                    warn!("Task {} already in terminal state, skipping", task_id);
+                    continue;
+                }
                 task.mark_in_progress();
                 progress.on_task_start(task);
             }
@@ -995,6 +999,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             if let Some(plan) = &mut state.plan
                 && let Some(task) = plan.get_task_mut(&task_id)
+                && !task.status.is_terminal()
             {
                 if success {
                     task.mark_completed(quorum_domain::TaskResult::success(&output));
