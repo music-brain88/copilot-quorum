@@ -347,7 +347,10 @@ pub struct MessageRouter {
     create_lock: Mutex<()>,
 
     /// Writer (serialized writes, independent of reader).
-    writer: Mutex<BufWriter<OwnedWriteHalf>>,
+    ///
+    /// Wrapped in `Arc` so the background reader loop can also send error
+    /// responses for orphaned `tool.call` requests (sessions already dropped).
+    writer: Arc<Mutex<BufWriter<OwnedWriteHalf>>>,
 
     /// Copilot CLI child process.
     _child: Child,
@@ -417,14 +420,16 @@ impl MessageRouter {
         let pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let (session_start_tx, session_start_rx) = mpsc::unbounded_channel();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_half)));
 
         // Clone refs for the background reader task
         let routes_bg = Arc::clone(&routes);
         let pending_bg = Arc::clone(&pending_responses);
         let start_tx_bg = session_start_tx.clone();
+        let writer_bg = Arc::clone(&writer);
 
         let reader_handle = tokio::spawn(async move {
-            Self::reader_loop(read_half, routes_bg, pending_bg, start_tx_bg).await;
+            Self::reader_loop(read_half, routes_bg, pending_bg, start_tx_bg, writer_bg).await;
         });
 
         let router = Arc::new(Self {
@@ -434,7 +439,7 @@ impl MessageRouter {
             _session_start_tx: session_start_tx,
             session_start_rx: Mutex::new(session_start_rx),
             create_lock: Mutex::new(()),
-            writer: Mutex::new(BufWriter::new(write_half)),
+            writer,
             _child: child,
         });
 
@@ -459,6 +464,7 @@ impl MessageRouter {
         routes: Arc<std::sync::RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>>,
         pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
         session_start_tx: mpsc::UnboundedSender<SessionStartEvent>,
+        writer: Arc<Mutex<BufWriter<OwnedWriteHalf>>>,
     ) {
         let mut reader = BufReader::new(read_half);
         let mut line = String::new();
@@ -551,14 +557,41 @@ impl MessageRouter {
                             };
 
                             let session_id = params.session_id.clone();
-                            let routes_read = routes.read().unwrap_or_else(|e| e.into_inner());
-                            if let Some(tx) = routes_read.get(&session_id) {
-                                let _ = tx.send(RoutedMessage::ToolCall {
-                                    request_id: id,
-                                    params,
-                                });
-                            } else {
-                                warn!("Router: no route for tool.call session_id={}", session_id);
+                            let routed = {
+                                let routes_read =
+                                    routes.read().unwrap_or_else(|e| e.into_inner());
+                                if let Some(tx) = routes_read.get(&session_id) {
+                                    let _ = tx.send(RoutedMessage::ToolCall {
+                                        request_id: id,
+                                        params,
+                                    });
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+                            if !routed {
+                                // Session already deregistered (e.g. timeout) — reject
+                                // the tool.call so the CLI doesn't hang waiting.
+                                warn!(
+                                    "Router: no route for tool.call session_id={}, rejecting",
+                                    session_id
+                                );
+                                let result = ToolCallResult::error(
+                                    "Session no longer active (timed out or completed)",
+                                );
+                                let response = JsonRpcResponseOut::new(
+                                    id,
+                                    serde_json::to_value(result).unwrap_or_default(),
+                                );
+                                if let Ok(json) = serde_json::to_string(&response) {
+                                    let header =
+                                        format!("Content-Length: {}\r\n\r\n", json.len());
+                                    let mut w = writer.lock().await;
+                                    let _ = w.write_all(header.as_bytes()).await;
+                                    let _ = w.write_all(json.as_bytes()).await;
+                                    let _ = w.flush().await;
+                                }
                             }
                         } else {
                             debug!("Router: ignoring incoming request method={}", method);

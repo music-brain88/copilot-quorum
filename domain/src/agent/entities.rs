@@ -760,7 +760,7 @@ pub struct AgentConfig {
     /// as timed out and retried once after a backoff period. This works around
     /// Copilot CLI's internal serialization of concurrent `session.send` requests.
     ///
-    /// Default: 90 seconds. Set to `None` to disable the timeout.
+    /// Default: 180 seconds. Set to `None` to disable the timeout.
     pub ensemble_session_timeout: Option<Duration>,
 }
 
@@ -786,7 +786,7 @@ impl Default for AgentConfig {
             max_plan_revisions: 3,
             hil_mode: HilMode::Interactive,
             max_tool_turns: 10,
-            ensemble_session_timeout: Some(Duration::from_secs(90)),
+            ensemble_session_timeout: Some(Duration::from_secs(180)),
         }
     }
 }
