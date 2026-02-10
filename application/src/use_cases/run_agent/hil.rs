@@ -2,8 +2,8 @@
 //!
 //! Contains human intervention and execution confirmation handlers.
 
-use super::types::RunAgentError;
 use super::RunAgentUseCase;
+use super::types::RunAgentError;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::HumanInterventionError;

@@ -60,8 +60,8 @@ pub use tool::{
 
 // Re-export quorum types
 pub use quorum::{
-    parse_final_review_response, parse_review_response, parse_vote_score, ConsensusOutcome,
-    ConsensusRound, QuorumRule, Vote, VoteResult,
+    ConsensusOutcome, ConsensusRound, QuorumRule, Vote, VoteResult, parse_final_review_response,
+    parse_review_response, parse_vote_score,
 };
 
 // Re-export plan parser

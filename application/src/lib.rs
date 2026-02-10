@@ -9,6 +9,7 @@ pub mod use_cases;
 
 // Re-export commonly used types
 pub use config::BehaviorConfig;
+pub use ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 pub use ports::{
     context_loader::ContextLoaderPort,
     human_intervention::{
@@ -23,7 +24,6 @@ pub use use_cases::init_context::{
     InitContextError, InitContextInput, InitContextOutput, InitContextProgressNotifier,
     InitContextUseCase, NoInitContextProgress,
 };
-pub use ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 pub use use_cases::run_agent::{RunAgentError, RunAgentInput, RunAgentOutput, RunAgentUseCase};
 // Re-export ErrorCategory from domain (was previously in run_agent)
 pub use quorum_domain::ErrorCategory;

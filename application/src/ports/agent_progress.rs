@@ -62,8 +62,7 @@ pub trait AgentProgressNotifier: Send + Sync {
     fn on_tool_error(&self, _tool_name: &str, _category: ErrorCategory, _message: &str) {}
 
     /// Called when retrying a tool call after an error
-    fn on_tool_retry(&self, _tool_name: &str, _attempt: usize, _max_retries: usize, _error: &str) {
-    }
+    fn on_tool_retry(&self, _tool_name: &str, _attempt: usize, _max_retries: usize, _error: &str) {}
 
     /// Called when a tool name is not found in the registry
     fn on_tool_not_found(&self, _tool_name: &str, _available_tools: &[&str]) {}
