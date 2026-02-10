@@ -47,6 +47,9 @@ reqwest = { workspace = true, optional = true }
 # HTML parsing (optional, for web tools)
 scraper = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
 [features]
 default = []
 web-tools = ["dep:reqwest", "dep:scraper"]
