@@ -72,6 +72,15 @@ pub fn parse_plan(response: &str) -> Option<Plan> {
     None
 }
 
+/// JSON 値を文字列に変換（数値・bool も文字列化、null・空文字は None）
+fn json_value_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 /// Parse a plan from a JSON value.
 ///
 /// Expected schema:
@@ -105,11 +114,11 @@ pub fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
         return None;
     }
 
-    for task_json in tasks {
+    for (index, task_json) in tasks.iter().enumerate() {
         let id = task_json
             .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .and_then(json_value_to_string)
+            .unwrap_or_else(|| format!("{}", index + 1));
         let description = task_json
             .get("description")
             .and_then(|v| v.as_str())
@@ -132,7 +141,7 @@ pub fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
 
         if let Some(deps) = task_json.get("depends_on").and_then(|v| v.as_array()) {
             for dep in deps {
-                if let Some(dep_id) = dep.as_str() {
+                if let Some(dep_id) = json_value_to_string(dep) {
                     task = task.with_dependency(dep_id);
                 }
             }
@@ -314,5 +323,70 @@ Here's my plan:
     fn test_extract_plan_from_response_no_plan() {
         let response = LlmResponse::from_text("I'll think about this.");
         assert!(extract_plan_from_response(&response).is_none());
+    }
+
+    #[test]
+    fn test_parse_plan_numeric_task_ids() {
+        let json = serde_json::json!({
+            "objective": "Fix bug",
+            "reasoning": "It's broken",
+            "tasks": [
+                {"id": 1, "description": "Read file", "tool": "read_file"},
+                {"id": 2, "description": "Write fix", "tool": "write_file", "depends_on": [1]}
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+        assert_eq!(plan.tasks[0].id, TaskId::new("1"));
+        assert_eq!(plan.tasks[1].id, TaskId::new("2"));
+        assert_eq!(plan.tasks[1].depends_on, vec![TaskId::new("1")]);
+    }
+
+    #[test]
+    fn test_parse_plan_missing_ids_get_sequential() {
+        let json = serde_json::json!({
+            "objective": "Do stuff",
+            "reasoning": "reasons",
+            "tasks": [
+                {"description": "First task"},
+                {"description": "Second task"},
+                {"description": "Third task"}
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+        assert_eq!(plan.tasks[0].id, TaskId::new("1"));
+        assert_eq!(plan.tasks[1].id, TaskId::new("2"));
+        assert_eq!(plan.tasks[2].id, TaskId::new("3"));
+    }
+
+    #[test]
+    fn test_parse_plan_null_id_gets_sequential() {
+        let json = serde_json::json!({
+            "objective": "Do stuff",
+            "reasoning": "reasons",
+            "tasks": [
+                {"id": null, "description": "Null ID task"},
+                {"id": "", "description": "Empty string ID task"}
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+        assert_eq!(plan.tasks[0].id, TaskId::new("1"));
+        assert_eq!(plan.tasks[1].id, TaskId::new("2"));
+    }
+
+    #[test]
+    fn test_parse_plan_mixed_id_types() {
+        let json = serde_json::json!({
+            "objective": "Mixed IDs",
+            "reasoning": "testing",
+            "tasks": [
+                {"id": "alpha", "description": "String ID"},
+                {"id": 42, "description": "Numeric ID"},
+                {"description": "Missing ID"}
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+        assert_eq!(plan.tasks[0].id, TaskId::new("alpha"));
+        assert_eq!(plan.tasks[1].id, TaskId::new("42"));
+        assert_eq!(plan.tasks[2].id, TaskId::new("3"));
     }
 }
