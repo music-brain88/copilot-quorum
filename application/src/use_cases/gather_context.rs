@@ -215,9 +215,7 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
                             context = context.with_project_type("rust");
                         } else if output.contains("package.json") {
                             context = context.with_project_type("nodejs");
-                        } else if output.contains("pyproject.toml")
-                            || output.contains("setup.py")
-                        {
+                        } else if output.contains("pyproject.toml") || output.contains("setup.py") {
                             context = context.with_project_type("python");
                         }
                     }

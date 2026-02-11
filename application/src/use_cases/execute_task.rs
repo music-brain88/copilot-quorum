@@ -355,13 +355,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     .unwrap_or_default();
 
                     self.action_reviewer
-                        .review_action(
-                            &tool_call_json,
-                            task,
-                            state,
-                            &input.config,
-                            progress,
-                        )
+                        .review_action(&tool_call_json, task, state, &input.config, progress)
                         .await?
                 };
 

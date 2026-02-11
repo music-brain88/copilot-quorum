@@ -679,7 +679,9 @@ mod tests {
     use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::tool::value_objects::ToolResult;
-    use quorum_domain::{AgentConfig, ConsensusLevel, ContextMode, InteractionType, Model, PhaseScope};
+    use quorum_domain::{
+        AgentConfig, ConsensusLevel, ContextMode, InteractionType, Model, PhaseScope,
+    };
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
 
