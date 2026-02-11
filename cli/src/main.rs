@@ -50,7 +50,8 @@ fn resolve_log_dir(override_path: Option<&Path>) -> PathBuf {
 /// Generate a timestamped log filename for this session.
 fn generate_log_filename() -> String {
     let now = chrono::Local::now();
-    format!("session-{}.log", now.format("%Y-%m-%dT%H-%M-%S"))
+    let pid = std::process::id();
+    format!("session-{}-{}.log", now.format("%Y-%m-%dT%H-%M-%S"), pid)
 }
 
 /// Initialize multi-layer logging (console + optional file).
