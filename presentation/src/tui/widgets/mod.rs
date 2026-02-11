@@ -30,11 +30,7 @@ impl MainLayout {
     /// `max_input_height` is the maximum number of text lines (from config).
     /// The input area grows from 3 (1 line + borders) up to max_input_height + 2 (borders),
     /// but is capped to prevent pushing other widgets out of the terminal.
-    pub fn compute_with_input_config(
-        area: Rect,
-        input_lines: u16,
-        max_input_height: u16,
-    ) -> Self {
+    pub fn compute_with_input_config(area: Rect, input_lines: u16, max_input_height: u16) -> Self {
         let header_h: u16 = 3;
         let status_h: u16 = 1;
 
@@ -50,10 +46,10 @@ impl MainLayout {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(header_h),  // Header
-                Constraint::Fill(1),           // Main (conversation + progress)
-                Constraint::Length(input_h),   // Input (dynamic)
-                Constraint::Length(status_h),  // Status bar
+                Constraint::Length(header_h), // Header
+                Constraint::Fill(1),          // Main (conversation + progress)
+                Constraint::Length(input_h),  // Input (dynamic)
+                Constraint::Length(status_h), // Status bar
             ])
             .split(area);
 

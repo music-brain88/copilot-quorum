@@ -16,7 +16,9 @@ use super::event::{HilKind, HilRequest, TuiCommand, TuiEvent};
 use super::mode::{self, InputMode, KeyAction};
 use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
-use super::state::{DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiInputConfig, TuiState};
+use super::state::{
+    DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiInputConfig, TuiState,
+};
 use super::widgets::{
     MainLayout, conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
     progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget,
@@ -307,9 +309,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if keyboard_enhanced {
             let _ = execute!(
                 terminal.backend_mut(),
-                PushKeyboardEnhancementFlags(
-                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                )
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
             );
         }
         terminal.clear()?;

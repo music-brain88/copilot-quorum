@@ -41,10 +41,7 @@ pub fn launch_editor_with_options(
 ) -> EditorResult {
     // 1. Create temp file
     let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!(
-        ".quorum-prompt-{}.md",
-        std::process::id()
-    ));
+    let temp_path = temp_dir.join(format!(".quorum-prompt-{}.md", std::process::id()));
 
     // 2. Write context header + initial text
     let content = if show_header {
@@ -87,19 +84,17 @@ pub fn launch_editor_with_options(
 
     // 5. Read back file content
     let result = match status {
-        Ok(exit_status) if exit_status.success() => {
-            match std::fs::read_to_string(&temp_path) {
-                Ok(raw) => {
-                    let filtered = filter_comments(&raw);
-                    if filtered.is_empty() {
-                        EditorResult::Cancelled
-                    } else {
-                        EditorResult::Saved(filtered)
-                    }
+        Ok(exit_status) if exit_status.success() => match std::fs::read_to_string(&temp_path) {
+            Ok(raw) => {
+                let filtered = filter_comments(&raw);
+                if filtered.is_empty() {
+                    EditorResult::Cancelled
+                } else {
+                    EditorResult::Saved(filtered)
                 }
-                Err(_) => EditorResult::Cancelled,
             }
-        }
+            Err(_) => EditorResult::Cancelled,
+        },
         _ => EditorResult::Cancelled,
     };
 
@@ -111,10 +106,7 @@ pub fn launch_editor_with_options(
 
 /// Strip lines starting with `#` (comment lines) and trim the result
 pub fn filter_comments(text: &str) -> String {
-    let filtered: Vec<&str> = text
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .collect();
+    let filtered: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).collect();
 
     // Join and trim leading/trailing whitespace
     let result = filtered.join("\n");
