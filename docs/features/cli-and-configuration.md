@@ -269,6 +269,18 @@ enabled = false
 name = "filesystem"
 command = "npx"
 args = ["-y", "@anthropic/mcp-server-filesystem", "/workspace"]
+
+# ============================================================
+# TUI Settings / TUI 設定
+# ============================================================
+[tui.input]
+submit_key = "enter"           # 送信キー
+newline_key = "shift+enter"    # 改行挿入キー（マルチライン入力）
+editor_key = "I"               # $EDITOR 起動キー（NORMAL モード）
+editor_action = "return_to_insert"  # $EDITOR 保存後の動作: "return_to_insert" or "submit"
+max_height = 10                # INSERT モード入力エリアの最大行数
+dynamic_height = true          # 入力内容に応じた動的リサイズ
+context_header = true          # $EDITOR 起動時のコンテキストヘッダー表示
 ```
 
 ---
@@ -319,4 +331,4 @@ CLI Arguments / REPL Input
 - [Ensemble Mode](./ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
 - [Tool System](./tool-system.md) - ツール設定の詳細
 
-<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /ask, /discuss, /council, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。5つの直交設定軸: ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）、InteractionType（Ask/Discuss）、ContextMode（Shared/Fresh）。/discuss は引数なしのモードコマンドに変更、旧 /discuss <question> は /council に移行。プロンプト表示は solo:ask> / ens:discuss> 等。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults。主要ファイルは application/src/use_cases/agent_controller.rs と infrastructure/src/config/。 -->
+<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /ask, /discuss, /council, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。5つの直交設定軸: ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）、InteractionType（Ask/Discuss）、ContextMode（Shared/Fresh）。/discuss は引数なしのモードコマンドに変更、旧 /discuss <question> は /council に移行。プロンプト表示は solo:ask> / ens:discuss> 等。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults。[tui.input] セクションで TUI の入力設定（max_height, context_header, submit_key, newline_key, editor_key, editor_action, dynamic_height）を管理。主要ファイルは application/src/use_cases/agent_controller.rs と infrastructure/src/config/。 -->
