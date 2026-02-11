@@ -1,27 +1,170 @@
 //! Quorum review methods for the RunAgent use case.
 //!
-//! Contains plan review, action review, and final review orchestration.
+//! Contains plan review, final review orchestration, and the
+//! [`QuorumActionReviewer`] implementation of [`ActionReviewer`].
 
 use super::RunAgentUseCase;
 use super::types::{QuorumReviewResult, RunAgentError, RunAgentInput};
+use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway};
 use crate::ports::tool_executor::ToolExecutorPort;
+use async_trait::async_trait;
 use quorum_domain::quorum::parsing::{parse_final_review_response, parse_review_response};
-use quorum_domain::{AgentPromptTemplate, AgentState, Model, Task};
+use quorum_domain::{AgentConfig, AgentPromptTemplate, AgentState, Model, Task};
 use std::sync::Arc;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-impl<G, T, C> RunAgentUseCase<G, T, C>
-where
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
+// ==================== Free Functions ====================
+
+/// Query a single model for review.
+///
+/// Used by `review_plan`, `review_action`, and `final_review`.
+pub(crate) async fn query_model_for_review(
+    gateway: &dyn LlmGateway,
+    model: &Model,
+    prompt: &str,
+) -> Result<String, GatewayError> {
+    let system_prompt = "You are a code reviewer evaluating plans and actions. \
+        Provide your assessment with a clear APPROVE or REJECT/REVISE recommendation.";
+
+    let session = gateway
+        .create_session_with_system_prompt(model, system_prompt)
+        .await?;
+
+    session.send(prompt).await
+}
+
+// ==================== QuorumActionReviewer ====================
+
+/// Action reviewer that uses quorum (multi-model voting) to review high-risk tool calls.
+pub(crate) struct QuorumActionReviewer<G: LlmGateway, T: ToolExecutorPort> {
+    gateway: Arc<G>,
+    tool_executor: Arc<T>,
+    cancellation_token: Option<CancellationToken>,
+}
+
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> QuorumActionReviewer<G, T> {
+    pub(crate) fn new(
+        gateway: Arc<G>,
+        tool_executor: Arc<T>,
+        cancellation_token: Option<CancellationToken>,
+    ) -> Self {
+        Self {
+            gateway,
+            tool_executor,
+            cancellation_token,
+        }
+    }
+}
+
+#[async_trait]
+impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ActionReviewer
+    for QuorumActionReviewer<G, T>
 {
-    /// Check if a tool is high-risk (requires quorum review)
-    pub(super) fn is_high_risk_tool(&self, tool_name: &str) -> bool {
+    async fn review_action(
+        &self,
+        tool_call_json: &str,
+        task: &Task,
+        state: &AgentState,
+        config: &AgentConfig,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<ReviewDecision, RunAgentError> {
+        let models = &config.review_models;
+        if models.is_empty() {
+            return Ok(ReviewDecision::SkipReview);
+        }
+
+        info!("Starting action review for task: {}", task.description);
+        progress.on_quorum_start("action_review", models.len());
+
+        let prompt = AgentPromptTemplate::action_review(task, tool_call_json, &state.context);
+
+        // Query all quorum models in parallel
+        let mut join_set = JoinSet::new();
+
+        for model in models {
+            let gateway = Arc::clone(&self.gateway);
+            let model = model.clone();
+            let prompt = prompt.clone();
+
+            join_set.spawn(async move {
+                let result = query_model_for_review(gateway.as_ref(), &model, &prompt).await;
+                (model, result)
+            });
+        }
+
+        // Collect votes with cancellation support
+        let mut votes = Vec::new();
+
+        loop {
+            let result = if let Some(ref token) = self.cancellation_token {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        join_set.abort_all();
+                        return Err(RunAgentError::Cancelled);
+                    }
+                    result = join_set.join_next() => result,
+                }
+            } else {
+                join_set.join_next().await
+            };
+
+            let Some(result) = result else {
+                break;
+            };
+
+            match result {
+                Ok((model, Ok(response))) => {
+                    let (approved, feedback) = parse_review_response(&response);
+                    info!(
+                        "Model {} voted: {}",
+                        model,
+                        if approved { "APPROVE" } else { "REJECT" }
+                    );
+                    progress.on_quorum_model_complete(&model, approved);
+                    votes.push((model.to_string(), approved, feedback));
+                }
+                Ok((model, Err(e))) => {
+                    warn!("Model {} failed to review: {}", model, e);
+                    progress.on_quorum_model_complete(&model, false);
+                }
+                Err(e) => {
+                    warn!("Task join error: {}", e);
+                }
+            }
+        }
+
+        if votes.is_empty() {
+            return Err(RunAgentError::QuorumFailed);
+        }
+
+        let review = QuorumReviewResult::from_votes(votes);
+
+        // Notify with detailed vote information
+        progress.on_quorum_complete_with_votes(
+            "action_review",
+            review.approved,
+            &review.votes,
+            review.feedback.as_deref(),
+        );
+
+        if review.approved {
+            Ok(ReviewDecision::Approved)
+        } else {
+            Ok(ReviewDecision::Rejected(
+                review
+                    .feedback
+                    .unwrap_or_else(|| "Rejected by quorum".to_string()),
+            ))
+        }
+    }
+
+    fn is_high_risk_tool(&self, tool_name: &str) -> bool {
         if let Some(definition) = self.tool_executor.get_tool(tool_name) {
             definition.is_high_risk()
         } else {
@@ -29,9 +172,16 @@ where
             true
         }
     }
+}
 
-    // ==================== Quorum Review Methods ====================
+// ==================== RunAgentUseCase Review Methods ====================
 
+impl<G, T, C> RunAgentUseCase<G, T, C>
+where
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+{
     /// Review the plan using quorum (multiple models vote)
     pub(super) async fn review_plan(
         &self,
@@ -79,7 +229,7 @@ where
             let prompt = prompt.clone();
 
             join_set.spawn(async move {
-                let result = Self::query_model_for_review(&gateway, &model, &prompt).await;
+                let result = query_model_for_review(gateway.as_ref(), &model, &prompt).await;
                 (model, result)
             });
         }
@@ -139,98 +289,6 @@ where
         Ok(result)
     }
 
-    /// Review a high-risk action using quorum
-    pub(super) async fn review_action(
-        &self,
-        input: &RunAgentInput,
-        state: &AgentState,
-        task: &Task,
-        tool_call_json: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Result<QuorumReviewResult, RunAgentError> {
-        let models = &input.config.review_models;
-        if models.is_empty() {
-            // No quorum models configured, auto-approve
-            return Ok(QuorumReviewResult {
-                approved: true,
-                votes: vec![],
-                feedback: None,
-            });
-        }
-
-        info!("Starting action review for task: {}", task.description);
-        progress.on_quorum_start("action_review", models.len());
-
-        let prompt = AgentPromptTemplate::action_review(task, tool_call_json, &state.context);
-
-        // Query all quorum models in parallel
-        let mut join_set = JoinSet::new();
-
-        for model in models {
-            let gateway = Arc::clone(&self.gateway);
-            let model = model.clone();
-            let prompt = prompt.clone();
-
-            join_set.spawn(async move {
-                let result = Self::query_model_for_review(&gateway, &model, &prompt).await;
-                (model, result)
-            });
-        }
-
-        // Collect votes with cancellation support
-        let mut votes = Vec::new();
-
-        loop {
-            // Check for cancellation using select! if token exists
-            let result = if let Some(ref token) = self.cancellation_token {
-                tokio::select! {
-                    biased;
-                    _ = token.cancelled() => {
-                        join_set.abort_all();
-                        return Err(RunAgentError::Cancelled);
-                    }
-                    result = join_set.join_next() => result,
-                }
-            } else {
-                join_set.join_next().await
-            };
-
-            let Some(result) = result else {
-                break; // All tasks complete
-            };
-
-            match result {
-                Ok((model, Ok(response))) => {
-                    let (approved, feedback) = parse_review_response(&response);
-                    info!(
-                        "Model {} voted: {}",
-                        model,
-                        if approved { "APPROVE" } else { "REJECT" }
-                    );
-                    progress.on_quorum_model_complete(&model, approved);
-                    votes.push((model.to_string(), approved, feedback));
-                }
-                Ok((model, Err(e))) => {
-                    warn!("Model {} failed to review: {}", model, e);
-                    progress.on_quorum_model_complete(&model, false);
-                }
-                Err(e) => {
-                    warn!("Task join error: {}", e);
-                }
-            }
-        }
-
-        if votes.is_empty() {
-            return Err(RunAgentError::QuorumFailed);
-        }
-
-        let result = QuorumReviewResult::from_votes(votes);
-        // Note: UI notification is handled by the caller (execute_single_task)
-        // to maintain separation between business logic and presentation
-
-        Ok(result)
-    }
-
     /// Final review of agent results using quorum (optional)
     pub(super) async fn final_review(
         &self,
@@ -266,7 +324,7 @@ where
             let prompt = prompt.clone();
 
             join_set.spawn(async move {
-                let result = Self::query_model_for_review(&gateway, &model, &prompt).await;
+                let result = query_model_for_review(gateway.as_ref(), &model, &prompt).await;
                 (model, result)
             });
         }
@@ -324,21 +382,5 @@ where
         // to maintain separation between business logic and presentation
 
         Ok(result)
-    }
-
-    /// Query a single model for review
-    pub(super) async fn query_model_for_review(
-        gateway: &G,
-        model: &Model,
-        prompt: &str,
-    ) -> Result<String, GatewayError> {
-        let system_prompt = "You are a code reviewer evaluating plans and actions. \
-            Provide your assessment with a clear APPROVE or REJECT/REVISE recommendation.";
-
-        let session = gateway
-            .create_session_with_system_prompt(model, system_prompt)
-            .await?;
-
-        session.send(prompt).await
     }
 }

@@ -6,6 +6,7 @@ use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
+use crate::use_cases::shared::check_cancelled;
 use quorum_domain::agent::plan_parser::extract_plan_from_response;
 use quorum_domain::quorum::parsing::parse_vote_score;
 use quorum_domain::session::response::LlmResponse;
@@ -30,13 +31,13 @@ where
         previous_feedback: Option<&str>,
         _progress: &dyn AgentProgressNotifier,
     ) -> Result<PlanningResult, RunAgentError> {
-        self.check_cancelled()?;
+        check_cancelled(&self.cancellation_token)?;
 
         match generate_plan_from_session(session, request, context, previous_feedback).await {
             Ok(result) => Ok(result),
             Err(e) => {
                 // Check if the real cause was cancellation
-                self.check_cancelled()?;
+                check_cancelled(&self.cancellation_token)?;
                 Err(RunAgentError::PlanningFailed(e.to_string()))
             }
         }
@@ -219,7 +220,7 @@ where
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
             for model in retryable_models {
-                self.check_cancelled()?;
+                check_cancelled(&self.cancellation_token)?;
                 info!("Retrying timed-out model: {}", model);
 
                 let session = match self

@@ -29,6 +29,11 @@ pub use use_cases::run_agent::{RunAgentError, RunAgentInput, RunAgentOutput, Run
 pub use quorum_domain::ErrorCategory;
 pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
 
+// Extracted use cases (Phase 1 + Phase 4)
+pub use ports::action_reviewer::{ActionReviewer, ReviewDecision};
+pub use use_cases::execute_task::ExecuteTaskUseCase;
+pub use use_cases::gather_context::GatherContextUseCase;
+
 // UI event types (output port for presentation layer)
 pub use ports::ui_event::{
     AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
