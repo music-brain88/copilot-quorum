@@ -25,6 +25,15 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+/// Format timestamps using local time (via chrono).
+struct LocalTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"))
+    }
+}
+
 /// Resolve the log directory path.
 ///
 /// Priority: CLI `--log-dir` → `dirs::data_dir()/copilot-quorum/logs/` → `.copilot-quorum/logs/`
@@ -40,7 +49,7 @@ fn resolve_log_dir(override_path: Option<&Path>) -> PathBuf {
 
 /// Generate a timestamped log filename for this session.
 fn generate_log_filename() -> String {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now();
     format!("session-{}.log", now.format("%Y-%m-%dT%H-%M-%S"))
 }
 
@@ -61,6 +70,7 @@ fn init_logging(
         _ => EnvFilter::new("trace"),
     };
     let console_layer = fmt::layer()
+        .with_timer(LocalTimer)
         .with_target(false)
         .with_writer(std::io::stderr)
         .with_filter(console_filter);
@@ -92,6 +102,7 @@ fn init_logging(
         _ => EnvFilter::new("trace"),
     };
     let file_layer = fmt::layer()
+        .with_timer(LocalTimer)
         .with_ansi(false)
         .with_target(true)
         .with_thread_names(true)
