@@ -29,7 +29,7 @@ COMMAND モード        INSERT モード         $EDITOR (vim/neovim)
 | キー | アクション |
 |------|-----------|
 | `i` / `a` | INSERT モードへ |
-| `I` | $EDITOR を起動（未実装） |
+| `I` | $EDITOR を起動（INSERT バッファの内容を引き継ぎ） |
 | `:` | COMMAND モードへ |
 | `s` | Solo モードに切り替え |
 | `e` | Ensemble モードに切り替え |
@@ -43,15 +43,41 @@ COMMAND モード        INSERT モード         $EDITOR (vim/neovim)
 
 ### Insert モード
 
-LLM の応答パネルを見ながらプロンプトを入力するモード。
+LLM の応答パネルを見ながらプロンプトを入力するモード。**マルチライン入力に対応**しており、
+複雑な指示を構造的に書けます。
 
 | キー | アクション |
 |------|-----------|
 | `Enter` | 入力を送信（Agent 実行） |
+| `Shift+Enter` | 改行を挿入（マルチライン入力） |
+| `Alt+Enter` | 改行を挿入（フォールバック） |
 | `Esc` | NORMAL モードに戻る（送信せず） |
-| `Backspace` | 1文字削除 |
-| `←` / `→` | カーソル移動 |
+| `Backspace` | 1文字削除（改行も削除可能） |
+| `←` / `→` | カーソル移動（行をまたぐ） |
 | `Home` / `End` | 行頭/行末 |
+
+> **Note:** `Shift+Enter` は kitty keyboard protocol 対応ターミナル（Alacritty, kitty, WezTerm, foot）で動作します。
+> 非対応ターミナルでは `Alt+Enter` をフォールバックとして使用してください。
+
+#### マルチライン入力
+
+入力エリアは内容に応じて **動的にリサイズ** します（1行 → 最大 `max_height` 行）。
+長い入力はスクロールされ、カーソル行が常に見える状態を維持します。
+
+```
+solo:ask> 以下の要件でリファクタリングしてほしい:
+  1. エラーハンドリングを Result 型に統一
+  2. 重複したバリデーションロジックを共通化
+  3. テストカバレッジ 80% 以上
+```
+
+#### エスカレーション（INSERT → $EDITOR）
+
+INSERT モードで書き始めて「長くなるな」と思ったら:
+
+1. `Esc` で NORMAL に戻る
+2. `I` で $EDITOR を起動
+3. INSERT バッファの書きかけ内容が **初期テキスト**として $EDITOR に渡される
 
 ### Command モード
 
@@ -100,26 +126,46 @@ COMMAND モード（`:`）で使用できるコマンド一覧:
 
 ## $EDITOR Integration / $EDITOR 連携
 
-> **Status:** 未実装
-
-NORMAL モードで `I` を押すと `$EDITOR`（vim/neovim 等）を全画面起動します。
+NORMAL モードで `I`（Shift+i）を押すと `$EDITOR`（vim/neovim 等）を全画面起動します。
 `git commit` が `$EDITOR` を呼ぶのと同じパターンです。
 
-- `:wq` でプロンプトを送信
-- `:q!` でキャンセル
+- 保存して終了（`:wq`）→ 内容が INSERT バッファに入り、INSERT モードに遷移
+- 保存せず終了（`:q!`）→ キャンセル、NORMAL モードのまま
 
-起動時にコンテキスト情報がコメント行で表示されます:
+### エディタ検出順序
+
+1. `$VISUAL` 環境変数
+2. `$EDITOR` 環境変数
+3. `vi`（フォールバック）
+
+### コンテキストヘッダー
+
+起動時にコンテキスト情報がコメント行（`#`）で表示されます。
+`#` で始まる行はプロンプト送信時に自動除去されます。
 
 ```
 # --- Quorum Prompt ---
-# Mode: Ensemble | Strategy: Quorum
-# Buffers: src/auth.rs, README.md
-#
+# Mode: Solo | Scope: Full | Strategy: Quorum
 # Write your prompt below. Lines starting with # are ignored.
-# :wq to send, :q! to cancel
+# Save and quit to send, quit without saving to cancel.
 # ---------------------
 
 ```
+
+コンテキストヘッダーは `[tui.input]` の `context_header = false` で非表示にできます。
+
+### TUI サスペンド/レジューム
+
+$EDITOR 起動中は TUI が一時停止します（raw mode 解除、alternate screen 退出）。
+エディタ終了後に TUI が自動復帰し、バックグラウンドで受信した LLM 応答が反映されます。
+
+### INSERT → $EDITOR エスカレーション
+
+INSERT モードで書き始めて「長くなるな」と思ったら:
+
+1. `Esc` で NORMAL に戻る
+2. `I` で $EDITOR を起動
+3. INSERT バッファの書きかけ内容が **初期テキスト**として $EDITOR に渡される
 
 ---
 
@@ -130,15 +176,19 @@ NORMAL モードで `I` を押すと `$EDITOR`（vim/neovim 等）を全画面�
 | Normal / Insert / Command モード | 実装済 |
 | モード遷移 (i, :, Esc) | 実装済 |
 | INSERT → Enter 送信 | 実装済 |
+| INSERT マルチライン入力 (Shift+Enter / Alt+Enter) | 実装済 |
+| INSERT 動的入力エリアリサイズ | 実装済 |
 | COMMAND → コマンド実行 | 実装済 |
 | `:discuss` | 実装済 |
 | j/k スクロール | 実装済 |
 | g/G 先頭/末尾 | 実装済 |
 | ? ヘルプ | 実装済 |
 | NORMAL キーバインド (s, e, f, d) | 実装済 |
+| `I` ($EDITOR 委譲) | 実装済 |
+| `[tui.input]` 設定セクション | 実装済 |
 | `:ask` | 未実装 (#78) |
-| `I` ($EDITOR 委譲) | 未実装 (#79) |
 | NORMAL キーバインド (/, y, .) | 未実装 (#78) |
+| キーバインド設定反映 (`[tui.input]` → key dispatch) | 未実装 |
 | VISUAL モード | 未実装（将来） |
 
 ---
@@ -149,4 +199,4 @@ NORMAL モードで `I` を押すと `$EDITOR`（vim/neovim 等）を全画面�
 - [Discussion #58: Neovim-Style Extensible TUI](https://github.com/music-brain88/copilot-quorum/discussions/58) — 元の提案
 - [CLI & Configuration](./cli-and-configuration.md) — 設定オプション
 
-<!-- LLM Context: TUI は 3 つのモード (Normal, Insert, Command) を持つモーダルインターフェース。3 つの入力粒度: :ask (COMMAND, 即時質問, 未実装), i (INSERT, 対話的), I ($EDITOR, がっつり, 未実装)。NORMAL がホームポジション。NORMAL モードクイックキー: s (Solo), e (Ensemble), f (Fast トグル), d (Discuss プリフィル)。:discuss (実装済) は COMMAND モードのファーストクラスコマンド。Follow-up: #78 (/, y, .), #79 ($EDITOR)。主要ファイルは presentation/src/tui/。 -->
+<!-- LLM Context: TUI は 3 つのモード (Normal, Insert, Command) を持つモーダルインターフェース。3 つの入力粒度: :ask (COMMAND, 即時質問, 未実装), i (INSERT, 対話的マルチライン), I ($EDITOR, 全画面エディタ委譲)。INSERT モードは Shift+Enter / Alt+Enter で改行挿入、Enter で送信。入力エリアは動的リサイズ（1行〜max_height行）。$EDITOR は TUI サスペンド→subprocess→レジュームで実装。INSERT→$EDITOR エスカレーション対応（書きかけ内容を初期テキストとして渡す）。NORMAL がホームポジション。NORMAL モードクイックキー: s (Solo), e (Ensemble), f (Fast トグル), d (Discuss プリフィル), I ($EDITOR)。:discuss (実装済) は COMMAND モードのファーストクラスコマンド。[tui.input] 設定セクションで max_height, context_header 等を設定可能（キーバインド設定反映は未実装）。Follow-up: #78 (:ask, /, y, .)。主要ファイルは presentation/src/tui/、editor.rs が $EDITOR 連携を担当。 -->

@@ -17,6 +17,6 @@ pub use file_config::{
     FileCliToolsConfig, FileConfig, FileCouncilConfig, FileCustomToolConfig,
     FileCustomToolParameter, FileGitHubConfig, FileIntegrationsConfig, FileMcpServerConfig,
     FileMcpToolsConfig, FileOutputConfig, FileOutputFormat, FileReplConfig, FileToolsConfig,
-    ToolProviderType,
+    FileTuiConfig, FileTuiInputConfig, ToolProviderType,
 };
 pub use loader::ConfigLoader;
