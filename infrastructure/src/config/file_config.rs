@@ -676,7 +676,7 @@ impl Default for FileTuiInputConfig {
     fn default() -> Self {
         Self {
             submit_key: "enter".to_string(),
-            newline_key: "alt+enter".to_string(),
+            newline_key: "shift+enter".to_string(),
             editor_key: "I".to_string(),
             editor_action: "return_to_insert".to_string(),
             max_height: 10,
@@ -1232,7 +1232,7 @@ rule = "majority"
     fn test_tui_config_default() {
         let config = FileTuiConfig::default();
         assert_eq!(config.input.submit_key, "enter");
-        assert_eq!(config.input.newline_key, "alt+enter");
+        assert_eq!(config.input.newline_key, "shift+enter");
         assert_eq!(config.input.editor_key, "I");
         assert_eq!(config.input.editor_action, "return_to_insert");
         assert_eq!(config.input.max_height, 10);
@@ -1254,7 +1254,7 @@ context_header = false
         assert!(!config.tui.input.context_header);
         // Defaults still apply for unset fields
         assert_eq!(config.tui.input.submit_key, "enter");
-        assert_eq!(config.tui.input.newline_key, "alt+enter");
+        assert_eq!(config.tui.input.newline_key, "shift+enter");
     }
 
     #[test]

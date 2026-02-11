@@ -134,7 +134,14 @@ fn handle_normal(key: KeyEvent) -> KeyAction {
 fn handle_insert(key: KeyEvent) -> KeyAction {
     match key.code {
         KeyCode::Esc => KeyAction::ExitToNormal,
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => KeyAction::InsertNewline,
+        // Shift+Enter (primary, needs kitty keyboard protocol) or
+        // Alt+Enter (fallback for terminals without keyboard enhancement)
+        KeyCode::Enter
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            KeyAction::InsertNewline
+        }
         KeyCode::Enter => KeyAction::SubmitInput,
         KeyCode::Backspace => KeyAction::DeleteChar,
         KeyCode::Left => KeyAction::CursorLeft,
@@ -242,7 +249,17 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_alt_enter_newline() {
+    fn test_insert_shift_enter_newline() {
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Insert, key),
+            KeyAction::InsertNewline
+        );
+    }
+
+    #[test]
+    fn test_insert_alt_enter_newline_fallback() {
+        // Alt+Enter is kept as fallback for terminals without kitty protocol
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
         assert_eq!(
             handle_key_event(InputMode::Insert, key),

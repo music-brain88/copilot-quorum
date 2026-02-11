@@ -92,7 +92,7 @@ hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
 
 [tui.input]
 submit_key = "enter"           # Key to send message
-newline_key = "alt+enter"      # Key to insert newline (multiline)
+newline_key = "shift+enter"    # Key to insert newline (multiline)
 editor_key = "I"               # Key to launch $EDITOR (Normal mode)
 editor_action = "return_to_insert"  # "return_to_insert" or "submit"
 max_height = 10                # Max input area height in lines

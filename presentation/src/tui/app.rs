@@ -27,7 +27,10 @@ enum SideEffect {
     LaunchEditor,
 }
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture, EventStream},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, EventStream, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -162,6 +165,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+        // Enable keyboard enhancement (kitty protocol) for Shift+Enter detection.
+        // Silently ignored on terminals that don't support it.
+        let keyboard_enhanced = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok();
+
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -169,7 +181,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let original_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
-            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            let _ = execute!(
+                io::stdout(),
+                PopKeyboardEnhancementFlags,
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            );
             original_hook(info);
         }));
 
@@ -200,7 +217,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     if let Some(side_effect) = self.handle_terminal_event(&mut state, term_event) {
                         match side_effect {
                             SideEffect::LaunchEditor => {
-                                Self::run_editor(&mut terminal, &mut state)?;
+                                Self::run_editor(&mut terminal, &mut state, keyboard_enhanced)?;
                             }
                         }
                     }
@@ -230,6 +247,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         // Restore terminal
         disable_raw_mode()?;
+        if keyboard_enhanced {
+            let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+        }
         execute!(
             terminal.backend_mut(),
             LeaveAlternateScreen,
@@ -248,6 +268,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     fn run_editor(
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         state: &mut TuiState,
+        keyboard_enhanced: bool,
     ) -> io::Result<()> {
         let initial_text = state.input.clone();
 
@@ -259,6 +280,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         // Suspend TUI
         disable_raw_mode()?;
+        if keyboard_enhanced {
+            let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+        }
         execute!(
             terminal.backend_mut(),
             LeaveAlternateScreen,
@@ -280,6 +304,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             EnterAlternateScreen,
             EnableMouseCapture
         )?;
+        if keyboard_enhanced {
+            let _ = execute!(
+                terminal.backend_mut(),
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                )
+            );
+        }
         terminal.clear()?;
 
         // Apply result
@@ -357,8 +389,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("  I      Open $EDITOR (with current input)"),
             Line::from(""),
             Line::from("Insert Mode:"),
-            Line::from("  Enter      Send message"),
-            Line::from("  Alt+Enter  Insert newline (multiline input)"),
+            Line::from("  Enter        Send message"),
+            Line::from("  Shift+Enter  Insert newline (multiline)"),
             Line::from("  Esc        Return to Normal"),
             Line::from(""),
             Line::from("Commands (:command):"),
