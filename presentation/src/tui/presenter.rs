@@ -51,6 +51,14 @@ impl TuiPresenter {
                 self.emit(TuiEvent::StrategyChanged(description.clone()));
                 state.set_flash(format!("Strategy: {}", strategy));
             }
+            UiEvent::InteractionChanged {
+                interaction_type,
+                description,
+            } => {
+                state.interaction_type = *interaction_type;
+                self.emit(TuiEvent::InteractionChanged(description.clone()));
+                state.set_flash(format!("Interaction: {}", interaction_type));
+            }
             UiEvent::HistoryCleared => {
                 state.messages.clear();
                 state.streaming_text.clear();

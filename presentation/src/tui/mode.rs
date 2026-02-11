@@ -71,7 +71,9 @@ pub enum KeyAction {
     SwitchSolo,
     SwitchEnsemble,
     ToggleFast,
-    StartDiscuss,
+    SwitchAsk,
+    SwitchDiscuss,
+    StartCouncil,
 
     // -- Application --
     Quit,
@@ -96,14 +98,18 @@ pub fn handle_key_event(mode: InputMode, key: KeyEvent) -> KeyAction {
 fn handle_normal(key: KeyEvent) -> KeyAction {
     match key.code {
         // Mode transitions
-        KeyCode::Char('i') | KeyCode::Char('a') => KeyAction::EnterInsert,
+        KeyCode::Char('i') => KeyAction::EnterInsert,
         KeyCode::Char(':') => KeyAction::EnterCommand,
 
-        // Quick commands
+        // Consensus level
         KeyCode::Char('s') => KeyAction::SwitchSolo,
         KeyCode::Char('e') => KeyAction::SwitchEnsemble,
         KeyCode::Char('f') => KeyAction::ToggleFast,
-        KeyCode::Char('d') => KeyAction::StartDiscuss,
+
+        // Interaction type
+        KeyCode::Char('a') => KeyAction::SwitchAsk,
+        KeyCode::Char('d') => KeyAction::SwitchDiscuss,
+        KeyCode::Char('c') => KeyAction::StartCouncil,
 
         // Scrolling
         KeyCode::Char('j') | KeyCode::Down => KeyAction::ScrollDown,
@@ -169,6 +175,13 @@ mod tests {
         assert_eq!(
             handle_key_event(InputMode::Normal, key_i),
             KeyAction::EnterInsert
+        );
+
+        // `a` is now SwitchAsk, not EnterInsert
+        let key_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_a),
+            KeyAction::SwitchAsk
         );
 
         let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
@@ -244,7 +257,9 @@ mod tests {
             ('s', KeyAction::SwitchSolo),
             ('e', KeyAction::SwitchEnsemble),
             ('f', KeyAction::ToggleFast),
-            ('d', KeyAction::StartDiscuss),
+            ('a', KeyAction::SwitchAsk),
+            ('d', KeyAction::SwitchDiscuss),
+            ('c', KeyAction::StartCouncil),
         ];
         for (ch, expected) in cases {
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);

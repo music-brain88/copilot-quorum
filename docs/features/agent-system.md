@@ -196,19 +196,48 @@ agent-hil>
 
 ## Configuration / 設定
 
-### Three Orthogonal Axes / 3つの直交する設定軸
+### Five Orthogonal Axes / 5つの直交する設定軸
 
-`AgentConfig` のオーケストレーション設定は、3 つの独立した軸で構成されています：
+`AgentConfig` のオーケストレーション設定は、5 つの独立した軸で構成されています：
 
 | 軸 | 型 | 役割 |
 |----|------|------|
 | **ConsensusLevel** | Enum (`Solo`, `Ensemble`) | 参加モデル数を制御 |
 | **PhaseScope** | Enum (`Full`, `Fast`, `PlanOnly`) | 実行フェーズの範囲を制御 |
 | **OrchestrationStrategy** | Enum (`Quorum(QuorumConfig)`, `Debate(DebateConfig)`) | 議論の進め方を選択 |
+| **InteractionType** | Enum (`Ask`, `Discuss`) | ユーザーとの対話方式を制御 |
+| **ContextMode** | Enum (`Shared`, `Fresh`) | 会話コンテキストの共有を制御 |
 
 `OrchestrationStrategy` はバリアントごとに設定を保持する **enum** です。
 一方、`StrategyExecutor` は戦略の実行ロジックを定義する **trait** です。
 enum が「何を使うか」を、trait が「どう実行するか」を担います。
+
+#### InteractionType × ConsensusLevel とオーケストレーション適用スコープ
+
+| ConsensusLevel | InteractionType | Orchestration 適用？ |
+|----------------|----------------|----------------------|
+| Solo           | Ask            | なし                 |
+| Solo           | Discuss        | 議論時のみ           |
+| Ensemble       | Ask            | 全体進行のみ         |
+| Ensemble       | Discuss        | 常に                 |
+
+### Combination Validation / 組み合わせバリデーション
+
+5 軸の組み合わせのうち、無効・未サポートなものは起動時にバリデーションされます。
+`AgentConfig::validate_combination()` が `Vec<ConfigIssue>` を返し、CLI 層で Warning 表示 or Error 中断します。
+
+| ConsensusLevel | PhaseScope | Strategy | Severity | Code | 理由 |
+|---|---|---|---|---|---|
+| Solo | * | Debate | **Error** | `SoloWithDebate` | ソロでは議論不可能（1モデルで対立的議論は成立しない） |
+| Ensemble | * | Debate | Warning | `DebateNotImplemented` | StrategyExecutor が未実装 |
+| Ensemble | Fast | * | Warning | `EnsembleWithFast` | レビュースキップにより Ensemble の価値が減少 |
+
+- Solo + Debate は **Error**（実行不可）として即座に `bail!` します
+- Ensemble + Debate は Warning のみ（将来の実装に備えて設定自体は受け付ける）
+- Ensemble + Fast は Warning（動作はするが、マルチモデル合議のメリットが薄れる）
+- Solo + Debate の場合は `DebateNotImplemented` Warning は省略されます（Error が優先）
+
+定義ファイル: `domain/src/agent/validation.rs`（`Severity`, `ConfigIssueCode`, `ConfigIssue`）
 
 ### AgentConfig
 
@@ -223,6 +252,8 @@ pub struct AgentConfig {
     pub consensus_level: ConsensusLevel,             // Solo or Ensemble
     pub phase_scope: PhaseScope,                     // Full, Fast, PlanOnly
     pub orchestration_strategy: OrchestrationStrategy, // Quorum or Debate
+    pub interaction_type: InteractionType,            // Ask or Discuss
+    pub context_mode: ContextMode,                    // Shared or Fresh
 
     // ---- Behavior Configuration ----
     pub require_plan_review: bool,     // 常に true（計画レビューは必須）
@@ -268,6 +299,7 @@ review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
 | File | Description |
 |------|-------------|
 | `domain/src/agent/entities.rs` | `AgentState`, `AgentConfig`, `Plan`, `Task`, `AgentPhase` |
+| `domain/src/agent/validation.rs` | `ConfigIssue`, `ConfigIssueCode`, `Severity`（組み合わせバリデーション） |
 | `domain/src/agent/value_objects.rs` | `AgentId`, `AgentContext`, `TaskResult`, `Thought` |
 | `domain/src/tool/entities.rs` | `ToolDefinition`, `ToolCall`, `ToolSpec`, `RiskLevel` |
 | `domain/src/tool/value_objects.rs` | `ToolResult`, `ToolError` |
@@ -397,4 +429,4 @@ pub enum HumanDecision {
 - [Tool System](./tool-system.md) - エージェントが使用するツールの詳細
 - [CLI & Configuration](./cli-and-configuration.md) - エージェントの設定と REPL コマンド
 
-<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。AgentConfig は ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）の3つの直交軸で設定。主要ファイルは domain/src/agent/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->
+<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。AgentConfig は ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）、InteractionType（Ask/Discuss）、ContextMode（Shared/Fresh）の5つの直交軸で設定。InteractionType は Ask（Q&A）と Discuss（マルチモデル議論）を制御。ContextMode は会話コンテキストの共有を制御。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning、Solo+Ask+非デフォルトOrch=Warning。定義は domain/src/agent/validation.rs、domain/src/orchestration/interaction.rs。主要ファイルは domain/src/agent/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->

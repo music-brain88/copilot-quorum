@@ -20,6 +20,7 @@
 
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
 use crate::core::model::Model;
+use crate::orchestration::interaction::{ContextMode, InteractionType};
 use crate::orchestration::mode::ConsensusLevel;
 use crate::orchestration::scope::PhaseScope;
 use crate::orchestration::strategy::OrchestrationStrategy;
@@ -739,6 +740,12 @@ pub struct AgentConfig {
     /// Orchestration strategy: Quorum or Debate (how multi-model discussion is conducted)
     /// (default: Quorum - equal discussion → review → synthesis)
     pub orchestration_strategy: OrchestrationStrategy,
+    /// Interaction type: Ask (Q&A) or Discuss (multi-model discussion)
+    /// (default: Ask - lightweight question → answer)
+    pub interaction_type: InteractionType,
+    /// Context mode: Shared (conversation context) or Fresh (clean slate)
+    /// (default: Shared - include conversation context)
+    pub context_mode: ContextMode,
 
     // ==================== Behavior Configuration ====================
     /// Whether to require plan review (always true by design)
@@ -783,6 +790,8 @@ impl Default for AgentConfig {
             consensus_level: ConsensusLevel::Solo,
             phase_scope: PhaseScope::Full,
             orchestration_strategy: OrchestrationStrategy::default(),
+            interaction_type: InteractionType::Ask,
+            context_mode: ContextMode::Shared,
 
             // Behavior defaults
             require_plan_review: true, // Always required
@@ -846,6 +855,18 @@ impl AgentConfig {
     /// Set the orchestration strategy (Quorum or Debate)
     pub fn with_orchestration_strategy(mut self, strategy: OrchestrationStrategy) -> Self {
         self.orchestration_strategy = strategy;
+        self
+    }
+
+    /// Set the interaction type (Ask or Discuss)
+    pub fn with_interaction_type(mut self, interaction_type: InteractionType) -> Self {
+        self.interaction_type = interaction_type;
+        self
+    }
+
+    /// Set the context mode (Shared or Fresh)
+    pub fn with_context_mode(mut self, context_mode: ContextMode) -> Self {
+        self.context_mode = context_mode;
         self
     }
 
