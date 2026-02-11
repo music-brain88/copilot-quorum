@@ -67,7 +67,9 @@ REPL（対話モード）で使用できるスラッシュコマンド一覧:
 | `/fast` | | PhaseScope を Fast に切り替え（レビュースキップ） |
 | `/scope <scope>` | | フェーズスコープを変更 (full, fast, plan-only) |
 | `/strategy <strategy>` | | 戦略を変更 (quorum, debate) |
-| `/discuss <question>` | `/council` | Quorum Discussion を実行（複数モデルに相談） |
+| `/ask` | | Ask モードに切り替え（Q&A、軽量） |
+| `/discuss` | | Discuss モードに切り替え（マルチモデル議論） |
+| `/council <question>` | | Quorum Discussion を実行（複数モデルに相談） |
 | `/init [--force]` | | プロジェクトコンテキストを初期化 |
 | `/config` | | 現在の設定を表示 |
 | `/clear` | | 会話履歴をクリア |
@@ -108,9 +110,31 @@ REPL では 2 つの合意レベルが利用可能です。`/mode <level>` ま�
 
 定義ファイル: `domain/src/orchestration/strategy.rs`（`OrchestrationStrategy` enum）
 
+### Interaction Type / インタラクションタイプ
+
+ユーザーとの対話方式を制御します。
+
+| Type | Command | Description |
+|------|---------|-------------|
+| **Ask** (default) | `/ask` | 質問 → 回答（軽量、シングルターン） |
+| **Discuss** | `/discuss` | マルチモデル議論 → 合意形成 |
+
+定義ファイル: `domain/src/orchestration/interaction.rs`（`InteractionType` enum）
+
+### Context Mode / コンテキストモード
+
+会話コンテキストの共有を制御します。
+
+| Mode | Description |
+|------|-------------|
+| **Shared** (default) | 現在の会話コンテキストを共有 |
+| **Fresh** | コンテキストなしで実行 |
+
+定義ファイル: `domain/src/orchestration/interaction.rs`（`ContextMode` enum）
+
 ### Combination Validation / 組み合わせバリデーション
 
-上記 3 軸の一部の組み合わせは無効・未サポートです。起動時に自動検出され、Warning または Error が表示されます。
+上記 5 軸の一部の組み合わせは無効・未サポートです。起動時に自動検出され、Warning または Error が表示されます。
 
 | 組み合わせ | Severity | 理由 |
 |------------|----------|------|
@@ -124,12 +148,14 @@ Error の場合は実行が中断されます。詳細は [Agent System](./agent
 
 ### Prompt Display / プロンプト表示
 
-REPL のプロンプトは現在のモードに応じて色が変わります:
+REPL のプロンプトは現在のモード（ConsensusLevel × InteractionType）に応じて変わります:
 
-| Consensus Level | Prompt | Color |
-|-----------------|--------|-------|
-| Solo | `solo>` | Green |
-| Ensemble | `ensemble>` | Magenta |
+| ConsensusLevel | InteractionType | Prompt |
+|----------------|----------------|--------|
+| Solo | Ask | `solo:ask>` |
+| Solo | Discuss | `solo:discuss>` |
+| Ensemble | Ask | `ens:ask>` |
+| Ensemble | Discuss | `ens:discuss>` |
 
 ### Context Management / コンテキスト管理
 
@@ -288,9 +314,9 @@ CLI Arguments / REPL Input
 
 ## Related Features / 関連機能
 
-- [Quorum Discussion & Consensus](./quorum.md) - `/discuss` コマンドで実行
+- [Quorum Discussion & Consensus](./quorum.md) - `/council` コマンドで実行
 - [Agent System](./agent-system.md) - エージェント設定の詳細
 - [Ensemble Mode](./ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
 - [Tool System](./tool-system.md) - ツール設定の詳細
 
-<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /discuss, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。ConsensusLevel（Solo/Ensemble）が唯一のモード軸、PhaseScope と OrchestrationStrategy は直交オプション。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning（domain/src/agent/validation.rs）。設定優先順位は CLI > project > global > defaults。主要ファイルは presentation/src/agent/repl.rs と infrastructure/src/config/。 -->
+<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /ask, /discuss, /council, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。5つの直交設定軸: ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）、InteractionType（Ask/Discuss）、ContextMode（Shared/Fresh）。/discuss は引数なしのモードコマンドに変更、旧 /discuss <question> は /council に移行。プロンプト表示は solo:ask> / ens:discuss> 等。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults。主要ファイルは application/src/use_cases/agent_controller.rs と infrastructure/src/config/。 -->

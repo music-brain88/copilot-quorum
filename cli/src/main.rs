@@ -252,10 +252,12 @@ async fn main() -> Result<()> {
         .with_max_plan_revisions(config.agent.max_plan_revisions)
         .with_hil_mode(config.agent.parse_hil_mode());
 
-    // Apply consensus level and phase scope from config file
+    // Apply consensus level, phase scope, and interaction axes from config file
     agent_config = agent_config
         .with_consensus_level(config.agent.parse_consensus_level())
-        .with_phase_scope(config.agent.parse_phase_scope());
+        .with_phase_scope(config.agent.parse_phase_scope())
+        .with_interaction_type(config.agent.parse_interaction_type())
+        .with_context_mode(config.agent.parse_context_mode());
 
     // Apply --no-quorum flag
     if cli.no_quorum {

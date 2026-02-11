@@ -27,9 +27,11 @@ cargo run -p copilot-quorum -- "Fix this bug"
 cargo run -p copilot-quorum -- --ensemble "Design the auth system"
 
 # REPL commands
-/solo     # Switch to Solo mode
-/ens      # Switch to Ensemble mode
-/discuss  # Run Quorum Discussion (works in any mode)
+/solo      # Switch to Solo mode
+/ens       # Switch to Ensemble mode
+/ask       # Switch to Ask mode (Q&A)
+/discuss   # Switch to Discuss mode (multi-model discussion)
+/council <question>  # Run ad-hoc Quorum Discussion
 ```
 
 ## Build & Test Commands

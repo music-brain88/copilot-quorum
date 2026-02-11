@@ -41,6 +41,7 @@ pub use context::{KnownContextFile, LoadedContextFile, ProjectContext};
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
     entities::{Phase, QuorumRun},
+    interaction::{ContextMode, InteractionType},
     mode::{ConsensusLevel, PlanningApproach},
     scope::PhaseScope,
     strategy::{DebateConfig, DebateIntensity, OrchestrationStrategy, StrategyExecutor},

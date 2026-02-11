@@ -22,9 +22,16 @@ impl<'a> InputWidget<'a> {
 
 impl<'a> Widget for InputWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        // Build mode-aware prompt: "solo:ask> " or "ens:discuss> "
+        let level_short = match self.state.consensus_level {
+            quorum_domain::ConsensusLevel::Solo => "solo",
+            quorum_domain::ConsensusLevel::Ensemble => "ens",
+        };
+        let mode_prompt = format!("{}:{}> ", level_short, self.state.interaction_type);
+
         let (prompt, text, cursor_pos, color, active) = match self.state.mode {
             InputMode::Insert => (
-                "> ",
+                mode_prompt.as_str(),
                 &self.state.input,
                 self.state.cursor_pos,
                 Color::Green,
@@ -38,7 +45,7 @@ impl<'a> Widget for InputWidget<'a> {
                 true,
             ),
             InputMode::Normal => (
-                "> ",
+                mode_prompt.as_str(),
                 &self.state.input,
                 self.state.cursor_pos,
                 Color::DarkGray,
