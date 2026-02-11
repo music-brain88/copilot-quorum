@@ -86,6 +86,8 @@ format = "synthesis"  # "full", "synthesis", or "json"
 consensus_level = "solo"  # "solo" or "ensemble"
 phase_scope = "full"      # "full", "fast", "plan-only"
 strategy = "quorum"       # "quorum" or "debate"
+interaction_type = "ask"  # "ask" or "discuss"
+context_mode = "shared"   # "shared" or "fresh"
 hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
 ```
 
@@ -109,7 +111,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 
 | Layer | Crate | Description |
 |-------|-------|-------------|
-| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy, LlmResponse, ContentBlock, StopReason) |
+| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy, InteractionType, ContextMode, LlmResponse, ContentBlock, StopReason) |
 | application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort, ToolResultMessage) |
 | infrastructure | `quorum-infrastructure` | Copilot CLI adapter, LocalToolExecutor (file, command, search tools) |
 | presentation | `quorum-presentation` | CLI commands, ChatRepl, ConsoleFormatter, ProgressReporter |
@@ -130,7 +132,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 domain/src/
 ├── core/           # Model, Question, Error
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
-├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
+├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, InteractionType, ContextMode, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolSpec, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
