@@ -15,7 +15,7 @@
 
 mod hil;
 mod planning;
-mod review;
+pub(crate) mod review;
 mod types;
 
 pub use types::{RunAgentError, RunAgentInput, RunAgentOutput};
@@ -25,18 +25,21 @@ use types::{EnsemblePlanningOutcome, PlanningResult};
 use crate::ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::HumanInterventionPort;
-use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
+use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::tool_executor::ToolExecutorPort;
+use crate::use_cases::execute_task::ExecuteTaskUseCase;
+use crate::use_cases::gather_context::GatherContextUseCase;
+use crate::use_cases::shared::check_cancelled;
 use quorum_domain::core::string::truncate;
-use quorum_domain::session::response::LlmResponse;
 use quorum_domain::{
-    AgentConfig, AgentContext, AgentPhase, AgentPromptTemplate, AgentState, HumanDecision, Model,
-    ModelVote, ProjectContext, ReviewRound, StreamEvent, Task, TaskId, Thought,
+    AgentPhase, AgentPromptTemplate, AgentState, HumanDecision, ModelVote, ReviewRound,
+    StreamEvent, Thought,
 };
+use review::QuorumActionReviewer;
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Use case for running an autonomous agent
 pub struct RunAgentUseCase<
@@ -128,16 +131,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self
     }
 
-    /// Check if cancellation has been requested
-    fn check_cancelled(&self) -> Result<(), RunAgentError> {
-        if let Some(ref token) = self.cancellation_token
-            && token.is_cancelled()
-        {
-            return Err(RunAgentError::Cancelled);
-        }
-        Ok(())
-    }
-
     /// Send a prompt to LLM with cancellation support and streaming.
     ///
     /// Uses `send_streaming()` to receive incremental chunks, forwarding each
@@ -208,35 +201,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         Ok(full_text)
     }
 
-    /// Send a prompt with tools to the LLM with cancellation support (Native Tool Use path).
-    ///
-    /// Returns the full `LlmResponse` with structured content blocks.
-    /// This is the Native counterpart of `send_with_cancellation()`.
-    async fn send_with_tools_cancellable(
-        &self,
-        session: &dyn LlmSession,
-        prompt: &str,
-        tools: &[serde_json::Value],
-        progress: &dyn AgentProgressNotifier,
-    ) -> Result<LlmResponse, RunAgentError> {
-        self.check_cancelled()?;
-        progress.on_llm_stream_start("native_tool_use");
-
-        let response = session
-            .send_with_tools(prompt, tools)
-            .await
-            .map_err(RunAgentError::GatewayError)?;
-
-        // Forward any text content to progress
-        let text = response.text_content();
-        if !text.is_empty() {
-            progress.on_llm_chunk(&text);
-        }
-
-        progress.on_llm_stream_end();
-        Ok(response)
-    }
-
     /// Execute the agent without progress reporting
     pub async fn execute(&self, input: RunAgentInput) -> Result<RunAgentOutput, RunAgentError> {
         self.execute_with_progress(input, &NoAgentProgress).await
@@ -249,7 +213,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         progress: &dyn AgentProgressNotifier,
     ) -> Result<RunAgentOutput, RunAgentError> {
         // Check for cancellation before starting
-        self.check_cancelled()?;
+        check_cancelled(&self.cancellation_token)?;
 
         info!("Starting agent for request: {}", input.request);
 
@@ -261,7 +225,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let system_prompt = AgentPromptTemplate::agent_system();
 
         // ==================== Phase 1: Context Gathering ====================
-        // Uses exploration_model (default: Haiku - cheap for info collection)
+        // Delegated to GatherContextUseCase
         progress.on_phase_change(&AgentPhase::ContextGathering);
         state.set_phase(AgentPhase::ContextGathering);
 
@@ -270,8 +234,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             .create_session_with_system_prompt(&input.config.exploration_model, &system_prompt)
             .await?;
 
-        match self
-            .gather_context(
+        let gather_uc = GatherContextUseCase::new(
+            self.tool_executor.clone(),
+            self.context_loader.clone(),
+            self.cancellation_token.clone(),
+        );
+
+        match gather_uc
+            .execute(
                 context_session.as_ref(),
                 &input.request,
                 &input.config,
@@ -302,7 +272,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         loop {
             // Check for cancellation at the start of each loop iteration
-            self.check_cancelled()?;
+            check_cancelled(&self.cancellation_token)?;
 
             // Phase 2: Planning
             progress.on_phase_change(&AgentPhase::Planning);
@@ -590,14 +560,24 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // ==================== Phase 4: Task Execution ====================
-        // Model selection is now dynamic based on tool risk level:
-        // - Low-risk tools (read_file, glob_search, grep_search): exploration_model
-        // - High-risk tools (write_file, run_command): decision_model
+        // Delegated to ExecuteTaskUseCase
         progress.on_phase_change(&AgentPhase::Executing);
         state.set_phase(AgentPhase::Executing);
 
-        let execution_result = self
-            .execute_tasks_with_dynamic_model(&input, &mut state, &system_prompt, progress)
+        let reviewer = QuorumActionReviewer::new(
+            self.gateway.clone(),
+            self.tool_executor.clone(),
+            self.cancellation_token.clone(),
+        );
+        let execute_uc = ExecuteTaskUseCase::new(
+            self.gateway.clone(),
+            self.tool_executor.clone(),
+            self.cancellation_token.clone(),
+            Arc::new(reviewer),
+        );
+
+        let execution_result = execute_uc
+            .execute(&input, &mut state, &system_prompt, progress)
             .await;
 
         let summary = match execution_result {
@@ -645,630 +625,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             success: true,
             state,
         })
-    }
-
-    /// Gather context about the project using 3-stage fallback strategy
-    ///
-    /// Stage 1: Load known files directly (no LLM needed)
-    /// Stage 2: If insufficient, run exploration agent
-    /// Stage 3: Proceed with minimal context if exploration fails
-    async fn gather_context(
-        &self,
-        session: &dyn LlmSession,
-        request: &str,
-        config: &AgentConfig,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Result<AgentContext, RunAgentError> {
-        let mut context = AgentContext::new();
-
-        if let Some(working_dir) = &config.working_dir {
-            context = context.with_project_root(working_dir);
-        }
-
-        // ========== Stage 1: Load known files directly (no LLM needed) ==========
-        if let Some(ref context_loader) = self.context_loader
-            && let Some(ref working_dir) = config.working_dir
-        {
-            let project_root = Path::new(working_dir);
-            let files = context_loader.load_known_files(project_root);
-            let project_ctx = context_loader.build_project_context(files);
-
-            if project_ctx.has_sufficient_context() {
-                info!(
-                    "Stage 1: Using existing context from: {}",
-                    project_ctx.source_description()
-                );
-                return Ok(self.context_from_project_ctx(project_ctx, config));
-            }
-
-            // Even if not sufficient, preserve any partial context
-            if !project_ctx.is_empty() {
-                info!("Stage 1: Found partial context, proceeding to exploration");
-                context = self.merge_project_context(context, &project_ctx);
-            }
-        }
-
-        // ========== Stage 2: Run exploration agent ==========
-        info!("Stage 2: Running exploration agent for additional context");
-
-        match self
-            .run_exploration_agent(session, request, config, progress)
-            .await
-        {
-            Ok(enriched_ctx) => {
-                info!("Stage 2: Exploration agent succeeded");
-                return Ok(enriched_ctx);
-            }
-            Err(e) => {
-                warn!("Stage 2: Exploration agent failed: {}", e);
-                // Continue to Stage 3
-            }
-        }
-
-        // ========== Stage 3: Proceed with minimal context ==========
-        warn!("Stage 3: Proceeding with minimal context");
-        Ok(context)
-    }
-
-    /// Convert ProjectContext to AgentContext
-    fn context_from_project_ctx(
-        &self,
-        project_ctx: ProjectContext,
-        config: &AgentConfig,
-    ) -> AgentContext {
-        let mut context = AgentContext::new();
-
-        if let Some(ref working_dir) = config.working_dir {
-            context = context.with_project_root(working_dir);
-        }
-
-        if let Some(ref project_type) = project_ctx.project_type {
-            context = context.with_project_type(project_type);
-        }
-
-        // Build structure summary from project context
-        let summary = project_ctx.to_summary();
-        if !summary.is_empty() && summary != "No context available." {
-            context.set_structure_summary(&summary);
-        }
-
-        context
-    }
-
-    /// Merge ProjectContext into existing AgentContext
-    fn merge_project_context(
-        &self,
-        mut context: AgentContext,
-        project_ctx: &ProjectContext,
-    ) -> AgentContext {
-        if let Some(ref project_type) = project_ctx.project_type {
-            context = context.with_project_type(project_type);
-        }
-
-        let summary = project_ctx.to_summary();
-        if !summary.is_empty() && summary != "No context available." {
-            context.set_structure_summary(&summary);
-        }
-
-        context
-    }
-
-    /// Run the exploration agent to gather context (original behavior)
-    async fn run_exploration_agent(
-        &self,
-        session: &dyn LlmSession,
-        request: &str,
-        config: &AgentConfig,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Result<AgentContext, RunAgentError> {
-        let mut context = AgentContext::new();
-
-        if let Some(working_dir) = &config.working_dir {
-            context = context.with_project_root(working_dir);
-        }
-
-        // Ask the model to gather context using tools (Native multi-turn loop)
-        let prompt = AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
-        let tools = self.tool_executor.tool_spec().to_api_tools();
-        let max_turns = config.max_tool_turns;
-        let mut turn_count = 0;
-        let mut results = Vec::new();
-
-        let mut response = match self
-            .send_with_tools_cancellable(session, &prompt, &tools, progress)
-            .await
-        {
-            Ok(response) => response,
-            Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
-            Err(e) => return Err(RunAgentError::ContextGatheringFailed(e.to_string())),
-        };
-
-        loop {
-            let tool_calls = response.tool_calls();
-            if tool_calls.is_empty() {
-                break;
-            }
-
-            turn_count += 1;
-            if turn_count > max_turns {
-                break;
-            }
-
-            self.check_cancelled()?;
-
-            let mut tool_result_messages = Vec::new();
-
-            for call in &tool_calls {
-                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
-
-                let result = self.tool_executor.execute(call).await;
-                let success = result.is_success();
-                progress.on_tool_result(&call.tool_name, success);
-
-                let (is_error, output) = if success {
-                    let output = result.output().unwrap_or("").to_string();
-                    results.push((call.tool_name.clone(), output.clone()));
-
-                    // Try to detect project type from common files
-                    if call.tool_name == "glob_search" || call.tool_name == "read_file" {
-                        if output.contains("Cargo.toml") {
-                            context = context.with_project_type("rust");
-                        } else if output.contains("package.json") {
-                            context = context.with_project_type("nodejs");
-                        } else if output.contains("pyproject.toml") || output.contains("setup.py") {
-                            context = context.with_project_type("python");
-                        }
-                    }
-
-                    (false, output)
-                } else {
-                    let msg = result
-                        .error()
-                        .map(|e| e.message.clone())
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    (true, msg)
-                };
-
-                if let Some(native_id) = call.native_id.clone() {
-                    tool_result_messages.push(ToolResultMessage {
-                        tool_use_id: native_id,
-                        tool_name: call.tool_name.clone(),
-                        output,
-                        is_error,
-                    });
-                } else {
-                    warn!(
-                        "Missing native_id for tool call '{}'; skipping result.",
-                        call.tool_name
-                    );
-                }
-            }
-
-            response = session
-                .send_tool_results(&tool_result_messages)
-                .await
-                .map_err(|e| RunAgentError::ContextGatheringFailed(e.to_string()))?;
-        }
-
-        // Add gathered information to context
-        if !results.is_empty() {
-            let summary = results
-                .iter()
-                .map(|(tool, output)| format!("## {}\n{}", tool, truncate(output, 500)))
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            context.set_structure_summary(&summary);
-        }
-
-        Ok(context)
-    }
-
-    /// Determine the appropriate model for a task based on tool risk level
-    ///
-    /// - Low-risk tools (read_file, glob_search, grep_search): exploration_model
-    /// - High-risk tools (write_file, run_command) or unknown: decision_model
-    fn select_model_for_task<'a>(&self, task: &Task, config: &'a AgentConfig) -> &'a Model {
-        if let Some(tool_name) = &task.tool_name {
-            if self.is_high_risk_tool(tool_name) {
-                &config.decision_model
-            } else {
-                &config.exploration_model
-            }
-        } else {
-            // Tool not specified yet - model will decide, so use decision_model
-            &config.decision_model
-        }
-    }
-
-    /// Execute all tasks in the plan with dynamic model selection based on risk level
-    async fn execute_tasks_with_dynamic_model(
-        &self,
-        input: &RunAgentInput,
-        state: &mut AgentState,
-        system_prompt: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Result<String, RunAgentError> {
-        let mut results = Vec::new();
-        let mut previous_results = String::new();
-
-        loop {
-            // Check for cancellation at the start of each task
-            self.check_cancelled()?;
-
-            // Check iteration limit
-            if !state.increment_iteration() {
-                return Err(RunAgentError::MaxIterationsExceeded);
-            }
-
-            // Get next task and determine appropriate model
-            let (task_id, selected_model) = {
-                let plan = state.plan.as_ref().ok_or_else(|| {
-                    RunAgentError::TaskExecutionFailed("No plan available".to_string())
-                })?;
-
-                match plan.next_task() {
-                    Some(task) => {
-                        let model = self.select_model_for_task(task, &input.config);
-                        (task.id.clone(), model.clone())
-                    }
-                    None => break, // All tasks complete
-                }
-            };
-
-            // Create session with the selected model
-            let session = self
-                .gateway
-                .create_session_with_system_prompt(&selected_model, system_prompt)
-                .await?;
-
-            debug!(
-                "Task {} using model {} (risk-based selection)",
-                task_id, selected_model
-            );
-
-            // Mark task as in progress
-            if let Some(plan) = &mut state.plan
-                && let Some(task) = plan.get_task_mut(&task_id)
-            {
-                if task.status.is_terminal() {
-                    warn!("Task {} already in terminal state, skipping", task_id);
-                    continue;
-                }
-                task.mark_in_progress();
-                progress.on_task_start(task);
-            }
-
-            // Execute the task with action retry support
-            let max_action_retries = 2;
-            let mut action_attempts = 0;
-            let mut action_feedback: Option<String> = None;
-
-            let task_result = loop {
-                // Build context including any rejection feedback
-                let context_with_feedback = if let Some(ref feedback) = action_feedback {
-                    format!(
-                        "{}\n\n---\n[Previous action was rejected]\nFeedback: {}\nPlease try a different approach.",
-                        previous_results, feedback
-                    )
-                } else {
-                    previous_results.clone()
-                };
-
-                match self
-                    .execute_single_task(
-                        session.as_ref(),
-                        input,
-                        state,
-                        &task_id,
-                        &context_with_feedback,
-                        progress,
-                    )
-                    .await
-                {
-                    Err(RunAgentError::ActionRejected(feedback)) => {
-                        action_attempts += 1;
-                        if action_attempts >= max_action_retries {
-                            break Err(RunAgentError::ActionRejected(format!(
-                                "Action rejected after {} attempts. Last feedback: {}",
-                                action_attempts, feedback
-                            )));
-                        }
-
-                        // Get task for notification
-                        if let Some(plan) = state.plan.as_ref()
-                            && let Some(task) = plan.tasks.iter().find(|t| t.id == task_id)
-                        {
-                            progress.on_action_retry(task, action_attempts, &feedback);
-                        }
-
-                        info!(
-                            "Action rejected (attempt {}), retrying with feedback...",
-                            action_attempts
-                        );
-                        action_feedback = Some(feedback);
-                    }
-                    other => break other,
-                }
-            };
-
-            // Update task status
-            let (success, output) = match task_result {
-                Ok(output) => (true, output),
-                Err(e) => (false, e.to_string()),
-            };
-
-            if let Some(plan) = &mut state.plan
-                && let Some(task) = plan.get_task_mut(&task_id)
-                && !task.status.is_terminal()
-            {
-                if success {
-                    task.mark_completed(quorum_domain::TaskResult::success(&output));
-                } else {
-                    task.mark_failed(quorum_domain::TaskResult::failure(&output));
-                }
-                progress.on_task_complete(task, success);
-            }
-
-            results.push(format!(
-                "Task {}: {}",
-                task_id,
-                if success { "OK" } else { "FAILED" }
-            ));
-            previous_results.push_str(&format!("\n---\nTask {}: {}\n", task_id, output));
-        }
-
-        // Generate summary
-        let completed = state.plan.as_ref().map(|p| p.progress()).unwrap_or((0, 0));
-
-        Ok(format!(
-            "Completed {}/{} tasks.\n\n{}",
-            completed.0,
-            completed.1,
-            results.join("\n")
-        ))
-    }
-
-    /// Execute a single task using the Native Tool Use API.
-    async fn execute_single_task(
-        &self,
-        session: &dyn LlmSession,
-        input: &RunAgentInput,
-        state: &AgentState,
-        task_id: &TaskId,
-        previous_results: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Result<String, RunAgentError> {
-        let task = state
-            .plan
-            .as_ref()
-            .and_then(|p| p.tasks.iter().find(|t| &t.id == task_id))
-            .ok_or_else(|| RunAgentError::TaskExecutionFailed("Task not found".to_string()))?;
-
-        debug!("Executing task: {} - {}", task.id, task.description);
-
-        // Always use Native Tool Use API
-        self.execute_task_native(session, input, state, task, previous_results, progress)
-            .await
-    }
-
-    /// Execute a task using the Native Tool Use API with multi-turn loop.
-    ///
-    /// Implements the standard Native Tool Use conversation loop:
-    /// ```text
-    /// send_with_tools(prompt, tools)
-    ///   → stop_reason == ToolUse?
-    ///     → yes: execute tool calls → send_tool_results() → loop
-    ///     → no: return text content (done)
-    /// ```
-    ///
-    /// Tool calls are extracted directly from the structured response — no
-    /// text parsing or alias resolution needed (the API guarantees valid names).
-    ///
-    /// # Parallel Execution
-    ///
-    /// Low-risk tool calls within the same turn are executed in parallel
-    /// using `futures::join_all`. High-risk tools are executed sequentially
-    /// to maintain quorum review ordering.
-    async fn execute_task_native(
-        &self,
-        session: &dyn LlmSession,
-        input: &RunAgentInput,
-        state: &AgentState,
-        task: &Task,
-        previous_results: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Result<String, RunAgentError> {
-        let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
-        let tools = self.tool_executor.tool_spec().to_api_tools();
-        let max_turns = input.config.max_tool_turns;
-        let mut turn_count = 0;
-        let mut all_outputs = Vec::new();
-
-        // Initial request
-        let mut response = match self
-            .send_with_tools_cancellable(session, &prompt, &tools, progress)
-            .await
-        {
-            Ok(response) => response,
-            Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
-            Err(e) => return Err(RunAgentError::TaskExecutionFailed(e.to_string())),
-        };
-
-        loop {
-            // Collect any text from this turn
-            let text = response.text_content();
-            if !text.is_empty() {
-                all_outputs.push(text);
-            }
-
-            // Extract tool calls
-            let tool_calls = response.tool_calls();
-
-            if tool_calls.is_empty() {
-                // No tool calls — model is done
-                break;
-            }
-
-            // Check turn limit
-            turn_count += 1;
-            if turn_count > max_turns {
-                warn!(
-                    "Native tool use loop exceeded max_tool_turns ({})",
-                    max_turns
-                );
-                break;
-            }
-
-            // Check cancellation
-            self.check_cancelled()?;
-
-            // Execute tool calls and collect results
-            let mut tool_result_messages = Vec::new();
-
-            // Separate into low-risk (can parallelize) and high-risk (sequential)
-            let mut low_risk_calls = Vec::new();
-            let mut high_risk_calls = Vec::new();
-
-            for call in &tool_calls {
-                if self.is_high_risk_tool(&call.tool_name) {
-                    high_risk_calls.push(call);
-                } else {
-                    low_risk_calls.push(call);
-                }
-            }
-
-            // Execute low-risk calls in parallel
-            if !low_risk_calls.is_empty() {
-                let mut futures = Vec::new();
-                for call in &low_risk_calls {
-                    progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
-                    futures.push(self.tool_executor.execute(call));
-                }
-
-                let results: Vec<_> = futures::future::join_all(futures).await;
-
-                for (call, result) in low_risk_calls.iter().zip(results) {
-                    let is_error = !result.is_success();
-                    let output = if is_error {
-                        result
-                            .error()
-                            .map(|e| e.message.clone())
-                            .unwrap_or_else(|| "Unknown error".to_string())
-                    } else {
-                        result.output().unwrap_or("").to_string()
-                    };
-
-                    progress.on_tool_result(&call.tool_name, !is_error);
-
-                    if !is_error {
-                        all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
-                    }
-
-                    if let Some(native_id) = call.native_id.clone() {
-                        tool_result_messages.push(ToolResultMessage {
-                            tool_use_id: native_id,
-                            tool_name: call.tool_name.clone(),
-                            output,
-                            is_error,
-                        });
-                    } else {
-                        warn!(
-                            "Missing native_id for tool call '{}'; skipping result.",
-                            call.tool_name
-                        );
-                    }
-                }
-            }
-
-            // Execute high-risk calls sequentially (with quorum review)
-            for call in &high_risk_calls {
-                // Quorum review for high-risk operations
-                if !input.config.review_models.is_empty() {
-                    let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
-                        "tool": call.tool_name,
-                        "args": call.arguments,
-                    }))
-                    .unwrap_or_default();
-
-                    let review = self
-                        .review_action(input, state, task, &tool_call_json, progress)
-                        .await?;
-
-                    progress.on_quorum_complete_with_votes(
-                        "action_review",
-                        review.approved,
-                        &review.votes,
-                        review.feedback.as_deref(),
-                    );
-
-                    if !review.approved {
-                        warn!("Tool call {} rejected by quorum", call.tool_name);
-                        if let Some(native_id) = call.native_id.clone() {
-                            tool_result_messages.push(ToolResultMessage {
-                                tool_use_id: native_id,
-                                tool_name: call.tool_name.clone(),
-                                output: "Action rejected by quorum review".to_string(),
-                                is_error: true,
-                            });
-                        } else {
-                            warn!(
-                                "Missing native_id for tool call '{}'; skipping result.",
-                                call.tool_name
-                            );
-                        }
-                        continue;
-                    }
-                }
-
-                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
-
-                let result = self.tool_executor.execute(call).await;
-                let is_error = !result.is_success();
-                let output = if is_error {
-                    result
-                        .error()
-                        .map(|e| e.message.clone())
-                        .unwrap_or_else(|| "Unknown error".to_string())
-                } else {
-                    result.output().unwrap_or("").to_string()
-                };
-
-                progress.on_tool_result(&call.tool_name, !is_error);
-
-                if !is_error {
-                    all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
-                }
-
-                if let Some(native_id) = call.native_id.clone() {
-                    tool_result_messages.push(ToolResultMessage {
-                        tool_use_id: native_id,
-                        tool_name: call.tool_name.clone(),
-                        output,
-                        is_error,
-                    });
-                } else {
-                    warn!(
-                        "Missing native_id for tool call '{}'; skipping result.",
-                        call.tool_name
-                    );
-                }
-            }
-
-            // Send tool results back to LLM for next turn
-            debug!(
-                "Native tool use turn {}/{}: sending {} tool results",
-                turn_count,
-                max_turns,
-                tool_result_messages.len()
-            );
-
-            response = session
-                .send_tool_results(&tool_result_messages)
-                .await
-                .map_err(RunAgentError::GatewayError)?;
-        }
-
-        Ok(all_outputs.join("\n---\n"))
     }
 }
 
@@ -1323,7 +679,9 @@ mod tests {
     use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::tool::value_objects::ToolResult;
-    use quorum_domain::{ConsensusLevel, ContextMode, InteractionType, PhaseScope};
+    use quorum_domain::{
+        AgentConfig, ConsensusLevel, ContextMode, InteractionType, Model, PhaseScope,
+    };
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
 
