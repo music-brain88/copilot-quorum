@@ -106,7 +106,10 @@ impl AgentConfig {
         {
             // Solo + Ask + Debate is already caught by SoloWithDebate (Error).
             // Only warn if not already an error for the same reason.
-            if !issues.iter().any(|i| i.code == ConfigIssueCode::SoloWithDebate) {
+            if !issues
+                .iter()
+                .any(|i| i.code == ConfigIssueCode::SoloWithDebate)
+            {
                 issues.push(ConfigIssue {
                     severity: Severity::Warning,
                     code: ConfigIssueCode::AskWithOrchestration,

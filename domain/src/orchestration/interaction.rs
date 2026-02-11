@@ -217,10 +217,7 @@ mod tests {
             "shared".parse::<ContextMode>().ok(),
             Some(ContextMode::Shared)
         );
-        assert_eq!(
-            "s".parse::<ContextMode>().ok(),
-            Some(ContextMode::Shared)
-        );
+        assert_eq!("s".parse::<ContextMode>().ok(), Some(ContextMode::Shared));
         assert_eq!(
             "fresh".parse::<ContextMode>().ok(),
             Some(ContextMode::Fresh)
