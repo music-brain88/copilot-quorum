@@ -635,6 +635,76 @@ impl Default for FileToolsConfig {
     }
 }
 
+// ==================== TUI Configuration ====================
+
+/// TUI input configuration
+///
+/// Controls keybindings and behavior of the modal input system.
+///
+/// # Example
+///
+/// ```toml
+/// [tui.input]
+/// submit_key = "enter"
+/// newline_key = "alt+enter"
+/// editor_key = "I"
+/// editor_action = "return_to_insert"
+/// max_height = 10
+/// dynamic_height = true
+/// context_header = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileTuiInputConfig {
+    /// Key to submit input (default: "enter")
+    pub submit_key: String,
+    /// Key to insert a newline in multiline mode (default: "alt+enter")
+    pub newline_key: String,
+    /// Key to launch $EDITOR from Normal mode (default: "I")
+    pub editor_key: String,
+    /// What happens after editor saves: "return_to_insert" or "submit"
+    pub editor_action: String,
+    /// Maximum height for the input area in lines (default: 10)
+    pub max_height: u16,
+    /// Whether input area grows dynamically with content (default: true)
+    pub dynamic_height: bool,
+    /// Whether to show context header in $EDITOR temp file (default: true)
+    pub context_header: bool,
+}
+
+impl Default for FileTuiInputConfig {
+    fn default() -> Self {
+        Self {
+            submit_key: "enter".to_string(),
+            newline_key: "shift+enter".to_string(),
+            editor_key: "I".to_string(),
+            editor_action: "return_to_insert".to_string(),
+            max_height: 10,
+            dynamic_height: true,
+            context_header: true,
+        }
+    }
+}
+
+/// TUI configuration
+///
+/// Controls the terminal user interface behavior.
+///
+/// # Example
+///
+/// ```toml
+/// [tui]
+/// [tui.input]
+/// max_height = 12
+/// editor_action = "submit"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileTuiConfig {
+    /// Input area configuration
+    pub input: FileTuiInputConfig,
+}
+
 /// Complete file configuration (raw TOML structure)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -655,6 +725,8 @@ pub struct FileConfig {
     pub integrations: FileIntegrationsConfig,
     /// Tools settings
     pub tools: FileToolsConfig,
+    /// TUI settings
+    pub tui: FileTuiConfig,
 }
 
 impl FileConfig {
@@ -1154,5 +1226,47 @@ rule = "majority"
         // But council is set
         assert_eq!(config.council.models.len(), 2);
         assert_eq!(config.council.moderator, Model::ClaudeOpus45);
+    }
+
+    #[test]
+    fn test_tui_config_default() {
+        let config = FileTuiConfig::default();
+        assert_eq!(config.input.submit_key, "enter");
+        assert_eq!(config.input.newline_key, "shift+enter");
+        assert_eq!(config.input.editor_key, "I");
+        assert_eq!(config.input.editor_action, "return_to_insert");
+        assert_eq!(config.input.max_height, 10);
+        assert!(config.input.dynamic_height);
+        assert!(config.input.context_header);
+    }
+
+    #[test]
+    fn test_tui_config_deserialize() {
+        let toml_str = r#"
+[tui.input]
+max_height = 15
+editor_action = "submit"
+context_header = false
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.tui.input.max_height, 15);
+        assert_eq!(config.tui.input.editor_action, "submit");
+        assert!(!config.tui.input.context_header);
+        // Defaults still apply for unset fields
+        assert_eq!(config.tui.input.submit_key, "enter");
+        assert_eq!(config.tui.input.newline_key, "shift+enter");
+    }
+
+    #[test]
+    fn test_tui_config_partial() {
+        let toml_str = r#"
+[tui.input]
+max_height = 20
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.tui.input.max_height, 20);
+        // All other fields use defaults
+        assert_eq!(config.tui.input.submit_key, "enter");
+        assert!(config.tui.input.dynamic_height);
     }
 }

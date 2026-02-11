@@ -12,6 +12,7 @@ use quorum_infrastructure::{
 };
 use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
+    TuiInputConfig,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -296,12 +297,18 @@ async fn main() -> Result<()> {
             agent_config = agent_config.with_final_review();
         }
 
+        let tui_input_config = TuiInputConfig {
+            max_input_height: config.tui.input.max_height,
+            context_header: config.tui.input.context_header,
+        };
+
         let mut tui_app = TuiApp::new(
             gateway.clone(),
             tool_executor.clone(),
             context_loader.clone(),
             agent_config,
-        );
+        )
+        .with_tui_config(tui_input_config);
         tui_app.run().await?;
         return Ok(());
     }

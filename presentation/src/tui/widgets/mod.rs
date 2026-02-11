@@ -24,15 +24,32 @@ pub struct MainLayout {
 }
 
 impl MainLayout {
-    pub fn compute(area: Rect) -> Self {
+    /// Compute layout with dynamic input height.
+    ///
+    /// `input_lines` is the number of text lines in the input buffer.
+    /// `max_input_height` is the maximum number of text lines (from config).
+    /// The input area grows from 3 (1 line + borders) up to max_input_height + 2 (borders),
+    /// but is capped to prevent pushing other widgets out of the terminal.
+    pub fn compute_with_input_config(area: Rect, input_lines: u16, max_input_height: u16) -> Self {
+        let header_h: u16 = 3;
+        let status_h: u16 = 1;
+
+        // Cap input height so header + input + status never exceeds terminal height.
+        // This prevents the layout solver from pushing the status bar out of bounds.
+        let max_for_input = area.height.saturating_sub(header_h + status_h);
+        let desired_h = (input_lines + 2).clamp(3, max_input_height + 2);
+        let input_h = desired_h.min(max_for_input).max(1);
+
         // Vertical split: header | main | input | status_bar
+        // Fill(1) for main area: takes whatever space remains after fixed areas.
+        // Unlike Min(8), Fill won't fight with input/status for space on small terminals.
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Header
-                Constraint::Min(8),    // Main (conversation + progress)
-                Constraint::Length(3), // Input
-                Constraint::Length(1), // Status bar
+                Constraint::Length(header_h), // Header
+                Constraint::Fill(1),          // Main (conversation + progress)
+                Constraint::Length(input_h),  // Input (dynamic)
+                Constraint::Length(status_h), // Status bar
             ])
             .split(area);
 

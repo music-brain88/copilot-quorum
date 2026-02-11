@@ -41,6 +41,9 @@ pub struct TuiState {
     // -- HiL --
     pub hil_prompt: Option<HilPrompt>,
 
+    // -- TUI config --
+    pub tui_config: TuiInputConfig,
+
     // -- Lifecycle --
     pub should_quit: bool,
 }
@@ -65,6 +68,7 @@ impl Default for TuiState {
             show_help: false,
             flash_message: None,
             hil_prompt: None,
+            tui_config: TuiInputConfig::default(),
             should_quit: false,
         }
     }
@@ -130,6 +134,22 @@ impl TuiState {
     pub fn cursor_end(&mut self) {
         let len = self.active_input().len();
         *self.active_cursor_mut() = len;
+    }
+
+    /// Insert a newline at the current cursor position
+    pub fn insert_newline(&mut self) {
+        let cursor = self.active_cursor();
+        self.active_input_mut().insert(cursor, '\n');
+        *self.active_cursor_mut() += 1;
+    }
+
+    /// Count the number of lines in the current input buffer
+    pub fn input_line_count(&self) -> usize {
+        let input = match self.mode {
+            InputMode::Command => &self.command_input,
+            _ => &self.input,
+        };
+        input.lines().count().max(1) + if input.ends_with('\n') { 1 } else { 0 }
     }
 
     /// Take the current input buffer contents and clear it
@@ -313,6 +333,27 @@ pub struct QuorumStatus {
     pub approved: usize,
 }
 
+/// TUI input configuration (presentation-layer view)
+///
+/// This is the presentation-layer equivalent of `FileTuiInputConfig`.
+/// Values are typically populated from infrastructure config at startup.
+#[derive(Debug, Clone)]
+pub struct TuiInputConfig {
+    /// Maximum height for the input area in text lines (default: 8)
+    pub max_input_height: u16,
+    /// Whether to show context header in $EDITOR temp file
+    pub context_header: bool,
+}
+
+impl Default for TuiInputConfig {
+    fn default() -> Self {
+        Self {
+            max_input_height: 8,
+            context_header: true,
+        }
+    }
+}
+
 /// Human intervention prompt data
 #[derive(Debug, Clone)]
 pub struct HilPrompt {
@@ -417,6 +458,64 @@ mod tests {
 
         let msg = DisplayMessage::system("info");
         assert_eq!(msg.role, MessageRole::System);
+    }
+
+    #[test]
+    fn test_insert_newline() {
+        let mut state = TuiState::new();
+        state.mode = InputMode::Insert;
+        state.insert_char('a');
+        state.insert_char('b');
+        state.insert_newline();
+        state.insert_char('c');
+        assert_eq!(state.input, "ab\nc");
+        assert_eq!(state.cursor_pos, 4);
+    }
+
+    #[test]
+    fn test_insert_newline_mid_text() {
+        let mut state = TuiState::new();
+        state.mode = InputMode::Insert;
+        state.input = "hello world".into();
+        state.cursor_pos = 5;
+        state.insert_newline();
+        assert_eq!(state.input, "hello\n world");
+        assert_eq!(state.cursor_pos, 6);
+    }
+
+    #[test]
+    fn test_input_line_count() {
+        let mut state = TuiState::new();
+        state.mode = InputMode::Insert;
+
+        // Empty input → 1 line
+        assert_eq!(state.input_line_count(), 1);
+
+        state.input = "hello".into();
+        assert_eq!(state.input_line_count(), 1);
+
+        state.input = "hello\nworld".into();
+        assert_eq!(state.input_line_count(), 2);
+
+        state.input = "a\nb\nc".into();
+        assert_eq!(state.input_line_count(), 3);
+
+        // Trailing newline = extra empty line
+        state.input = "hello\n".into();
+        assert_eq!(state.input_line_count(), 2);
+    }
+
+    #[test]
+    fn test_delete_char_across_newline() {
+        let mut state = TuiState::new();
+        state.mode = InputMode::Insert;
+        state.input = "ab\nc".into();
+        state.cursor_pos = 3; // at '\n' + 1 = 'c' position... wait, let's be precise
+        // "ab\nc" → bytes: a(0) b(1) \n(2) c(3)
+        // cursor_pos = 3 means cursor is before 'c'
+        state.delete_char(); // should delete '\n'
+        assert_eq!(state.input, "abc");
+        assert_eq!(state.cursor_pos, 2);
     }
 
     #[test]

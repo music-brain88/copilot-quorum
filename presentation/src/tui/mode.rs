@@ -51,6 +51,7 @@ pub enum KeyAction {
 
     // -- Text editing (Insert / Command mode) --
     InsertChar(char),
+    InsertNewline,
     DeleteChar,
     CursorLeft,
     CursorRight,
@@ -74,6 +75,9 @@ pub enum KeyAction {
     SwitchAsk,
     SwitchDiscuss,
     StartCouncil,
+
+    // -- Editor --
+    LaunchEditor,
 
     // -- Application --
     Quit,
@@ -101,6 +105,9 @@ fn handle_normal(key: KeyEvent) -> KeyAction {
         KeyCode::Char('i') => KeyAction::EnterInsert,
         KeyCode::Char(':') => KeyAction::EnterCommand,
 
+        // $EDITOR delegation
+        KeyCode::Char('I') => KeyAction::LaunchEditor,
+
         // Consensus level
         KeyCode::Char('s') => KeyAction::SwitchSolo,
         KeyCode::Char('e') => KeyAction::SwitchEnsemble,
@@ -127,6 +134,14 @@ fn handle_normal(key: KeyEvent) -> KeyAction {
 fn handle_insert(key: KeyEvent) -> KeyAction {
     match key.code {
         KeyCode::Esc => KeyAction::ExitToNormal,
+        // Shift+Enter (primary, needs kitty keyboard protocol) or
+        // Alt+Enter (fallback for terminals without keyboard enhancement)
+        KeyCode::Enter
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            KeyAction::InsertNewline
+        }
         KeyCode::Enter => KeyAction::SubmitInput,
         KeyCode::Backspace => KeyAction::DeleteChar,
         KeyCode::Left => KeyAction::CursorLeft,
@@ -230,6 +245,34 @@ mod tests {
         assert_eq!(
             handle_key_event(InputMode::Insert, key),
             KeyAction::SubmitInput
+        );
+    }
+
+    #[test]
+    fn test_insert_shift_enter_newline() {
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Insert, key),
+            KeyAction::InsertNewline
+        );
+    }
+
+    #[test]
+    fn test_insert_alt_enter_newline_fallback() {
+        // Alt+Enter is kept as fallback for terminals without kitty protocol
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
+        assert_eq!(
+            handle_key_event(InputMode::Insert, key),
+            KeyAction::InsertNewline
+        );
+    }
+
+    #[test]
+    fn test_normal_shift_i_launches_editor() {
+        let key = KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key),
+            KeyAction::LaunchEditor
         );
     }
 
