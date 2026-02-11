@@ -2,6 +2,7 @@
 //!
 //! Ports define the contracts that infrastructure adapters must implement.
 
+pub mod action_reviewer;
 pub mod agent_progress;
 pub mod context_loader;
 pub mod human_intervention;
