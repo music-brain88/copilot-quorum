@@ -89,6 +89,15 @@ strategy = "quorum"       # "quorum" or "debate"
 interaction_type = "ask"  # "ask" or "discuss"
 context_mode = "shared"   # "shared" or "fresh"
 hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
+
+[tui.input]
+submit_key = "enter"           # Key to send message
+newline_key = "alt+enter"      # Key to insert newline (multiline)
+editor_key = "I"               # Key to launch $EDITOR (Normal mode)
+editor_action = "return_to_insert"  # "return_to_insert" or "submit"
+max_height = 10                # Max input area height in lines
+dynamic_height = true          # Input area grows with content
+context_header = true          # Show context header in $EDITOR
 ```
 
 ## Architecture

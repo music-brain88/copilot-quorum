@@ -24,15 +24,27 @@ pub struct MainLayout {
 }
 
 impl MainLayout {
-    pub fn compute(area: Rect) -> Self {
+    /// Compute layout with dynamic input height.
+    ///
+    /// `input_lines` is the number of text lines in the input buffer.
+    /// `max_input_height` is the maximum number of text lines (from config).
+    /// The input area grows from 3 (1 line + borders) up to max_input_height + 2 (borders).
+    pub fn compute_with_input_config(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+    ) -> Self {
+        // height = lines + 2 (top/bottom border), clamped to max + 2
+        let input_h = (input_lines + 2).clamp(3, max_input_height + 2);
+
         // Vertical split: header | main | input | status_bar
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Header
-                Constraint::Min(8),    // Main (conversation + progress)
-                Constraint::Length(3), // Input
-                Constraint::Length(1), // Status bar
+                Constraint::Length(3),        // Header
+                Constraint::Min(8),           // Main (conversation + progress)
+                Constraint::Length(input_h),  // Input (dynamic)
+                Constraint::Length(1),        // Status bar
             ])
             .split(area);
 

@@ -5,6 +5,7 @@
 //! with channels for communication between the TUI event loop and the controller.
 
 mod app;
+pub mod editor;
 mod event;
 mod human_intervention;
 mod mode;
@@ -19,4 +20,4 @@ pub use human_intervention::TuiHumanIntervention;
 pub use mode::{InputMode, KeyAction};
 pub use presenter::TuiPresenter;
 pub use progress::TuiProgressBridge;
-pub use state::{DisplayMessage, MessageRole, ProgressState, TuiState};
+pub use state::{DisplayMessage, MessageRole, ProgressState, TuiInputConfig, TuiState};

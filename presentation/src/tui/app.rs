@@ -11,15 +11,21 @@
 //!        └── cmd_tx ──────────────────>──┘
 //! ```
 
+use super::editor::{self, EditorContext, EditorResult};
 use super::event::{HilKind, HilRequest, TuiCommand, TuiEvent};
 use super::mode::{self, InputMode, KeyAction};
 use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
-use super::state::{DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiState};
+use super::state::{DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiInputConfig, TuiState};
 use super::widgets::{
     MainLayout, conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
     progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget,
 };
+
+/// Side-effect that requires main loop intervention (e.g. terminal suspend)
+enum SideEffect {
+    LaunchEditor,
+}
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture, EventStream},
     execute,
@@ -59,6 +65,9 @@ pub struct TuiApp<
 
     // -- Controller task handle --
     _controller_handle: tokio::task::JoinHandle<()>,
+
+    // -- TUI configuration --
+    tui_config: TuiInputConfig,
 
     // -- Type witness for generics --
     _phantom: std::marker::PhantomData<(G, T, C)>,
@@ -109,6 +118,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             presenter,
             pending_hil_tx: Arc::new(Mutex::new(None)),
             _controller_handle: controller_handle,
+            tui_config: TuiInputConfig::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -141,6 +151,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self
     }
 
+    pub fn with_tui_config(mut self, config: TuiInputConfig) -> Self {
+        self.tui_config = config;
+        self
+    }
+
     /// Run the TUI main loop
     pub async fn run(&mut self) -> io::Result<()> {
         // Setup terminal
@@ -159,6 +174,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }));
 
         let mut state = TuiState::new();
+        state.tui_config = self.tui_config.clone();
         let mut event_stream = EventStream::new();
         let mut tick = tokio::time::interval(Duration::from_millis(250));
 
@@ -181,7 +197,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             tokio::select! {
                 // Terminal events (keyboard, mouse, resize)
                 Some(Ok(term_event)) = event_stream.next() => {
-                    self.handle_terminal_event(&mut state, term_event);
+                    if let Some(side_effect) = self.handle_terminal_event(&mut state, term_event) {
+                        match side_effect {
+                            SideEffect::LaunchEditor => {
+                                Self::run_editor(&mut terminal, &mut state)?;
+                            }
+                        }
+                    }
                 }
 
                 // UiEvents from controller (via AgentController → ui_tx)
@@ -218,9 +240,71 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         Ok(())
     }
 
+    /// Suspend the TUI, launch $EDITOR, and resume.
+    ///
+    /// The current INSERT buffer content is passed as initial text.
+    /// On save, the content replaces the INSERT buffer and mode switches to Insert.
+    /// On cancel, nothing changes and mode stays Normal.
+    fn run_editor(
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        state: &mut TuiState,
+    ) -> io::Result<()> {
+        let initial_text = state.input.clone();
+
+        let context = EditorContext {
+            consensus_level: format!("{}", state.consensus_level),
+            phase_scope: format!("{}", state.phase_scope),
+            strategy: "Quorum".to_string(),
+        };
+
+        // Suspend TUI
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+
+        // Launch editor (blocking)
+        let result = editor::launch_editor_with_options(
+            &initial_text,
+            &context,
+            state.tui_config.context_header,
+        );
+
+        // Resume TUI
+        enable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableMouseCapture
+        )?;
+        terminal.clear()?;
+
+        // Apply result
+        match result {
+            EditorResult::Saved(text) => {
+                state.input = text;
+                state.cursor_pos = state.input.len();
+                state.mode = InputMode::Insert;
+                state.set_flash("Editor: content loaded into input buffer");
+            }
+            EditorResult::Cancelled => {
+                state.set_flash("Editor: cancelled");
+            }
+        }
+
+        Ok(())
+    }
+
     /// Render all widgets
     fn render(&self, frame: &mut ratatui::Frame, state: &TuiState) {
-        let layout = MainLayout::compute(frame.area());
+        let layout = MainLayout::compute_with_input_config(
+            frame.area(),
+            state.input_line_count() as u16,
+            state.tui_config.max_input_height,
+        );
 
         frame.render_widget(HeaderWidget::new(state), layout.header);
         frame.render_widget(ConversationWidget::new(state), layout.conversation);
@@ -270,9 +354,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("  ?      Toggle this help"),
             Line::from("  Ctrl+C Quit"),
             Line::from(""),
+            Line::from("  I      Open $EDITOR (with current input)"),
+            Line::from(""),
             Line::from("Insert Mode:"),
-            Line::from("  Enter  Send message"),
-            Line::from("  Esc    Return to Normal"),
+            Line::from("  Enter      Send message"),
+            Line::from("  Alt+Enter  Insert newline (multiline input)"),
+            Line::from("  Esc        Return to Normal"),
             Line::from(""),
             Line::from("Commands (:command):"),
             Line::from("  :q       Quit"),
@@ -349,14 +436,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         );
     }
 
-    /// Handle a terminal (crossterm) event
-    fn handle_terminal_event(&self, state: &mut TuiState, event: crossterm::event::Event) {
+    /// Handle a terminal (crossterm) event.
+    /// Returns a `SideEffect` if the main loop needs to perform a terminal-level action.
+    fn handle_terminal_event(
+        &self,
+        state: &mut TuiState,
+        event: crossterm::event::Event,
+    ) -> Option<SideEffect> {
         match event {
             crossterm::event::Event::Key(key) => {
                 // If HiL modal is showing, handle y/n/Esc
                 if state.hil_prompt.is_some() {
                     self.handle_hil_key(state, key);
-                    return;
+                    return None;
                 }
 
                 // If help is showing, Esc or ? closes it
@@ -364,24 +456,23 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     match key.code {
                         crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('?') => {
                             state.show_help = false;
-                            return;
+                            return None;
                         }
                         _ => {}
                     }
                 }
 
                 let action = mode::handle_key_event(state.mode, key);
-                self.handle_action(state, action);
+                self.handle_action(state, action)
             }
-            crossterm::event::Event::Resize(_, _) => {
-                // Terminal auto-resizes on next draw
-            }
-            _ => {}
+            crossterm::event::Event::Resize(_, _) => None,
+            _ => None,
         }
     }
 
-    /// Handle a semantic key action
-    fn handle_action(&self, state: &mut TuiState, action: KeyAction) {
+    /// Handle a semantic key action.
+    /// Returns a `SideEffect` if the main loop needs to perform a terminal-level action.
+    fn handle_action(&self, state: &mut TuiState, action: KeyAction) -> Option<SideEffect> {
         match action {
             KeyAction::None => {}
 
@@ -396,6 +487,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             // Text editing
             KeyAction::InsertChar(c) => state.insert_char(c),
+            KeyAction::InsertNewline => state.insert_newline(),
             KeyAction::DeleteChar => state.delete_char(),
             KeyAction::CursorLeft => state.cursor_left(),
             KeyAction::CursorRight => state.cursor_right(),
@@ -453,6 +545,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             KeyAction::ScrollToTop => state.scroll_to_top(),
             KeyAction::ScrollToBottom => state.scroll_to_bottom(),
 
+            // Editor — requires terminal suspend, handled by main loop
+            KeyAction::LaunchEditor => {
+                return Some(SideEffect::LaunchEditor);
+            }
+
             // Application
             KeyAction::Quit => state.should_quit = true,
             KeyAction::ShowHelp => state.show_help = !state.show_help,
@@ -463,6 +560,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     .send(TuiCommand::HandleCommand("toggle_consensus".into()));
             }
         }
+        None
     }
 
     /// Apply a TuiEvent (from progress bridge or presenter) to state
