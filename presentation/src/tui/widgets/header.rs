@@ -21,7 +21,11 @@ impl<'a> HeaderWidget<'a> {
 
 impl<'a> Widget for HeaderWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let mode_label = format!("{}", self.state.consensus_level);
+        let level_short = match self.state.consensus_level {
+            quorum_domain::ConsensusLevel::Solo => "solo",
+            quorum_domain::ConsensusLevel::Ensemble => "ens",
+        };
+        let mode_label = format!("{}:{}", level_short, self.state.interaction_type);
         let mode_color = if self.state.consensus_level.is_ensemble() {
             Color::Magenta
         } else {

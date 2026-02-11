@@ -5,7 +5,7 @@
 //! (e.g., ReplPresenter for CLI, TuiPresenter for TUI in Phase 2).
 
 use quorum_domain::{
-    AgentState, ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, Thought,
+    AgentState, ConsensusLevel, HilMode, InteractionType, Model, OutputFormat, PhaseScope, Thought,
 };
 
 /// Events emitted by AgentController for presentation layer to render
@@ -33,6 +33,11 @@ pub enum UiEvent {
     /// Orchestration strategy changed
     StrategyChanged {
         strategy: String,
+        description: String,
+    },
+    /// Interaction type changed (Ask ↔ Discuss)
+    InteractionChanged {
+        interaction_type: InteractionType,
         description: String,
     },
     /// Conversation history cleared
@@ -96,6 +101,8 @@ pub struct ConfigSnapshot {
     pub consensus_level: ConsensusLevel,
     pub phase_scope: PhaseScope,
     pub orchestration_strategy: String,
+    pub interaction_type: InteractionType,
+    pub context_mode: String,
     pub require_final_review: bool,
     pub max_iterations: usize,
     pub max_plan_revisions: usize,

@@ -257,12 +257,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             )),
             Line::from(""),
             Line::from("Normal Mode:"),
-            Line::from("  i/a    Enter Insert mode"),
+            Line::from("  i      Enter Insert mode"),
             Line::from("  :      Enter Command mode"),
             Line::from("  s      Switch to Solo mode"),
             Line::from("  e      Switch to Ensemble mode"),
             Line::from("  f      Toggle Fast scope"),
-            Line::from("  d      Start Quorum Discussion"),
+            Line::from("  a      Switch to Ask mode"),
+            Line::from("  d      Switch to Discuss mode"),
+            Line::from("  c      Start Council (ad-hoc discussion)"),
             Line::from("  j/k    Scroll down/up"),
             Line::from("  g/G    Scroll to top/bottom"),
             Line::from("  ?      Toggle this help"),
@@ -273,13 +275,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("  Esc    Return to Normal"),
             Line::from(""),
             Line::from("Commands (:command):"),
-            Line::from("  :q     Quit"),
-            Line::from("  :help  Show help"),
-            Line::from("  :solo  Switch to Solo mode"),
-            Line::from("  :ens   Switch to Ensemble mode"),
-            Line::from("  :fast  Toggle fast mode"),
-            Line::from("  :config Show configuration"),
-            Line::from("  :clear Clear history"),
+            Line::from("  :q       Quit"),
+            Line::from("  :help    Show help"),
+            Line::from("  :solo    Switch to Solo mode"),
+            Line::from("  :ens     Switch to Ensemble mode"),
+            Line::from("  :fast    Toggle fast mode"),
+            Line::from("  :ask     Switch to Ask mode"),
+            Line::from("  :discuss Switch to Discuss mode"),
+            Line::from("  :council <question>  Ad-hoc discussion"),
+            Line::from("  :config  Show configuration"),
+            Line::from("  :clear   Clear history"),
             Line::from(""),
             Line::from(Span::styled(
                 "Press ? or Esc to close",
@@ -427,10 +432,18 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             KeyAction::ToggleFast => {
                 let _ = self.cmd_tx.send(TuiCommand::HandleCommand("fast".into()));
             }
-            KeyAction::StartDiscuss => {
-                // Enter command mode with "discuss " pre-filled
+            KeyAction::SwitchAsk => {
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("ask".into()));
+            }
+            KeyAction::SwitchDiscuss => {
+                let _ = self
+                    .cmd_tx
+                    .send(TuiCommand::HandleCommand("discuss".into()));
+            }
+            KeyAction::StartCouncil => {
+                // Enter command mode with "council " pre-filled
                 state.mode = InputMode::Command;
-                state.command_input = "discuss ".into();
+                state.command_input = "council ".into();
                 state.command_cursor = state.command_input.len();
             }
 
@@ -601,6 +614,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             | TuiEvent::ModeChanged { .. }
             | TuiEvent::ScopeChanged(_)
             | TuiEvent::StrategyChanged(_)
+            | TuiEvent::InteractionChanged(_)
             | TuiEvent::CommandError(_) => {}
         }
     }

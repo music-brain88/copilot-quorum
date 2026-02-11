@@ -3,7 +3,10 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
-use quorum_domain::{ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, QuorumRule};
+use quorum_domain::{
+    ConsensusLevel, ContextMode, HilMode, InteractionType, Model, OutputFormat, PhaseScope,
+    QuorumRule,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -116,6 +119,10 @@ pub struct FileAgentConfig {
     pub phase_scope: String,
     /// Orchestration strategy: "quorum" or "debate"
     pub strategy: String,
+    /// Interaction type: "ask" or "discuss"
+    pub interaction_type: String,
+    /// Context mode: "shared" or "fresh"
+    pub context_mode: String,
 
     // ==================== Role-based Model Configuration ====================
     /// Model for exploration: context gathering + low-risk tools (optional)
@@ -134,6 +141,8 @@ impl Default for FileAgentConfig {
             consensus_level: "solo".to_string(),
             phase_scope: "full".to_string(),
             strategy: "quorum".to_string(),
+            interaction_type: "ask".to_string(),
+            context_mode: "shared".to_string(),
             // Role-based defaults are None - will use AgentConfig defaults
             exploration_model: None,
             decision_model: None,
@@ -170,6 +179,20 @@ impl FileAgentConfig {
             "debate" => "debate",
             _ => "quorum",
         }
+    }
+
+    /// Parse interaction_type string into InteractionType enum
+    ///
+    /// Accepts: "ask", "a", "discuss", "disc", "d"
+    pub fn parse_interaction_type(&self) -> InteractionType {
+        self.interaction_type.parse().unwrap_or_default()
+    }
+
+    /// Parse context_mode string into ContextMode enum
+    ///
+    /// Accepts: "shared", "s", "fresh", "f"
+    pub fn parse_context_mode(&self) -> ContextMode {
+        self.context_mode.parse().unwrap_or_default()
     }
 
     /// Parse exploration_model string into Model enum
@@ -1076,6 +1099,39 @@ description = "Message to echo"
     fn test_custom_tools_empty_by_default() {
         let config = FileToolsConfig::default();
         assert!(config.custom.is_empty());
+    }
+
+    #[test]
+    fn test_agent_config_interaction_type_deserialize() {
+        let toml_str = r#"
+[agent]
+interaction_type = "discuss"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.interaction_type, "discuss");
+        assert_eq!(
+            config.agent.parse_interaction_type(),
+            InteractionType::Discuss
+        );
+
+        // Default is "ask"
+        let config = FileAgentConfig::default();
+        assert_eq!(config.parse_interaction_type(), InteractionType::Ask);
+    }
+
+    #[test]
+    fn test_agent_config_context_mode_deserialize() {
+        let toml_str = r#"
+[agent]
+context_mode = "fresh"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.context_mode, "fresh");
+        assert_eq!(config.agent.parse_context_mode(), ContextMode::Fresh);
+
+        // Default is "shared"
+        let config = FileAgentConfig::default();
+        assert_eq!(config.parse_context_mode(), ContextMode::Shared);
     }
 
     #[test]

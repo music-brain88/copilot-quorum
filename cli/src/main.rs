@@ -6,7 +6,7 @@
 use anyhow::{Result, bail};
 use clap::Parser;
 use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase};
-use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat};
+use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, Severity};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
 };
@@ -252,10 +252,12 @@ async fn main() -> Result<()> {
         .with_max_plan_revisions(config.agent.max_plan_revisions)
         .with_hil_mode(config.agent.parse_hil_mode());
 
-    // Apply consensus level and phase scope from config file
+    // Apply consensus level, phase scope, and interaction axes from config file
     agent_config = agent_config
         .with_consensus_level(config.agent.parse_consensus_level())
-        .with_phase_scope(config.agent.parse_phase_scope());
+        .with_phase_scope(config.agent.parse_phase_scope())
+        .with_interaction_type(config.agent.parse_interaction_type())
+        .with_context_mode(config.agent.parse_context_mode());
 
     // Apply --no-quorum flag
     if cli.no_quorum {
@@ -272,6 +274,18 @@ async fn main() -> Result<()> {
     } else {
         agent_config.consensus_level
     };
+
+    // Validate configuration combination
+    let issues = agent_config.validate_combination();
+    for issue in &issues {
+        match issue.severity {
+            Severity::Warning => eprintln!("Warning: {}", issue.message),
+            Severity::Error => eprintln!("Error: {}", issue.message),
+        }
+    }
+    if AgentConfig::has_errors(&issues) {
+        bail!("Invalid configuration combination");
+    }
 
     // No question provided -> Start TUI (default)
     if cli.question.is_none() {
