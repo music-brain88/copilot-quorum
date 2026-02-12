@@ -67,6 +67,7 @@ pub enum TuiEvent {
         success: bool,
         index: usize,
         total: usize,
+        output: Option<String>,
     },
     ToolCall {
         tool_name: String,

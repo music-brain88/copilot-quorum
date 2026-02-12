@@ -350,6 +350,7 @@ pub struct TaskSummary {
     pub index: usize,
     pub description: String,
     pub success: bool,
+    pub output: Option<String>,
 }
 
 /// Ensemble planning progress

@@ -641,6 +641,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 success,
                 index,
                 total: _,
+                output,
             } => {
                 // Update progress pane
                 if let Some(ref mut tp) = state.progress.task_progress {
@@ -648,14 +649,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         index,
                         description: description.clone(),
                         success,
+                        output: output.clone(),
                     });
                 }
-                // Add conversation message
+                // Add conversation message with extracted output
                 let status = if success { "✓" } else { "✗" };
-                state.push_message(DisplayMessage::system(format!(
-                    "Task {} {} {}",
-                    index, status, description
-                )));
+                let msg = if let Some(ref out) = output {
+                    let extracted = extract_response_text(out);
+                    if extracted.is_empty() {
+                        format!("Task {} {} {}", index, status, description)
+                    } else {
+                        format!(
+                            "Task {} {} {}\n  Output: {}",
+                            index, status, description, extracted
+                        )
+                    }
+                } else {
+                    format!("Task {} {} {}", index, status, description)
+                };
+                state.push_message(DisplayMessage::system(msg));
             }
             TuiEvent::ToolCall { tool_name, args: _ } => {
                 state.progress.current_tool = Some(tool_name.clone());
@@ -926,5 +938,88 @@ async fn controller_task<
                 break;
             }
         }
+    }
+}
+
+/// Extract the meaningful LLM analysis text from task output.
+///
+/// Task output contains interleaved tool results and LLM text separated by `\n---\n`.
+/// This function filters out tool result sections (lines starting with `[tool_name]:`)
+/// and returns the last LLM text block, which is typically the final analysis/summary.
+/// The result is truncated to 500 characters.
+fn extract_response_text(output: &str) -> String {
+    use quorum_domain::core::string::truncate;
+
+    let sections: Vec<&str> = output.split("\n---\n").collect();
+
+    // Find the last section that isn't a tool result
+    let llm_text = sections
+        .iter()
+        .rev()
+        .find(|section| {
+            let trimmed = section.trim();
+            !trimmed.is_empty()
+                && !trimmed
+                    .lines()
+                    .next()
+                    .is_some_and(|first| first.contains("]:") && first.starts_with('['))
+        })
+        .map(|s| s.trim())
+        .unwrap_or("");
+
+    if llm_text.is_empty() {
+        return String::new();
+    }
+
+    truncate(llm_text, 500)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_plain_text() {
+        let output = "The code is well-structured and follows best practices.";
+        assert_eq!(extract_response_text(output), output);
+    }
+
+    #[test]
+    fn test_extract_filters_tool_results() {
+        let output = "[read_file]: contents of foo.rs\n---\nThe code looks clean.";
+        assert_eq!(extract_response_text(output), "The code looks clean.");
+    }
+
+    #[test]
+    fn test_extract_returns_last_llm_block() {
+        let output =
+            "Initial analysis\n---\n[grep_search]: found 3 matches\n---\nFinal summary here.";
+        assert_eq!(extract_response_text(output), "Final summary here.");
+    }
+
+    #[test]
+    fn test_extract_empty_output() {
+        assert_eq!(extract_response_text(""), String::new());
+    }
+
+    #[test]
+    fn test_extract_only_tool_results() {
+        let output = "[read_file]: file contents\n---\n[grep_search]: matches";
+        assert_eq!(extract_response_text(output), String::new());
+    }
+
+    #[test]
+    fn test_extract_truncates_long_text() {
+        let long_text = "A".repeat(600);
+        let result = extract_response_text(&long_text);
+        assert!(result.len() <= 503); // 500 + "..."
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_ignores_brackets_mid_line() {
+        // Text that has brackets but not at start of line
+        let output = "The function returns [Ok] or [Err]: both are valid.";
+        assert_eq!(extract_response_text(output), output);
     }
 }
