@@ -35,7 +35,7 @@ Structure your responses with clear sections:
 - **Action**: The tool call (when executing)
 - **Result**: What happened (after tool execution)
 
-When you need to use a tool, simply call it using the available tool functions.
+Always use the available tool functions to take actions. Do not describe actions you would take — call the tools directly.
 Do not wrap tool calls in code blocks."#
             .to_string()
     }
@@ -387,6 +387,15 @@ Respond with JSON only:
             String::new()
         };
 
+        let tool_directive = if let Some(tool_name) = &task.tool_name {
+            format!(
+                "You MUST use the available tools to complete this task. Start by calling `{}`.\nDo not just describe what you would do — actually execute the tools.",
+                tool_name
+            )
+        } else {
+            "You MUST use the available tools to complete this task.\nDo not just describe what you would do — actually execute the tools.".to_string()
+        };
+
         format!(
             r#"## Current Task
 
@@ -395,14 +404,14 @@ Respond with JSON only:
 
 ## Instructions
 
-Execute this task. If you need to use a tool, output the tool call in the specified format.
-After execution, report the result and any observations."#,
+{tool_directive}"#,
             id = task.id,
             description = task.description,
             tool_info = tool_info,
             args_info = args_info,
             context_summary = context_summary,
-            previous = previous
+            previous = previous,
+            tool_directive = tool_directive
         )
     }
 
@@ -444,54 +453,6 @@ Provide your assessment with:
             context_info = context_info,
             description = task.description,
             tool_call = tool_call
-        )
-    }
-
-    /// Prompt for retrying a failed tool call due to validation error
-    pub fn tool_retry(
-        tool_name: &str,
-        error_message: &str,
-        previous_args: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> String {
-        let args_json = serde_json::to_string_pretty(previous_args).unwrap_or_default();
-
-        format!(
-            r#"## Tool Execution Failed
-
-The tool call failed due to a validation error. Please fix the issue and provide a corrected tool call.
-
-**Tool**: `{tool_name}`
-
-**Error**: {error_message}
-
-**Previous Arguments**:
-```json
-{args_json}
-```
-
-## Instructions
-
-Analyze the error message and fix the arguments. Common issues include:
-- Missing required parameters
-- Invalid parameter values or types
-- Incorrect file paths
-
-Provide the corrected tool call:
-
-```tool
-{{
-  "tool": "{tool_name}",
-  "args": {{
-    // Fix the arguments based on the error
-  }},
-  "reasoning": "Explanation of what was fixed"
-}}
-```
-
-IMPORTANT: Respond with ONLY the ```tool code block. Do NOT include any text outside the block."#,
-            tool_name = tool_name,
-            error_message = error_message,
-            args_json = args_json
         )
     }
 
@@ -674,6 +635,9 @@ mod tests {
         assert!(prompt.contains("autonomous coding agent"));
         // Native mode: no tool descriptions in prompt
         assert!(!prompt.contains("Available Tools"));
+        // Should instruct to call tools directly
+        assert!(prompt.contains("call the tools directly"));
+        assert!(!prompt.contains("When you need to use a tool"));
     }
 
     #[test]
@@ -765,6 +729,24 @@ mod tests {
         assert!(prompt.contains("Read the config"));
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("config.toml"));
+        // Should mandate tool usage
+        assert!(prompt.contains("MUST use the available tools"));
+        assert!(prompt.contains("Start by calling `read_file`"));
+        assert!(prompt.contains("Do not just describe"));
+        // Old passive wording should be gone
+        assert!(!prompt.contains("If you need to use a tool"));
+    }
+
+    #[test]
+    fn test_task_execution_prompt_without_tool_name() {
+        let context = AgentContext::new();
+        let task = Task::new("1", "Analyze the project structure");
+
+        let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
+
+        assert!(prompt.contains("MUST use the available tools"));
+        assert!(prompt.contains("Do not just describe"));
+        assert!(!prompt.contains("Start by calling"));
     }
 
     #[test]
@@ -794,31 +776,5 @@ mod tests {
         assert!(prompt.contains("Original request"));
         assert!(prompt.contains("Do something"));
         assert!(prompt.contains("SUCCESS, PARTIAL, or FAILURE"));
-    }
-
-    #[test]
-    fn test_tool_retry_prompt() {
-        let mut args = std::collections::HashMap::new();
-        args.insert("path".to_string(), serde_json::json!("README.md"));
-
-        let prompt = AgentPromptTemplate::tool_retry(
-            "read_file",
-            "Missing required argument: encoding",
-            &args,
-        );
-
-        assert!(prompt.contains("read_file"));
-        assert!(prompt.contains("Missing required argument: encoding"));
-        assert!(prompt.contains("README.md"));
-        assert!(prompt.contains("Tool Execution Failed"));
-        assert!(prompt.contains("validation error"));
-    }
-
-    #[test]
-    fn test_tool_retry_format_instruction() {
-        let args = std::collections::HashMap::new();
-        let prompt = AgentPromptTemplate::tool_retry("read_file", "error", &args);
-        assert!(prompt.contains("ONLY"));
-        assert!(prompt.contains("tool code block"));
     }
 }

@@ -272,7 +272,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             let tool_calls = response.tool_calls();
 
             if tool_calls.is_empty() {
-                // No tool calls — model is done
+                debug!(
+                    "Task {}: no tool calls in response, ending execution loop",
+                    task.id
+                );
                 break;
             }
 
