@@ -72,7 +72,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 match plan.next_task() {
                     Some(task) => {
                         let model = self.select_model_for_task(task, &input.config);
-                        let index = plan.tasks.iter().position(|t| t.id == task.id).unwrap_or(0) + 1;
+                        let index =
+                            plan.tasks.iter().position(|t| t.id == task.id).unwrap_or(0) + 1;
                         let total = plan.tasks.len();
                         (task.id.clone(), model.clone(), index, total)
                     }

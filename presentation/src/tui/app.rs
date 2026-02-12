@@ -782,8 +782,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 state.progress.is_running = false;
                 state.progress.current_phase = None;
                 state.progress.current_tool = None;
-                state.progress.task_progress = None;
-                state.progress.ensemble_progress = None;
+                // task_progress / ensemble_progress は保持 — 次の AgentStarting でクリア
                 if success {
                     state.set_flash("Agent completed successfully");
                 } else {

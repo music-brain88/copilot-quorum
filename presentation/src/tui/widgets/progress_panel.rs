@@ -60,18 +60,42 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
 
         // Task progress
         if let Some(ref tp) = progress.task_progress {
-            lines.push(Line::from(vec![
-                Span::styled("Task: ", Style::default().fg(Color::White)),
-                Span::styled(
-                    format!("⚡ {}/{}: {}", tp.current_index, tp.total, truncate_str(&tp.description, 25)),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
+            let completed = tp.completed_tasks.len();
+            let all_done = !progress.is_running && completed == tp.total && tp.total > 0;
+            let has_failures = tp.completed_tasks.iter().any(|t| !t.success);
+
+            // Header line: completed summary vs in-progress indicator
+            if all_done {
+                let (icon, color) = if has_failures {
+                    ("⚠", Color::Yellow)
+                } else {
+                    ("✓", Color::Green)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Tasks: ", Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("{} {}/{} completed", icon, completed, tp.total),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("Task: ", Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!(
+                            "⚡ {}/{}: {}",
+                            tp.current_index,
+                            tp.total,
+                            truncate_str(&tp.description, 25)
+                        ),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
 
             // Progress bar
-            let completed = tp.completed_tasks.len();
             let remaining = tp.total.saturating_sub(completed);
             let bar = format!(
                 "[{}{}] {}/{}",
@@ -82,11 +106,23 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
             );
             lines.push(Line::from(Span::styled(
                 bar,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(if all_done {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
             )));
 
             // Show completed tasks (last 3)
-            for summary in tp.completed_tasks.iter().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+            for summary in tp
+                .completed_tasks
+                .iter()
+                .rev()
+                .take(3)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
                 let icon = if summary.success {
                     Span::styled("✓ ", Style::default().fg(Color::Green))
                 } else {
@@ -111,7 +147,9 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
                     Span::styled("Ensemble: ", Style::default().fg(Color::White)),
                     Span::styled(
                         format!("Selected {} ({:.1}/10)", model, score),
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]));
             } else if ep.voting_started {
@@ -127,7 +165,10 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
                 lines.push(Line::from(vec![
                     Span::styled("Ensemble: ", Style::default().fg(Color::White)),
                     Span::styled(
-                        format!("Planning {}/{} models done", ep.plans_generated, ep.total_models),
+                        format!(
+                            "Planning {}/{} models done",
+                            ep.plans_generated, ep.total_models
+                        ),
                         Style::default().fg(Color::Cyan),
                     ),
                 ]));
