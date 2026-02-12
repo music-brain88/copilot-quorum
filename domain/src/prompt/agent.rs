@@ -35,8 +35,9 @@ Structure your responses with clear sections:
 - **Action**: The tool call (when executing)
 - **Result**: What happened (after tool execution)
 
-Always use the available tool functions to take actions. Do not describe actions you would take — call the tools directly.
-Do not wrap tool calls in code blocks."#
+When a task specifies a tool to use, your first response MUST be a tool call — not text.
+Do not provide hypothetical answers from training data. Always verify by calling tools.
+Call tools directly without preamble. Do not wrap tool calls in code blocks."#
             .to_string()
     }
 
@@ -358,17 +359,16 @@ Respond with JSON only:
         )
     }
 
-    /// Prompt for task execution
+    /// Prompt for task execution.
+    ///
+    /// When a tool is specified, the instruction is placed at the TOP of the
+    /// prompt so the model reads "call this tool" before seeing context that
+    /// might tempt it to answer from memory. When no tool is specified,
+    /// a softer instruction is placed at the bottom allowing text responses.
     pub fn task_execution(task: &Task, context: &AgentContext, previous_results: &str) -> String {
-        let tool_info = task
-            .tool_name
-            .as_ref()
-            .map(|t| format!("\n\nTool to use: `{}`", t))
-            .unwrap_or_default();
-
         let args_info = if !task.tool_args.is_empty() {
             format!(
-                "\n\nPrepared arguments:\n```json\n{}\n```",
+                "\nArguments:\n```json\n{}\n```",
                 serde_json::to_string_pretty(&task.tool_args).unwrap_or_default()
             )
         } else {
@@ -387,32 +387,46 @@ Respond with JSON only:
             String::new()
         };
 
-        let tool_directive = if let Some(tool_name) = &task.tool_name {
+        if let Some(tool_name) = &task.tool_name {
+            // Tool specified: instruction at the TOP, text response explicitly forbidden
             format!(
-                "You MUST use the available tools to complete this task. Start by calling `{}`.\nDo not just describe what you would do — actually execute the tools.",
-                tool_name
-            )
-        } else {
-            "You MUST use the available tools to complete this task.\nDo not just describe what you would do — actually execute the tools.".to_string()
-        };
+                r#"## Required Action
 
-        format!(
-            r#"## Current Task
+This task requires tool execution.
+Call `{tool_name}` as your FIRST action.{args_info}
+
+Do NOT provide analysis or commentary before calling the tool.
+A text-only response without tool calls is incorrect for this task.
+
+## Current Task
 
 **Task ID**: {id}
-**Description**: {description}{tool_info}{args_info}{context_summary}{previous}
+**Description**: {description}{context_summary}{previous}"#,
+                tool_name = tool_name,
+                args_info = args_info,
+                id = task.id,
+                description = task.description,
+                context_summary = context_summary,
+                previous = previous,
+            )
+        } else {
+            // No tool specified: text response is acceptable
+            format!(
+                r#"## Current Task
+
+**Task ID**: {id}
+**Description**: {description}{context_summary}{previous}
 
 ## Instructions
 
-{tool_directive}"#,
-            id = task.id,
-            description = task.description,
-            tool_info = tool_info,
-            args_info = args_info,
-            context_summary = context_summary,
-            previous = previous,
-            tool_directive = tool_directive
-        )
+Analyze the information and provide your findings.
+Use tools if you need to gather additional data, or respond with your analysis directly."#,
+                id = task.id,
+                description = task.description,
+                context_summary = context_summary,
+                previous = previous,
+            )
+        }
     }
 
     /// Prompt for action review (used in quorum for high-risk operations)
@@ -635,8 +649,9 @@ mod tests {
         assert!(prompt.contains("autonomous coding agent"));
         // Native mode: no tool descriptions in prompt
         assert!(!prompt.contains("Available Tools"));
-        // Should instruct to call tools directly
-        assert!(prompt.contains("call the tools directly"));
+        // Should instruct tool-first behavior
+        assert!(prompt.contains("first response MUST be a tool call"));
+        assert!(prompt.contains("Call tools directly without preamble"));
         assert!(!prompt.contains("When you need to use a tool"));
     }
 
@@ -729,12 +744,20 @@ mod tests {
         assert!(prompt.contains("Read the config"));
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("config.toml"));
-        // Should mandate tool usage
-        assert!(prompt.contains("MUST use the available tools"));
-        assert!(prompt.contains("Start by calling `read_file`"));
-        assert!(prompt.contains("Do not just describe"));
+        // "Required Action" must be at the very top (before "Current Task")
+        let action_pos = prompt.find("## Required Action").unwrap();
+        let task_pos = prompt.find("## Current Task").unwrap();
+        assert!(
+            action_pos < task_pos,
+            "Required Action must appear before Current Task"
+        );
+        // Must contain explicit tool-call instruction
+        assert!(prompt.contains("Call `read_file` as your FIRST action"));
+        // Text-only response is forbidden
+        assert!(prompt.contains("A text-only response without tool calls is incorrect"));
         // Old passive wording should be gone
         assert!(!prompt.contains("If you need to use a tool"));
+        assert!(!prompt.contains("MUST use the available tools"));
     }
 
     #[test]
@@ -744,9 +767,12 @@ mod tests {
 
         let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
 
-        assert!(prompt.contains("MUST use the available tools"));
-        assert!(prompt.contains("Do not just describe"));
-        assert!(!prompt.contains("Start by calling"));
+        // Should NOT force tool usage when no tool specified
+        assert!(!prompt.contains("MUST use the available tools"));
+        assert!(!prompt.contains("Required Action"));
+        // Should allow text response
+        assert!(prompt.contains("respond with your analysis directly"));
+        assert!(!prompt.contains("Call `"));
     }
 
     #[test]

@@ -272,6 +272,35 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             let tool_calls = response.tool_calls();
 
             if tool_calls.is_empty() {
+                // Tool specified but LLM responded with text only → retry once with nudge
+                if task.tool_name.is_some() && turn_count == 0 {
+                    warn!(
+                        "Task {}: expected tool '{}' but got text-only response, retrying with nudge",
+                        task.id,
+                        task.tool_name.as_deref().unwrap_or("?")
+                    );
+                    turn_count += 1;
+
+                    let nudge = format!(
+                        "You responded with text only, but this task REQUIRES calling `{}`. \
+                         Call the tool NOW. Do not respond with text.",
+                        task.tool_name.as_deref().unwrap_or("?")
+                    );
+                    response = match send_with_tools_cancellable(
+                        session,
+                        &nudge,
+                        &tools,
+                        progress,
+                        &self.cancellation_token,
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(_) => break, // nudge failed — keep original text
+                    };
+                    continue;
+                }
+
                 debug!(
                     "Task {}: no tool calls in response, ending execution loop",
                     task.id

@@ -247,6 +247,17 @@ impl CopilotSession {
             .filter_map(CopilotToolDefinition::from_api_tool)
             .collect();
 
+        debug!(
+            "Tool conversion: {}/{} tools converted ({})",
+            copilot_tools.len(),
+            tools.len(),
+            copilot_tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
         if copilot_tools.is_empty() {
             warn!("No valid tools converted, falling back to text-only session");
             let text = self
