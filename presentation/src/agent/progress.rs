@@ -161,18 +161,29 @@ impl AgentProgressNotifier for AgentProgressReporter {
         }
     }
 
-    fn on_task_start(&self, task: &Task) {
+    fn on_task_start(&self, task: &Task, index: usize, total: usize) {
         // Update phase bar message
         if let Some(pb) = self.phase_bar.lock().unwrap().as_ref() {
-            pb.set_message(format!("Task: {}", truncate(&task.description, 40)));
+            pb.set_message(format!(
+                "Task {}/{}: {}",
+                index,
+                total,
+                truncate(&task.description, 40)
+            ));
         }
 
         if self.verbose {
-            println!("    {} Starting: {}", "→".blue(), task.description);
+            println!(
+                "    {} Starting ({}/{}): {}",
+                "→".blue(),
+                index,
+                total,
+                task.description
+            );
         }
     }
 
-    fn on_task_complete(&self, task: &Task, success: bool) {
+    fn on_task_complete(&self, task: &Task, success: bool, _index: usize, _total: usize) {
         if self.verbose {
             if success {
                 println!(
@@ -541,11 +552,11 @@ impl AgentProgressNotifier for SimpleAgentProgress {
         }
     }
 
-    fn on_task_start(&self, task: &Task) {
-        println!("  → {}", task.description);
+    fn on_task_start(&self, task: &Task, index: usize, total: usize) {
+        println!("  → Task {}/{}: {}", index, total, task.description);
     }
 
-    fn on_task_complete(&self, task: &Task, success: bool) {
+    fn on_task_complete(&self, task: &Task, success: bool, _index: usize, _total: usize) {
         if success {
             println!("  {} {}", "✓".green(), task.description);
         } else {

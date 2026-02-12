@@ -57,10 +57,16 @@ pub enum TuiEvent {
         phase: AgentPhase,
         name: String,
     },
-    TaskStart(String),
+    TaskStart {
+        description: String,
+        index: usize,
+        total: usize,
+    },
     TaskComplete {
         description: String,
         success: bool,
+        index: usize,
+        total: usize,
     },
     ToolCall {
         tool_name: String,
@@ -97,6 +103,7 @@ pub enum TuiEvent {
     // -- Ensemble --
     EnsembleStart(usize),
     EnsemblePlanGenerated(String),
+    EnsembleVotingStart(usize),
     EnsembleModelFailed {
         model: String,
         error: String,

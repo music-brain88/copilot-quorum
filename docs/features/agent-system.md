@@ -353,8 +353,8 @@ RunAgentUseCase (Application層)
 pub trait AgentProgressNotifier: Send + Sync {
     fn on_phase_change(&self, phase: &AgentPhase);
     fn on_thought(&self, thought: &Thought);
-    fn on_task_start(&self, task: &Task);
-    fn on_task_complete(&self, task: &Task, success: bool);
+    fn on_task_start(&self, task: &Task, index: usize, total: usize);
+    fn on_task_complete(&self, task: &Task, success: bool, index: usize, total: usize);
     fn on_tool_call(&self, tool_name: &str, args: &str);
     fn on_tool_result(&self, tool_name: &str, success: bool);
     fn on_quorum_start(&self, phase: &str, model_count: usize);
