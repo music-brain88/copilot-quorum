@@ -186,9 +186,11 @@ where
                 Ok((model, Ok(PlanningResult::TextResponse(text)))) => {
                     if text.trim().is_empty() {
                         warn!("Model {} returned empty text response, discarding", model);
+                        progress.on_ensemble_model_failed(&model, "empty response");
                         failed_count += 1;
                     } else {
                         info!("Model {} returned text response (no plan)", model);
+                        progress.on_ensemble_plan_generated(&model);
                         text_responses.push((model.to_string(), text));
                     }
                 }
@@ -231,6 +233,7 @@ where
                     Ok(s) => s,
                     Err(e) => {
                         warn!("Model {} retry: session creation failed: {}", model, e);
+                        progress.on_ensemble_model_failed(&model, &e.to_string());
                         failed_count += 1;
                         continue;
                     }
@@ -258,9 +261,11 @@ where
                                 "Model {} returned empty text response on retry, discarding",
                                 model
                             );
+                            progress.on_ensemble_model_failed(&model, "empty response");
                             failed_count += 1;
                         } else {
                             info!("Model {} returned text response on retry (no plan)", model);
+                            progress.on_ensemble_plan_generated(&model);
                             text_responses.push((model.to_string(), text));
                         }
                     }
