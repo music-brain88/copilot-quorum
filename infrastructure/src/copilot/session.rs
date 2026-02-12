@@ -35,8 +35,8 @@ use crate::copilot::transport::StreamingOutcome;
 use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession, ToolResultMessage};
 use quorum_domain::Model;
-use quorum_domain::util::truncate_str;
 use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
+use quorum_domain::util::truncate_str;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -106,12 +106,10 @@ impl CopilotSession {
     ) -> Result<Self> {
         info!("Creating session with model: {}", model);
 
-        let system_message = system_prompt
-            .as_ref()
-            .map(|content| SystemMessageConfig {
-                mode: "append".to_string(),
-                content: content.clone(),
-            });
+        let system_message = system_prompt.as_ref().map(|content| SystemMessageConfig {
+            mode: "append".to_string(),
+            content: content.clone(),
+        });
 
         let params = CreateSessionParams {
             model: Some(model.to_string()),
@@ -277,12 +275,13 @@ impl CopilotSession {
         }
 
         // Create a new session with tools
-        let system_message = self.system_prompt.as_ref().map(|content| {
-            SystemMessageConfig {
+        let system_message = self
+            .system_prompt
+            .as_ref()
+            .map(|content| SystemMessageConfig {
                 mode: "append".to_string(),
                 content: content.clone(),
-            }
-        });
+            });
 
         let params = CreateSessionParams {
             model: Some(self.model.to_string()),
