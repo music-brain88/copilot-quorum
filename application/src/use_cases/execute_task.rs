@@ -265,6 +265,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             // Collect any text from this turn
             let text = response.text_content();
             if !text.is_empty() {
+                debug!(
+                    "Task {}: LLM text response (first 300 chars): {}",
+                    task.id,
+                    &text[..text.len().min(300)]
+                );
                 all_outputs.push(text);
             }
 

@@ -283,6 +283,10 @@ impl CopilotSession {
         debug!("Tool session created: {}", tool_session_id);
 
         // Send the prompt
+        debug!(
+            "Tool session prompt (first 500 chars): {}",
+            &content[..content.len().min(500)]
+        );
         let send_params = SendParams {
             session_id: tool_session_id.clone(),
             prompt: content.to_string(),
