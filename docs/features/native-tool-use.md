@@ -227,6 +227,7 @@ pub struct ToolCall {
 impl ToolDefinition {
     pub fn to_json_schema(&self) -> serde_json::Value;
     // → {"name", "description", "input_schema": {"type": "object", ...}}
+    // Note: CopilotToolDefinition maps "input_schema" → "parameters" for the Copilot CLI wire format
 }
 
 impl ToolSpec {

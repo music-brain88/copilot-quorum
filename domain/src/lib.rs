@@ -26,6 +26,7 @@ pub mod prompt;
 pub mod quorum;
 pub mod session;
 pub mod tool;
+pub mod util;
 
 // Re-export commonly used types
 pub use agent::{

@@ -724,7 +724,12 @@ impl MessageRouter {
     ) -> Result<(String, SessionChannel)> {
         let _guard = self.create_lock.lock().await;
 
-        let request = JsonRpcRequest::new("session.create", Some(serde_json::to_value(&params)?));
+        let params_value = serde_json::to_value(&params)?;
+        debug!(
+            "session.create params: {}",
+            serde_json::to_string(&params_value).unwrap_or_default()
+        );
+        let request = JsonRpcRequest::new("session.create", Some(params_value));
 
         self.send_request(&request).await?;
 
