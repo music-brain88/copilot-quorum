@@ -340,7 +340,9 @@ mod tests {
         let bridge = TuiProgressBridge::new(tx);
 
         let mut task = Task::new("t1", "Analyze code");
-        task.mark_completed(TaskResult::success("The code looks clean and well-structured."));
+        task.mark_completed(TaskResult::success(
+            "The code looks clean and well-structured.",
+        ));
         bridge.on_task_complete(&task, true, 1, 1);
 
         let event = rx.try_recv().unwrap();
