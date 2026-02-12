@@ -1,36 +1,150 @@
+# =============================================================================
 # Copilot Quorum Configuration Example
+# =============================================================================
+#
 # Copy this file to one of the following locations:
-#   - ./quorum.toml (project-level)
+#   - ./quorum.toml        (project-level, highest priority)
+#   - ./.quorum.toml       (project-level, hidden)
 #   - ~/.config/copilot-quorum/config.toml (global)
 #
-# CLI arguments always take precedence over config file values.
+# Priority: CLI arguments > project-level > global > defaults
+#
+# All sections and fields are optional. Only uncomment what you need.
+# =============================================================================
 
-# Council settings - which models participate in discussions
-[council]
-# Models to include in the council (default: gpt-5.2-codex, claude-sonnet-4.5, gemini-3-pro-preview)
+# =============================================================================
+# Quorum Settings (Recommended)
+# =============================================================================
+# Multi-model consensus configuration.
+# This is the primary way to configure model participation and voting rules.
+
+[quorum]
+# Consensus rule for approval voting (default: "majority")
+#   "majority"   - More than half must approve
+#   "unanimous"  - All models must approve
+#   "atleast:N"  - At least N models must approve (e.g. "atleast:2")
+#   "75%"        - Percentage-based threshold
+rule = "majority"
+
+# Minimum number of models required for valid consensus (default: 2)
+min_models = 2
+
+[quorum.discussion]
+# Models for Quorum Discussion (multi-model dialogue)
+# If not set, falls back to [council].models
 models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
 
-# Model to use as moderator for final synthesis (optional)
-# If not specified, the first model in the list is used
+# Moderator model for synthesis (optional)
+# If not set, falls back to [council].moderator
 moderator = "claude-opus-4.5"
 
-# Behavior settings - how the council operates
+# Enable peer review phase in discussion (default: true)
+enable_peer_review = true
+
+# =============================================================================
+# Council Settings (Legacy)
+# =============================================================================
+# Original model selection config. Still supported but prefer [quorum.discussion].
+# If both are set, [quorum.discussion] takes precedence.
+
+[council]
+models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+moderator = "claude-opus-4.5"
+
+# =============================================================================
+# Agent Settings
+# =============================================================================
+# Controls autonomous agent behavior, model selection, and orchestration.
+
+[agent]
+# --- Role-based Model Selection ---
+# Each phase uses the optimal model for its task.
+# All optional; AgentConfig defaults apply if not set.
+
+# Context gathering + low-risk tool execution (default: claude-haiku-4.5)
+# Use a cheap, fast model for exploration
+exploration_model = "claude-haiku-4.5"
+
+# Planning + high-risk tool decisions (default: claude-sonnet-4.5)
+# Use a high-quality model for critical decisions
+decision_model = "claude-sonnet-4.5"
+
+# Models for plan/action review (default: [claude-sonnet-4.5, gpt-5.2-codex])
+# Multiple models provide diverse perspectives in Quorum voting
+review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
+
+# --- Consensus & Orchestration ---
+# These axes control how the agent operates.
+# See: docs/features/ensemble-mode.md
+
+# Consensus level: "solo" or "ensemble" (default: "solo")
+#   solo     - Single model execution, fast
+#   ensemble - Multi-model Quorum Discussion for complex tasks
+consensus_level = "solo"
+
+# Phase scope: "full", "fast", or "plan-only" (default: "full")
+#   full      - Context → Plan → Review → Execute → (Final Review)
+#   fast      - Context → Plan → Execute (skip reviews)
+#   plan-only - Context → Plan → Review only (no execution)
+phase_scope = "full"
+
+# Orchestration strategy: "quorum" or "debate" (default: "quorum")
+#   quorum - Standard Quorum voting for approval
+#   debate - Adversarial debate between models (experimental)
+strategy = "quorum"
+
+# Interaction type: "ask" or "discuss" (default: "ask")
+#   ask     - Direct Q&A, single question/answer
+#   discuss - Multi-turn discussion with deeper exploration
+# NOTE: Currently UI label only. Will become buffer-creating action in Layer 3.
+interaction_type = "ask"
+
+# Context mode: "shared" or "fresh" (default: "shared")
+#   shared - Reuse conversation context across interactions
+#   fresh  - Start with clean context each time
+# NOTE: Currently defined but not wired to execution. Planned for Layer 3.
+context_mode = "shared"
+
+# --- Behavior ---
+
+# Maximum plan revisions before human intervention (default: 3)
+max_plan_revisions = 3
+
+# Human-in-the-loop mode (default: "interactive")
+#   interactive  - Prompt user for decision when limits exceeded
+#   auto_reject  - Automatically abort if revision limit exceeded
+#   auto_approve - Automatically approve last plan (use with caution!)
+hil_mode = "interactive"
+
+# =============================================================================
+# Behavior Settings
+# =============================================================================
+
 [behavior]
 # Enable peer review phase where models critique each other (default: true)
 enable_review = true
 
-# Timeout in seconds for API calls (optional)
+# Timeout in seconds for API calls (default: none, uses provider default)
 # timeout_seconds = 120
 
-# Output settings - how results are displayed
+# =============================================================================
+# Output Settings
+# =============================================================================
+
 [output]
-# Default output format: "full", "synthesis", or "json" (default: synthesis)
+# Default output format (default: "synthesis")
+#   "full"      - Show all individual model responses
+#   "synthesis" - Show synthesized summary only
+#   "json"      - Machine-readable JSON output
 format = "synthesis"
 
 # Enable colored terminal output (default: true)
 color = true
 
-# REPL settings - interactive chat mode configuration
+# =============================================================================
+# REPL Settings
+# =============================================================================
+
 [repl]
 # Show progress indicators during processing (default: true)
 show_progress = true
@@ -39,18 +153,124 @@ show_progress = true
 # Default: ~/.local/share/copilot-quorum/history.txt
 # history_file = "~/.local/share/copilot-quorum/history.txt"
 
-# Agent settings - autonomous agent behavior
-[agent]
-# Maximum plan revisions before human intervention (default: 3)
-max_plan_revisions = 3
+# =============================================================================
+# TUI Settings (Modal Terminal Interface)
+# =============================================================================
+# Controls the Neovim-like modal TUI.
+# See: docs/features/tui.md, Discussion #58
 
-# Human-in-the-loop mode: "interactive", "auto_reject", or "auto_approve" (default: interactive)
-# - interactive: Prompt user for decision when limit is exceeded
-# - auto_reject: Automatically abort if revision limit exceeded
-# - auto_approve: Automatically approve last plan (use with caution!)
-hil_mode = "interactive"
+[tui.input]
+# Key to submit input in INSERT mode (default: "enter")
+# NOTE: Currently not wired. Key handling is hardcoded in TUI layer.
+submit_key = "enter"
 
-# Integration settings - external service connections
+# Key to insert a newline in multiline mode (default: "shift+enter")
+# NOTE: Currently not wired.
+newline_key = "shift+enter"
+
+# Key to launch $EDITOR from NORMAL mode (default: "I")
+# NOTE: Currently not wired. Hardcoded to "I" in TUI keybindings.
+editor_key = "I"
+
+# Action after $EDITOR saves (default: "return_to_insert")
+#   "return_to_insert" - Return to INSERT mode with editor content
+#   "submit"           - Immediately submit the editor content
+# NOTE: Currently not wired.
+editor_action = "return_to_insert"
+
+# Maximum height for the input area in lines (default: 10)
+max_height = 10
+
+# Whether input area grows dynamically with content (default: true)
+# NOTE: Currently not wired.
+dynamic_height = true
+
+# Whether to show context header in $EDITOR temp file (default: true)
+context_header = true
+
+# =============================================================================
+# Tools Settings
+# =============================================================================
+# Configure tool providers, enhanced CLI tools, custom tools, and MCP servers.
+# See: docs/features/tool-system.md
+
+[tools]
+# Which providers to enable, in priority order (default: ["cli", "builtin"])
+# Available: "builtin", "cli", "mcp", "script"
+# NOTE: Currently not used for provider selection logic.
+providers = ["cli", "builtin"]
+
+# Whether to suggest enhanced tools (rg, fd, bat) when detected (default: true)
+# NOTE: Currently not wired.
+suggest_enhanced_tools = true
+
+[tools.builtin]
+# Whether builtin tools are enabled (default: true)
+# Builtin: read_file, write_file, glob_search, grep_search, run_command
+enabled = true
+
+[tools.cli]
+# Whether CLI tools are enabled (default: true)
+enabled = true
+
+# Tool aliases - map tool names to CLI commands
+# Override these to use enhanced alternatives
+[tools.cli.aliases]
+grep_search = "grep"    # or "rg" for ripgrep
+glob_search = "find"    # or "fd" for fd-find
+read_file = "cat"       # or "bat" for syntax highlighting
+
+# Enhanced tool suggestions - shown when enhanced tools are available
+# [tools.cli.enhanced.grep_search]
+# command = "rg"
+# description = "10x faster than grep"
+#
+# [tools.cli.enhanced.glob_search]
+# command = "fd"
+# description = "5x faster than find"
+#
+# [tools.cli.enhanced.read_file]
+# command = "bat"
+# args = ["--plain", "--paging=never"]
+# description = "syntax highlighting"
+
+[tools.mcp]
+# MCP (Model Context Protocol) servers - connect external tool servers
+# Disabled by default as it requires explicit server setup.
+enabled = false
+
+# Example MCP server:
+# [[tools.mcp.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@anthropic/mcp-server-filesystem"]
+# env = { ALLOWED_DIRS = "/home/user/projects" }
+
+# --- Custom Tools ---
+# Define your own CLI commands as first-class tools.
+# Parameter values are shell-escaped for security.
+# See: docs/features/tool-system.md
+
+# Example: GitHub issue creation
+# [tools.custom.gh_create_issue]
+# description = "Create a GitHub issue in the current repository"
+# command = "gh issue create --title {title} --body {body}"
+# risk_level = "high"    # "low" (auto-execute) or "high" (requires quorum review)
+#
+# [tools.custom.gh_create_issue.parameters.title]
+# type = "string"
+# description = "Issue title"
+# required = true
+#
+# [tools.custom.gh_create_issue.parameters.body]
+# type = "string"
+# description = "Issue body in markdown"
+# required = true
+
+# =============================================================================
+# Integration Settings
+# =============================================================================
+
 [integrations.github]
 # Enable GitHub Discussions integration for escalations (default: false)
 enabled = false
