@@ -35,6 +35,7 @@ use crate::copilot::transport::StreamingOutcome;
 use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession, ToolResultMessage};
 use quorum_domain::Model;
+use quorum_domain::util::truncate_str;
 use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -300,8 +301,8 @@ impl CopilotSession {
 
         // Send the prompt
         debug!(
-            "Tool session prompt (first 500 chars): {}",
-            &content[..content.len().min(500)]
+            "Tool session prompt (first ~500 chars): {}",
+            truncate_str(content, 500)
         );
         let send_params = SendParams {
             session_id: tool_session_id.clone(),

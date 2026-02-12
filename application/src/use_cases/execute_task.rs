@@ -9,6 +9,7 @@ use crate::ports::llm_gateway::{LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
+use quorum_domain::util::truncate_str;
 use quorum_domain::{AgentConfig, AgentPromptTemplate, AgentState, Model, Task, TaskId};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -266,9 +267,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             let text = response.text_content();
             if !text.is_empty() {
                 debug!(
-                    "Task {}: LLM text response (first 300 chars): {}",
+                    "Task {}: LLM text response (first ~300 chars): {}",
                     task.id,
-                    &text[..text.len().min(300)]
+                    truncate_str(&text, 300)
                 );
                 all_outputs.push(text);
             }
