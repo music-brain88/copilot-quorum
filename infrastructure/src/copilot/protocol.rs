@@ -119,15 +119,33 @@ impl Message {
 /// When `tools` is `Some`, the CLI-side LLM is allowed to issue `tool.call`
 /// requests (**Native Tool Use**). This is used by
 /// [`CopilotSession::create_tool_session_and_send`](super::session::CopilotSession).
+///
+/// The official Copilot SDK uses `systemMessage` (object with `mode` + `content`)
+/// rather than `systemPrompt` (plain string). Both are sent for maximum
+/// compatibility — the CLI should recognise at least one.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Legacy field — kept for backwards compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Official SDK format: `{"mode": "append"|"replace", "content": "..."}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<SystemMessageConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<CopilotToolDefinition>>,
+}
+
+/// System message configuration matching the official Copilot SDK format.
+///
+/// - `"append"`: adds to the CLI's default system prompt
+/// - `"replace"`: completely replaces the default system prompt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMessageConfig {
+    pub mode: String,
+    pub content: String,
 }
 
 /// Tool definition for the Copilot CLI session (**Native Tool Use**).
@@ -306,6 +324,7 @@ mod tests {
         let params = CreateSessionParams {
             model: Some("gpt-4".to_string()),
             system_prompt: None,
+            system_message: None,
             tools: Some(vec![CopilotToolDefinition {
                 name: "read_file".to_string(),
                 description: "Read a file".to_string(),
@@ -322,6 +341,7 @@ mod tests {
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["model"], "gpt-4");
         assert!(json.get("systemPrompt").is_none());
+        assert!(json.get("systemMessage").is_none());
         // tools must use "parameters" to match official Copilot SDK wire format
         let tools = json["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
@@ -336,11 +356,31 @@ mod tests {
         let params = CreateSessionParams {
             model: Some("gpt-4".to_string()),
             system_prompt: None,
+            system_message: None,
             tools: None,
         };
 
         let json = serde_json::to_value(&params).unwrap();
         assert!(json.get("tools").is_none());
+    }
+
+    #[test]
+    fn create_session_params_system_message_format() {
+        let params = CreateSessionParams {
+            model: Some("claude-sonnet-4.5".to_string()),
+            system_prompt: Some("test prompt".to_string()),
+            system_message: Some(SystemMessageConfig {
+                mode: "append".to_string(),
+                content: "test prompt".to_string(),
+            }),
+            tools: None,
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        // Both formats should be present
+        assert_eq!(json["systemPrompt"], "test prompt");
+        assert_eq!(json["systemMessage"]["mode"], "append");
+        assert_eq!(json["systemMessage"]["content"], "test prompt");
     }
 
     #[test]

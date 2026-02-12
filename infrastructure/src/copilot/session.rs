@@ -28,7 +28,7 @@
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
     CopilotToolDefinition, CreateSessionParams, JsonRpcRequest, JsonRpcResponseOut, SendParams,
-    ToolCallResult,
+    SystemMessageConfig, ToolCallResult,
 };
 use crate::copilot::router::{MessageRouter, SessionChannel};
 use crate::copilot::transport::StreamingOutcome;
@@ -105,9 +105,17 @@ impl CopilotSession {
     ) -> Result<Self> {
         info!("Creating session with model: {}", model);
 
+        let system_message = system_prompt
+            .as_ref()
+            .map(|content| SystemMessageConfig {
+                mode: "append".to_string(),
+                content: content.clone(),
+            });
+
         let params = CreateSessionParams {
             model: Some(model.to_string()),
             system_prompt: system_prompt.clone(),
+            system_message,
             tools: None,
         };
 
@@ -268,9 +276,17 @@ impl CopilotSession {
         }
 
         // Create a new session with tools
+        let system_message = self.system_prompt.as_ref().map(|content| {
+            SystemMessageConfig {
+                mode: "append".to_string(),
+                content: content.clone(),
+            }
+        });
+
         let params = CreateSessionParams {
             model: Some(self.model.to_string()),
             system_prompt: self.system_prompt.clone(),
+            system_message,
             tools: Some(copilot_tools),
         };
 
