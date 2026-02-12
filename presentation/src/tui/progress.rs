@@ -49,14 +49,20 @@ impl AgentProgressNotifier for TuiProgressBridge {
         // Thoughts are displayed via streaming for now
     }
 
-    fn on_task_start(&self, task: &Task) {
-        self.emit(TuiEvent::TaskStart(task.description.clone()));
+    fn on_task_start(&self, task: &Task, index: usize, total: usize) {
+        self.emit(TuiEvent::TaskStart {
+            description: task.description.clone(),
+            index,
+            total,
+        });
     }
 
-    fn on_task_complete(&self, task: &Task, success: bool) {
+    fn on_task_complete(&self, task: &Task, success: bool, index: usize, total: usize) {
         self.emit(TuiEvent::TaskComplete {
             description: task.description.clone(),
             success,
+            index,
+            total,
         });
     }
 
@@ -196,10 +202,7 @@ impl AgentProgressNotifier for TuiProgressBridge {
     }
 
     fn on_ensemble_voting_start(&self, plan_count: usize) {
-        self.emit(TuiEvent::Flash(format!(
-            "Voting on {} plans...",
-            plan_count
-        )));
+        self.emit(TuiEvent::EnsembleVotingStart(plan_count));
     }
 
     fn on_ensemble_model_failed(&self, model: &Model, error: &str) {
@@ -295,13 +298,31 @@ mod tests {
         let bridge = TuiProgressBridge::new(tx);
 
         let task = Task::new("t1", "Fix bug");
-        bridge.on_task_start(&task);
-        bridge.on_task_complete(&task, true);
+        bridge.on_task_start(&task, 1, 3);
+        bridge.on_task_complete(&task, true, 1, 3);
 
-        assert!(matches!(rx.try_recv().unwrap(), TuiEvent::TaskStart(_)));
+        let event = rx.try_recv().unwrap();
+        if let TuiEvent::TaskStart {
+            description,
+            index,
+            total,
+        } = event
+        {
+            assert_eq!(description, "Fix bug");
+            assert_eq!(index, 1);
+            assert_eq!(total, 3);
+        } else {
+            panic!("Expected TaskStart event");
+        }
+
         assert!(matches!(
             rx.try_recv().unwrap(),
-            TuiEvent::TaskComplete { .. }
+            TuiEvent::TaskComplete {
+                index: 1,
+                total: 3,
+                success: true,
+                ..
+            }
         ));
     }
 }

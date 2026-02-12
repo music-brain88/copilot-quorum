@@ -64,7 +64,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             }
 
             // Get next task and determine appropriate model
-            let (task_id, selected_model) = {
+            let (task_id, selected_model, task_index, task_total) = {
                 let plan = state.plan.as_ref().ok_or_else(|| {
                     RunAgentError::TaskExecutionFailed("No plan available".to_string())
                 })?;
@@ -72,7 +72,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 match plan.next_task() {
                     Some(task) => {
                         let model = self.select_model_for_task(task, &input.config);
-                        (task.id.clone(), model.clone())
+                        let index =
+                            plan.tasks.iter().position(|t| t.id == task.id).unwrap_or(0) + 1;
+                        let total = plan.tasks.len();
+                        (task.id.clone(), model.clone(), index, total)
                     }
                     None => break, // All tasks complete
                 }
@@ -98,7 +101,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     continue;
                 }
                 task.mark_in_progress();
-                progress.on_task_start(task);
+                progress.on_task_start(task, task_index, task_total);
             }
 
             // Execute the task with action retry support
@@ -169,7 +172,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 } else {
                     task.mark_failed(quorum_domain::TaskResult::failure(&output));
                 }
-                progress.on_task_complete(task, success);
+                progress.on_task_complete(task, success, task_index, task_total);
             }
 
             results.push(format!(

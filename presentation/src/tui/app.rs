@@ -17,7 +17,8 @@ use super::mode::{self, InputMode, KeyAction};
 use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
 use super::state::{
-    DisplayMessage, HilPrompt, QuorumStatus, ToolLogEntry, TuiInputConfig, TuiState,
+    DisplayMessage, EnsembleProgress, HilPrompt, QuorumStatus, TaskProgress, TaskSummary,
+    ToolLogEntry, TuiInputConfig, TuiState,
 };
 use super::widgets::{
     MainLayout, conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
@@ -612,15 +613,49 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 state.progress.phase_name = name;
                 state.progress.current_tool = None;
             }
-            TuiEvent::TaskStart(desc) => {
-                state.set_flash(format!("Task: {}", desc));
+            TuiEvent::TaskStart {
+                description,
+                index,
+                total,
+            } => {
+                // Update progress pane
+                state.progress.task_progress = Some(TaskProgress {
+                    current_index: index,
+                    total,
+                    description: description.clone(),
+                    completed_tasks: state
+                        .progress
+                        .task_progress
+                        .as_ref()
+                        .map(|tp| tp.completed_tasks.clone())
+                        .unwrap_or_default(),
+                });
+                // Add conversation message
+                state.push_message(DisplayMessage::system(format!(
+                    "Executing Task {}/{}: {}",
+                    index, total, description
+                )));
             }
             TuiEvent::TaskComplete {
                 description,
                 success,
+                index,
+                total: _,
             } => {
+                // Update progress pane
+                if let Some(ref mut tp) = state.progress.task_progress {
+                    tp.completed_tasks.push(TaskSummary {
+                        index,
+                        description: description.clone(),
+                        success,
+                    });
+                }
+                // Add conversation message
                 let status = if success { "✓" } else { "✗" };
-                state.set_flash(format!("{} {}", status, description));
+                state.push_message(DisplayMessage::system(format!(
+                    "Task {} {} {}",
+                    index, status, description
+                )));
             }
             TuiEvent::ToolCall { tool_name, args: _ } => {
                 state.progress.current_tool = Some(tool_name.clone());
@@ -687,30 +722,58 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 )));
             }
             TuiEvent::EnsembleStart(count) => {
-                state.set_flash(format!("Ensemble: {} models planning...", count));
+                state.progress.ensemble_progress = Some(EnsembleProgress {
+                    total_models: count,
+                    plans_generated: 0,
+                    models_completed: Vec::new(),
+                    models_failed: Vec::new(),
+                    voting_started: false,
+                    plan_count: None,
+                    selected: None,
+                });
             }
             TuiEvent::EnsemblePlanGenerated(model) => {
-                state.set_flash(format!("Plan generated: {}", model));
+                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                    ep.plans_generated += 1;
+                    ep.models_completed.push(model);
+                }
+            }
+            TuiEvent::EnsembleVotingStart(plan_count) => {
+                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                    ep.voting_started = true;
+                    ep.plan_count = Some(plan_count);
+                }
             }
             TuiEvent::EnsembleModelFailed { model, error } => {
-                state.set_flash(format!("{} failed: {}", model, error));
+                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                    ep.models_failed.push((model, error));
+                }
             }
             TuiEvent::EnsembleComplete {
                 selected_model,
                 score,
             } => {
-                state.set_flash(format!(
-                    "Selected: {} (score: {:.1})",
+                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                    ep.selected = Some((selected_model.clone(), score));
+                }
+                state.push_message(DisplayMessage::system(format!(
+                    "Selected plan from {} (score: {:.1}/10)",
                     selected_model, score
-                ));
+                )));
             }
             TuiEvent::EnsembleFallback(reason) => {
-                state.set_flash(format!("Ensemble failed, solo fallback: {}", reason));
+                state.push_message(DisplayMessage::system(format!(
+                    "Ensemble failed, solo fallback: {}",
+                    reason
+                )));
+                state.progress.ensemble_progress = None;
             }
             TuiEvent::AgentStarting => {
                 state.progress.is_running = true;
                 state.progress.tool_log.clear();
                 state.progress.quorum_status = None;
+                state.progress.task_progress = None;
+                state.progress.ensemble_progress = None;
             }
             TuiEvent::AgentResult {
                 success,
@@ -719,6 +782,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 state.progress.is_running = false;
                 state.progress.current_phase = None;
                 state.progress.current_tool = None;
+                // task_progress / ensemble_progress は保持 — 次の AgentStarting でクリア
                 if success {
                     state.set_flash("Agent completed successfully");
                 } else {
