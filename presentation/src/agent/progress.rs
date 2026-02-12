@@ -571,12 +571,11 @@ impl AgentProgressNotifier for SimpleAgentProgress {
         } else {
             println!("  {} {}", "✗".red(), task.description);
         }
-        if self.verbose {
-            if let Some(ref result) = task.result
-                && !result.output.is_empty()
-            {
-                println!("    Output: {}", truncate(&result.output, 200));
-            }
+        if self.verbose
+            && let Some(ref result) = task.result
+            && !result.output.is_empty()
+        {
+            println!("    Output: {}", truncate(&result.output, 200));
         }
     }
 
