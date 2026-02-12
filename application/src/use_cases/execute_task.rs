@@ -9,6 +9,7 @@ use crate::ports::llm_gateway::{LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
+use quorum_domain::util::truncate_str;
 use quorum_domain::{AgentConfig, AgentPromptTemplate, AgentState, Model, Task, TaskId};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -265,6 +266,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             // Collect any text from this turn
             let text = response.text_content();
             if !text.is_empty() {
+                debug!(
+                    "Task {}: LLM text response (first ~300 chars): {}",
+                    task.id,
+                    truncate_str(&text, 300)
+                );
                 all_outputs.push(text);
             }
 
@@ -272,7 +278,39 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             let tool_calls = response.tool_calls();
 
             if tool_calls.is_empty() {
-                // No tool calls — model is done
+                // Tool specified but LLM responded with text only → retry once with nudge
+                if task.tool_name.is_some() && turn_count == 0 {
+                    warn!(
+                        "Task {}: expected tool '{}' but got text-only response, retrying with nudge",
+                        task.id,
+                        task.tool_name.as_deref().unwrap_or("?")
+                    );
+                    turn_count += 1;
+
+                    let nudge = format!(
+                        "You responded with text only, but this task REQUIRES calling `{}`. \
+                         Call the tool NOW. Do not respond with text.",
+                        task.tool_name.as_deref().unwrap_or("?")
+                    );
+                    response = match send_with_tools_cancellable(
+                        session,
+                        &nudge,
+                        &tools,
+                        progress,
+                        &self.cancellation_token,
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(_) => break, // nudge failed — keep original text
+                    };
+                    continue;
+                }
+
+                debug!(
+                    "Task {}: no tool calls in response, ending execution loop",
+                    task.id
+                );
                 break;
             }
 

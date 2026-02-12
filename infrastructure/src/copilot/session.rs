@@ -28,7 +28,7 @@
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
     CopilotToolDefinition, CreateSessionParams, JsonRpcRequest, JsonRpcResponseOut, SendParams,
-    ToolCallResult,
+    SystemMessageConfig, ToolCallResult,
 };
 use crate::copilot::router::{MessageRouter, SessionChannel};
 use crate::copilot::transport::StreamingOutcome;
@@ -36,6 +36,7 @@ use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession, ToolResultMessage};
 use quorum_domain::Model;
 use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
+use quorum_domain::util::truncate_str;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -105,9 +106,15 @@ impl CopilotSession {
     ) -> Result<Self> {
         info!("Creating session with model: {}", model);
 
+        let system_message = system_prompt.as_ref().map(|content| SystemMessageConfig {
+            mode: "append".to_string(),
+            content: content.clone(),
+        });
+
         let params = CreateSessionParams {
             model: Some(model.to_string()),
             system_prompt: system_prompt.clone(),
+            system_message,
             tools: None,
         };
 
@@ -247,6 +254,17 @@ impl CopilotSession {
             .filter_map(CopilotToolDefinition::from_api_tool)
             .collect();
 
+        debug!(
+            "Tool conversion: {}/{} tools converted ({})",
+            copilot_tools.len(),
+            tools.len(),
+            copilot_tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
         if copilot_tools.is_empty() {
             warn!("No valid tools converted, falling back to text-only session");
             let text = self
@@ -257,9 +275,18 @@ impl CopilotSession {
         }
 
         // Create a new session with tools
+        let system_message = self
+            .system_prompt
+            .as_ref()
+            .map(|content| SystemMessageConfig {
+                mode: "append".to_string(),
+                content: content.clone(),
+            });
+
         let params = CreateSessionParams {
             model: Some(self.model.to_string()),
             system_prompt: self.system_prompt.clone(),
+            system_message,
             tools: Some(copilot_tools),
         };
 
@@ -272,6 +299,10 @@ impl CopilotSession {
         debug!("Tool session created: {}", tool_session_id);
 
         // Send the prompt
+        debug!(
+            "Tool session prompt (first ~500 chars): {}",
+            truncate_str(content, 500)
+        );
         let send_params = SendParams {
             session_id: tool_session_id.clone(),
             prompt: content.to_string(),

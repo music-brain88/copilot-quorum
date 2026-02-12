@@ -119,40 +119,63 @@ impl Message {
 /// When `tools` is `Some`, the CLI-side LLM is allowed to issue `tool.call`
 /// requests (**Native Tool Use**). This is used by
 /// [`CopilotSession::create_tool_session_and_send`](super::session::CopilotSession).
+///
+/// The official Copilot SDK uses `systemMessage` (object with `mode` + `content`)
+/// rather than `systemPrompt` (plain string). Both are sent for maximum
+/// compatibility — the CLI should recognise at least one.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Legacy field — kept for backwards compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Official SDK format: `{"mode": "append"|"replace", "content": "..."}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<SystemMessageConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<CopilotToolDefinition>>,
+}
+
+/// System message configuration matching the official Copilot SDK format.
+///
+/// - `"append"`: adds to the CLI's default system prompt
+/// - `"replace"`: completely replaces the default system prompt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMessageConfig {
+    pub mode: String,
+    pub content: String,
 }
 
 /// Tool definition for the Copilot CLI session (**Native Tool Use**).
 ///
 /// Converted from the domain's [`ToolSpec::to_api_tools()`](quorum_domain::tool::ToolSpec::to_api_tools)
 /// JSON Schema format via [`from_api_tool`](Self::from_api_tool).
-/// Each definition tells the CLI-side LLM what tools are available and
-/// their input schema.
+///
+/// The official Copilot SDK uses `"parameters"` for the tool schema field,
+/// not `"inputSchema"` or `"input_schema"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotToolDefinition {
     pub name: String,
     pub description: String,
-    pub input_schema: serde_json::Value,
+    /// Tool parameter schema. Serialized as `"parameters"` to match the
+    /// official Copilot SDK wire format (Go: `Tool.Parameters`,
+    /// Node.js: `tool.parameters`).
+    pub parameters: serde_json::Value,
 }
 
 impl CopilotToolDefinition {
     /// Convert from the domain's `to_api_tools()` JSON format.
     ///
-    /// Expects `{"name": "...", "description": "...", "input_schema": {...}}`.
+    /// Reads `"input_schema"` from the domain-layer JSON and maps it to
+    /// `parameters` for the Copilot CLI wire format.
     pub fn from_api_tool(value: &serde_json::Value) -> Option<Self> {
         Some(Self {
             name: value.get("name")?.as_str()?.to_string(),
             description: value.get("description")?.as_str()?.to_string(),
-            input_schema: value.get("input_schema")?.clone(),
+            parameters: value.get("input_schema")?.clone(),
         })
     }
 }
@@ -301,10 +324,11 @@ mod tests {
         let params = CreateSessionParams {
             model: Some("gpt-4".to_string()),
             system_prompt: None,
+            system_message: None,
             tools: Some(vec![CopilotToolDefinition {
                 name: "read_file".to_string(),
                 description: "Read a file".to_string(),
-                input_schema: serde_json::json!({
+                parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "path": {"type": "string"}
@@ -317,11 +341,14 @@ mod tests {
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["model"], "gpt-4");
         assert!(json.get("systemPrompt").is_none());
-        // tools should be present with inputSchema (camelCase)
+        assert!(json.get("systemMessage").is_none());
+        // tools must use "parameters" to match official Copilot SDK wire format
         let tools = json["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "read_file");
-        assert!(tools[0]["inputSchema"]["properties"]["path"].is_object());
+        assert!(tools[0]["parameters"]["properties"]["path"].is_object());
+        // Must NOT use "inputSchema" — that field name is not recognized by the Copilot CLI
+        assert!(tools[0].get("inputSchema").is_none());
     }
 
     #[test]
@@ -329,11 +356,31 @@ mod tests {
         let params = CreateSessionParams {
             model: Some("gpt-4".to_string()),
             system_prompt: None,
+            system_message: None,
             tools: None,
         };
 
         let json = serde_json::to_value(&params).unwrap();
         assert!(json.get("tools").is_none());
+    }
+
+    #[test]
+    fn create_session_params_system_message_format() {
+        let params = CreateSessionParams {
+            model: Some("claude-sonnet-4.5".to_string()),
+            system_prompt: Some("test prompt".to_string()),
+            system_message: Some(SystemMessageConfig {
+                mode: "append".to_string(),
+                content: "test prompt".to_string(),
+            }),
+            tools: None,
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        // Both formats should be present
+        assert_eq!(json["systemPrompt"], "test prompt");
+        assert_eq!(json["systemMessage"]["mode"], "append");
+        assert_eq!(json["systemMessage"]["content"], "test prompt");
     }
 
     #[test]
@@ -353,7 +400,7 @@ mod tests {
         let tool = CopilotToolDefinition::from_api_tool(&api_tool).unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.description, "Read file contents");
-        assert_eq!(tool.input_schema["type"], "object");
+        assert_eq!(tool.parameters["type"], "object");
     }
 
     #[test]
