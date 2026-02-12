@@ -47,10 +47,21 @@ pub trait AgentProgressNotifier: Send + Sync {
     fn on_thought(&self, _thought: &Thought) {}
 
     /// Called when a task begins execution
-    fn on_task_start(&self, _task: &Task) {}
+    ///
+    /// # Arguments
+    /// * `task` - The task being started
+    /// * `index` - 1-based index of the current task
+    /// * `total` - Total number of tasks in the plan
+    fn on_task_start(&self, _task: &Task, _index: usize, _total: usize) {}
 
     /// Called when a task completes (success or failure)
-    fn on_task_complete(&self, _task: &Task, _success: bool) {}
+    ///
+    /// # Arguments
+    /// * `task` - The completed task
+    /// * `success` - Whether the task succeeded
+    /// * `index` - 1-based index of the completed task
+    /// * `total` - Total number of tasks in the plan
+    fn on_task_complete(&self, _task: &Task, _success: bool, _index: usize, _total: usize) {}
 
     /// Called when a tool is invoked
     fn on_tool_call(&self, _tool_name: &str, _args: &str) {}

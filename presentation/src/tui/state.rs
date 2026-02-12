@@ -316,6 +316,8 @@ pub struct ProgressState {
     pub current_tool: Option<String>,
     pub tool_log: Vec<ToolLogEntry>,
     pub quorum_status: Option<QuorumStatus>,
+    pub task_progress: Option<TaskProgress>,
+    pub ensemble_progress: Option<EnsembleProgress>,
     pub is_running: bool,
 }
 
@@ -331,6 +333,35 @@ pub struct QuorumStatus {
     pub total: usize,
     pub completed: usize,
     pub approved: usize,
+}
+
+/// Task execution progress (shown during Executing phase)
+#[derive(Debug, Clone)]
+pub struct TaskProgress {
+    pub current_index: usize,
+    pub total: usize,
+    pub description: String,
+    pub completed_tasks: Vec<TaskSummary>,
+}
+
+/// Summary of a completed task
+#[derive(Debug, Clone)]
+pub struct TaskSummary {
+    pub index: usize,
+    pub description: String,
+    pub success: bool,
+}
+
+/// Ensemble planning progress
+#[derive(Debug, Clone)]
+pub struct EnsembleProgress {
+    pub total_models: usize,
+    pub plans_generated: usize,
+    pub models_completed: Vec<String>,
+    pub models_failed: Vec<(String, String)>,
+    pub voting_started: bool,
+    pub plan_count: Option<usize>,
+    pub selected: Option<(String, f64)>,
 }
 
 /// TUI input configuration (presentation-layer view)
