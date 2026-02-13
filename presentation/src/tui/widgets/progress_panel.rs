@@ -1,6 +1,6 @@
-//! Progress panel widget — phase, tools, quorum status
+//! Progress panel widget — phase, tools, quorum status, tool execution lifecycle
 
-use crate::tui::state::TuiState;
+use crate::tui::state::{ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiState};
 use quorum_domain::AgentPhase;
 use ratatui::{
     buffer::Buffer,
@@ -113,7 +113,14 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
                 }),
             )));
 
-            // Show completed tasks (last 3)
+            // Show active task tool executions (current task in progress)
+            if !tp.active_tool_executions.is_empty() {
+                for exec in &tp.active_tool_executions {
+                    render_tool_execution_line(&mut lines, exec);
+                }
+            }
+
+            // Show completed tasks (last 3) with their tool executions
             for summary in tp
                 .completed_tasks
                 .iter()
@@ -128,6 +135,7 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
                 } else {
                     Span::styled("✗ ", Style::default().fg(Color::Red))
                 };
+                let duration_str = summary.duration_ms.map(format_duration).unwrap_or_default();
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     icon,
@@ -135,7 +143,20 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
                         format!("Task {}", summary.index),
                         Style::default().fg(Color::DarkGray),
                     ),
+                    Span::styled(duration_str, Style::default().fg(Color::DarkGray)),
                 ]));
+                // Show tool executions for completed tasks (last 3)
+                for exec in summary
+                    .tool_executions
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                {
+                    render_tool_execution_line(&mut lines, exec);
+                }
             }
             lines.push(Line::from(""));
         }
@@ -264,6 +285,42 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
             .style(Style::default().fg(Color::White));
 
         Paragraph::new(lines).block(block).render(area, buf);
+    }
+}
+
+/// Render a single tool execution line in the progress panel.
+fn render_tool_execution_line<'a>(lines: &mut Vec<Line<'a>>, exec: &ToolExecutionDisplay) {
+    let (icon, color, suffix) = match &exec.state {
+        ToolExecutionDisplayStatus::Pending => ("…", Color::DarkGray, String::new()),
+        ToolExecutionDisplayStatus::Running => ("▸", Color::Yellow, String::new()),
+        ToolExecutionDisplayStatus::Completed { .. } => {
+            let dur = exec.duration_ms.map(format_duration).unwrap_or_default();
+            ("✓", Color::Green, dur)
+        }
+        ToolExecutionDisplayStatus::Error { message } => {
+            let msg = if message.len() > 30 {
+                format!(" — {}...", &message[..27])
+            } else {
+                format!(" — {}", message)
+            };
+            ("✗", Color::Red, msg)
+        }
+    };
+
+    lines.push(Line::from(vec![
+        Span::raw("    "),
+        Span::styled(format!("{} ", icon), Style::default().fg(color)),
+        Span::styled(exec.tool_name.clone(), Style::default().fg(Color::DarkGray)),
+        Span::styled(suffix, Style::default().fg(Color::DarkGray)),
+    ]));
+}
+
+/// Format a duration in milliseconds to a human-readable string.
+fn format_duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!(" ({}ms)", ms)
+    } else {
+        format!(" ({:.1}s)", ms as f64 / 1000.0)
     }
 }
 
