@@ -298,11 +298,7 @@ fn render_tool_execution_line<'a>(lines: &mut Vec<Line<'a>>, exec: &ToolExecutio
             ("✓", Color::Green, dur)
         }
         ToolExecutionDisplayStatus::Error { message } => {
-            let msg = if message.len() > 30 {
-                format!(" — {}...", &message[..27])
-            } else {
-                format!(" — {}", message)
-            };
+            let msg = format!(" — {}", truncate_str(message, 27));
             ("✗", Color::Red, msg)
         }
     };
