@@ -18,7 +18,7 @@ use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
 use super::state::{
     DisplayMessage, EnsembleProgress, HilPrompt, QuorumStatus, TaskProgress, TaskSummary,
-    ToolLogEntry, TuiInputConfig, TuiState,
+    ToolExecutionDisplay, ToolExecutionDisplayStatus, ToolLogEntry, TuiInputConfig, TuiState,
 };
 use super::widgets::{
     MainLayout, conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
@@ -629,6 +629,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         .as_ref()
                         .map(|tp| tp.completed_tasks.clone())
                         .unwrap_or_default(),
+                    active_tool_executions: Vec::new(),
                 });
                 // Add conversation message
                 state.push_message(DisplayMessage::system(format!(
@@ -641,21 +642,88 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 success,
                 index,
                 total: _,
+                output,
             } => {
-                // Update progress pane
+                // Update progress pane — move active tool executions into the completed summary
+                let (active_execs, active_duration) =
+                    if let Some(ref mut tp) = state.progress.task_progress {
+                        (std::mem::take(&mut tp.active_tool_executions), None)
+                    } else {
+                        (Vec::new(), None)
+                    };
                 if let Some(ref mut tp) = state.progress.task_progress {
                     tp.completed_tasks.push(TaskSummary {
                         index,
                         description: description.clone(),
                         success,
+                        output: output.clone(),
+                        duration_ms: active_duration,
+                        tool_executions: active_execs,
                     });
                 }
-                // Add conversation message
+                // Build tool execution summary lines for conversation message
+                let tool_exec_lines: String = if let Some(ref tp) = state.progress.task_progress {
+                    tp.completed_tasks
+                        .last()
+                        .map(|summary| {
+                            summary
+                                .tool_executions
+                                .iter()
+                                .map(|exec| {
+                                    let (icon, dur) = match &exec.state {
+                                        ToolExecutionDisplayStatus::Completed { .. } => {
+                                            let d = exec
+                                                .duration_ms
+                                                .map(|ms| {
+                                                    if ms < 1000 {
+                                                        format!("{}ms", ms)
+                                                    } else {
+                                                        format!("{:.1}s", ms as f64 / 1000.0)
+                                                    }
+                                                })
+                                                .unwrap_or_default();
+                                            ("✓", d)
+                                        }
+                                        ToolExecutionDisplayStatus::Error { message } => {
+                                            let msg = if message.len() > 40 {
+                                                format!("{}...", &message[..37])
+                                            } else {
+                                                message.clone()
+                                            };
+                                            ("✗", msg)
+                                        }
+                                        _ => ("…", String::new()),
+                                    };
+                                    format!("  {} {} ({})", icon, exec.tool_name, dur)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
+                // Add conversation message with extracted output
                 let status = if success { "✓" } else { "✗" };
-                state.push_message(DisplayMessage::system(format!(
-                    "Task {} {} {}",
-                    index, status, description
-                )));
+                let mut msg = if let Some(ref out) = output {
+                    let extracted = extract_response_text(out);
+                    if extracted.is_empty() {
+                        format!("Task {} {} {}", index, status, description)
+                    } else {
+                        format!(
+                            "Task {} {} {}\n  Output: {}",
+                            index, status, description, extracted
+                        )
+                    }
+                } else {
+                    format!("Task {} {} {}", index, status, description)
+                };
+                if !tool_exec_lines.is_empty() {
+                    msg.push('\n');
+                    msg.push_str(&tool_exec_lines);
+                }
+                state.push_message(DisplayMessage::system(msg));
             }
             TuiEvent::ToolCall { tool_name, args: _ } => {
                 state.progress.current_tool = Some(tool_name.clone());
@@ -802,6 +870,46 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             TuiEvent::Exit => {
                 state.should_quit = true;
             }
+            TuiEvent::ToolExecutionUpdate {
+                task_index: _,
+                execution_id,
+                tool_name,
+                state: exec_state,
+                duration_ms,
+            } => {
+                use super::event::ToolExecutionDisplayState;
+
+                if let Some(ref mut tp) = state.progress.task_progress {
+                    // Convert event state to display status
+                    let display_status = match exec_state {
+                        ToolExecutionDisplayState::Pending => ToolExecutionDisplayStatus::Pending,
+                        ToolExecutionDisplayState::Running => ToolExecutionDisplayStatus::Running,
+                        ToolExecutionDisplayState::Completed { preview } => {
+                            ToolExecutionDisplayStatus::Completed { preview }
+                        }
+                        ToolExecutionDisplayState::Error { message } => {
+                            ToolExecutionDisplayStatus::Error { message }
+                        }
+                    };
+
+                    // Find existing entry or create new one
+                    if let Some(existing) = tp
+                        .active_tool_executions
+                        .iter_mut()
+                        .find(|e| e.execution_id == execution_id)
+                    {
+                        existing.state = display_status;
+                        existing.duration_ms = duration_ms;
+                    } else {
+                        tp.active_tool_executions.push(ToolExecutionDisplay {
+                            execution_id,
+                            tool_name,
+                            state: display_status,
+                            duration_ms,
+                        });
+                    }
+                }
+            }
             // Config/mode events handled by presenter already
             TuiEvent::Welcome { .. }
             | TuiEvent::ConfigDisplay(_)
@@ -926,5 +1034,88 @@ async fn controller_task<
                 break;
             }
         }
+    }
+}
+
+/// Extract the meaningful LLM analysis text from task output.
+///
+/// Task output contains interleaved tool results and LLM text separated by `\n---\n`.
+/// This function filters out tool result sections (lines starting with `[tool_name]:`)
+/// and returns the last LLM text block, which is typically the final analysis/summary.
+/// The result is truncated to 500 characters.
+fn extract_response_text(output: &str) -> String {
+    use quorum_domain::core::string::truncate;
+
+    let sections: Vec<&str> = output.split("\n---\n").collect();
+
+    // Find the last section that isn't a tool result
+    let llm_text = sections
+        .iter()
+        .rev()
+        .find(|section| {
+            let trimmed = section.trim();
+            !trimmed.is_empty()
+                && !trimmed
+                    .lines()
+                    .next()
+                    .is_some_and(|first| first.contains("]:") && first.starts_with('['))
+        })
+        .map(|s| s.trim())
+        .unwrap_or("");
+
+    if llm_text.is_empty() {
+        return String::new();
+    }
+
+    truncate(llm_text, 500)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_plain_text() {
+        let output = "The code is well-structured and follows best practices.";
+        assert_eq!(extract_response_text(output), output);
+    }
+
+    #[test]
+    fn test_extract_filters_tool_results() {
+        let output = "[read_file]: contents of foo.rs\n---\nThe code looks clean.";
+        assert_eq!(extract_response_text(output), "The code looks clean.");
+    }
+
+    #[test]
+    fn test_extract_returns_last_llm_block() {
+        let output =
+            "Initial analysis\n---\n[grep_search]: found 3 matches\n---\nFinal summary here.";
+        assert_eq!(extract_response_text(output), "Final summary here.");
+    }
+
+    #[test]
+    fn test_extract_empty_output() {
+        assert_eq!(extract_response_text(""), String::new());
+    }
+
+    #[test]
+    fn test_extract_only_tool_results() {
+        let output = "[read_file]: file contents\n---\n[grep_search]: matches";
+        assert_eq!(extract_response_text(output), String::new());
+    }
+
+    #[test]
+    fn test_extract_truncates_long_text() {
+        let long_text = "A".repeat(600);
+        let result = extract_response_text(&long_text);
+        assert!(result.len() <= 503); // 500 + "..."
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_ignores_brackets_mid_line() {
+        // Text that has brackets but not at start of line
+        let output = "The function returns [Ok] or [Err]: both are valid.";
+        assert_eq!(extract_response_text(output), output);
     }
 }

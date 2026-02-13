@@ -18,6 +18,7 @@
 //! - `AutoReject` - Automatically abort the agent
 //! - `AutoApprove` - Automatically approve (use with caution!)
 
+use super::tool_execution::ToolExecution;
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
 use crate::core::model::Model;
 use crate::orchestration::interaction::{ContextMode, InteractionType};
@@ -261,6 +262,15 @@ pub struct Task {
     pub requires_review: bool,
     /// Tasks that must complete before this one (task IDs)
     pub depends_on: Vec<TaskId>,
+    /// Timestamp (ms since epoch) when this task started executing
+    #[serde(default)]
+    pub started_at: Option<u64>,
+    /// Timestamp (ms since epoch) when this task finished executing
+    #[serde(default)]
+    pub completed_at: Option<u64>,
+    /// Tool executions performed during this task (Native Tool Use loop)
+    #[serde(default)]
+    pub tool_executions: Vec<ToolExecution>,
 }
 
 impl Task {
@@ -274,6 +284,9 @@ impl Task {
             result: None,
             requires_review: false,
             depends_on: Vec::new(),
+            started_at: None,
+            completed_at: None,
+            tool_executions: Vec::new(),
         }
     }
 
@@ -297,30 +310,60 @@ impl Task {
         self
     }
 
-    pub fn is_ready(&self, completed_tasks: &[TaskId]) -> bool {
+    pub fn is_ready(&self, resolved_tasks: &[TaskId]) -> bool {
         self.status == TaskStatus::Pending
             && self
                 .depends_on
                 .iter()
-                .all(|dep| completed_tasks.contains(dep))
+                .all(|dep| resolved_tasks.contains(dep))
     }
 
     pub fn mark_in_progress(&mut self) {
         self.status = TaskStatus::InProgress;
+        self.started_at = Some(current_timestamp());
     }
 
     pub fn mark_completed(&mut self, result: TaskResult) {
         self.status = TaskStatus::Completed;
         self.result = Some(result);
+        self.completed_at = Some(current_timestamp());
     }
 
     pub fn mark_failed(&mut self, result: TaskResult) {
         self.status = TaskStatus::Failed;
         self.result = Some(result);
+        self.completed_at = Some(current_timestamp());
     }
 
     pub fn mark_skipped(&mut self) {
         self.status = TaskStatus::Skipped;
+        self.completed_at = Some(current_timestamp());
+    }
+
+    /// Duration in milliseconds from start to completion.
+    pub fn duration_ms(&self) -> Option<u64> {
+        match (self.started_at, self.completed_at) {
+            (Some(start), Some(end)) => Some(end.saturating_sub(start)),
+            _ => None,
+        }
+    }
+
+    /// Add a tool execution to this task.
+    pub fn add_tool_execution(&mut self, execution: ToolExecution) {
+        self.tool_executions.push(execution);
+    }
+
+    /// Get the most recent tool execution.
+    pub fn latest_tool_execution(&self) -> Option<&ToolExecution> {
+        self.tool_executions.last()
+    }
+
+    /// Get a mutable reference to a tool execution by ID.
+    pub fn get_tool_execution_mut(
+        &mut self,
+        id: &super::tool_execution::ToolExecutionId,
+    ) -> Option<&mut ToolExecution> {
+        self.tool_executions.iter_mut().find(|e| &e.id == id)
     }
 }
 
@@ -469,16 +512,20 @@ impl Plan {
         self.review_feedback = Some(feedback.into());
     }
 
-    /// Get the next task that is ready to execute
+    /// Get the next task that is ready to execute.
+    ///
+    /// A task is ready when all its dependencies have reached a terminal state
+    /// (Completed, Failed, or Skipped). This ensures that tasks are not blocked
+    /// indefinitely when a dependency fails.
     pub fn next_task(&self) -> Option<&Task> {
-        let completed: Vec<TaskId> = self
+        let resolved: Vec<TaskId> = self
             .tasks
             .iter()
-            .filter(|t| t.status == TaskStatus::Completed)
+            .filter(|t| t.status.is_terminal())
             .map(|t| t.id.clone())
             .collect();
 
-        self.tasks.iter().find(|t| t.is_ready(&completed))
+        self.tasks.iter().find(|t| t.is_ready(&resolved))
     }
 
     /// Get a mutable reference to a task by ID
@@ -1404,6 +1451,58 @@ mod tests {
 
         assert!(summary.contains("Plan 1"));
         assert!(summary.contains("avg 7.0/10"));
+    }
+
+    #[test]
+    fn test_next_task_with_dependency() {
+        let mut plan = Plan::new("Test", "Reasoning")
+            .with_task(Task::new("task-1", "First task"))
+            .with_task(Task::new("task-2", "Second task").with_dependency("task-1"));
+
+        // task-1 is ready (no deps), task-2 is blocked
+        let next = plan.next_task().unwrap();
+        assert_eq!(next.id.as_str(), "task-1");
+
+        // After task-1 completes, task-2 becomes ready
+        plan.tasks[0].status = TaskStatus::Completed;
+        let next = plan.next_task().unwrap();
+        assert_eq!(next.id.as_str(), "task-2");
+    }
+
+    #[test]
+    fn test_next_task_with_failed_dependency() {
+        let mut plan = Plan::new("Test", "Reasoning")
+            .with_task(Task::new("task-1", "First task"))
+            .with_task(Task::new("task-2", "Second task").with_dependency("task-1"));
+
+        // task-1 fails — task-2 should still become ready (dependency resolved)
+        plan.tasks[0].mark_failed(TaskResult::failure("error occurred"));
+        let next = plan.next_task().unwrap();
+        assert_eq!(next.id.as_str(), "task-2");
+    }
+
+    #[test]
+    fn test_next_task_with_skipped_dependency() {
+        let mut plan = Plan::new("Test", "Reasoning")
+            .with_task(Task::new("task-1", "First task"))
+            .with_task(Task::new("task-2", "Second task").with_dependency("task-1"));
+
+        // task-1 skipped — task-2 should still become ready
+        plan.tasks[0].mark_skipped();
+        let next = plan.next_task().unwrap();
+        assert_eq!(next.id.as_str(), "task-2");
+    }
+
+    #[test]
+    fn test_next_task_blocked_by_in_progress() {
+        let mut plan = Plan::new("Test", "Reasoning")
+            .with_task(Task::new("task-1", "First task"))
+            .with_task(Task::new("task-2", "Second task").with_dependency("task-1"));
+
+        // task-1 in progress — task-2 should NOT be ready yet
+        plan.tasks[0].mark_in_progress();
+        // next_task should return None (task-1 is InProgress, task-2 is blocked)
+        assert!(plan.next_task().is_none());
     }
 
     #[test]

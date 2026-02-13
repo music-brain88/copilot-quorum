@@ -265,6 +265,11 @@ impl CopilotSession {
                 .join(", ")
         );
 
+        for tool in &copilot_tools {
+            let size = serde_json::to_string(tool).map(|s| s.len()).unwrap_or(0);
+            debug!("Tool definition '{}': {} bytes", tool.name, size);
+        }
+
         if copilot_tools.is_empty() {
             warn!("No valid tools converted, falling back to text-only session");
             let text = self
@@ -289,6 +294,9 @@ impl CopilotSession {
             system_message,
             tools: Some(copilot_tools),
         };
+
+        let payload_size = serde_json::to_string(&params).map(|s| s.len()).unwrap_or(0);
+        debug!("session.create payload: {} bytes", payload_size);
 
         let (tool_session_id, mut tool_channel) = self
             .router

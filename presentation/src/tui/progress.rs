@@ -58,11 +58,80 @@ impl AgentProgressNotifier for TuiProgressBridge {
     }
 
     fn on_task_complete(&self, task: &Task, success: bool, index: usize, total: usize) {
+        let output = task
+            .result
+            .as_ref()
+            .map(|r| r.output.clone())
+            .filter(|o| !o.is_empty());
         self.emit(TuiEvent::TaskComplete {
             description: task.description.clone(),
             success,
             index,
             total,
+            output,
+        });
+    }
+
+    fn on_tool_execution_created(
+        &self,
+        _task_id: &str,
+        execution_id: &str,
+        tool_name: &str,
+        _turn: usize,
+    ) {
+        self.emit(TuiEvent::ToolExecutionUpdate {
+            task_index: 0, // Will be overridden by current task progress
+            execution_id: execution_id.to_string(),
+            tool_name: tool_name.to_string(),
+            state: super::event::ToolExecutionDisplayState::Pending,
+            duration_ms: None,
+        });
+    }
+
+    fn on_tool_execution_started(&self, _task_id: &str, execution_id: &str, tool_name: &str) {
+        self.emit(TuiEvent::ToolExecutionUpdate {
+            task_index: 0,
+            execution_id: execution_id.to_string(),
+            tool_name: tool_name.to_string(),
+            state: super::event::ToolExecutionDisplayState::Running,
+            duration_ms: None,
+        });
+    }
+
+    fn on_tool_execution_completed(
+        &self,
+        _task_id: &str,
+        execution_id: &str,
+        tool_name: &str,
+        duration_ms: u64,
+        output_preview: &str,
+    ) {
+        self.emit(TuiEvent::ToolExecutionUpdate {
+            task_index: 0,
+            execution_id: execution_id.to_string(),
+            tool_name: tool_name.to_string(),
+            state: super::event::ToolExecutionDisplayState::Completed {
+                preview: output_preview.to_string(),
+            },
+            duration_ms: Some(duration_ms),
+        });
+    }
+
+    fn on_tool_execution_failed(
+        &self,
+        _task_id: &str,
+        execution_id: &str,
+        tool_name: &str,
+        error: &str,
+    ) {
+        self.emit(TuiEvent::ToolExecutionUpdate {
+            task_index: 0,
+            execution_id: execution_id.to_string(),
+            tool_name: tool_name.to_string(),
+            state: super::event::ToolExecutionDisplayState::Error {
+                message: error.to_string(),
+            },
+            duration_ms: None,
         });
     }
 
@@ -324,5 +393,68 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_task_complete_with_output() {
+        use quorum_domain::TaskResult;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let bridge = TuiProgressBridge::new(tx);
+
+        let mut task = Task::new("t1", "Analyze code");
+        task.mark_completed(TaskResult::success(
+            "The code looks clean and well-structured.",
+        ));
+        bridge.on_task_complete(&task, true, 1, 1);
+
+        let event = rx.try_recv().unwrap();
+        if let TuiEvent::TaskComplete {
+            output, success, ..
+        } = event
+        {
+            assert!(success);
+            assert_eq!(
+                output.as_deref(),
+                Some("The code looks clean and well-structured.")
+            );
+        } else {
+            panic!("Expected TaskComplete event");
+        }
+    }
+
+    #[test]
+    fn test_task_complete_without_result() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let bridge = TuiProgressBridge::new(tx);
+
+        let task = Task::new("t1", "Do something");
+        bridge.on_task_complete(&task, true, 1, 1);
+
+        let event = rx.try_recv().unwrap();
+        if let TuiEvent::TaskComplete { output, .. } = event {
+            assert!(output.is_none());
+        } else {
+            panic!("Expected TaskComplete event");
+        }
+    }
+
+    #[test]
+    fn test_task_complete_with_empty_output() {
+        use quorum_domain::TaskResult;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let bridge = TuiProgressBridge::new(tx);
+
+        let mut task = Task::new("t1", "Empty result");
+        task.mark_completed(TaskResult::success(""));
+        bridge.on_task_complete(&task, true, 1, 1);
+
+        let event = rx.try_recv().unwrap();
+        if let TuiEvent::TaskComplete { output, .. } = event {
+            assert!(output.is_none()); // Empty output filtered to None
+        } else {
+            panic!("Expected TaskComplete event");
+        }
     }
 }

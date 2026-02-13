@@ -67,6 +67,7 @@ pub enum TuiEvent {
         success: bool,
         index: usize,
         total: usize,
+        output: Option<String>,
     },
     ToolCall {
         tool_name: String,
@@ -114,11 +115,29 @@ pub enum TuiEvent {
     },
     EnsembleFallback(String),
 
+    // -- Tool execution lifecycle --
+    ToolExecutionUpdate {
+        task_index: usize,
+        execution_id: String,
+        tool_name: String,
+        state: ToolExecutionDisplayState,
+        duration_ms: Option<u64>,
+    },
+
     // -- Other --
     HistoryCleared,
     CommandError(String),
     Flash(String),
     Exit,
+}
+
+/// Display-friendly state for a tool execution
+#[derive(Debug, Clone)]
+pub enum ToolExecutionDisplayState {
+    Pending,
+    Running,
+    Completed { preview: String },
+    Error { message: String },
 }
 
 /// Request for human intervention, sent from HumanIntervention port to TUI

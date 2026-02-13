@@ -342,6 +342,8 @@ pub struct TaskProgress {
     pub total: usize,
     pub description: String,
     pub completed_tasks: Vec<TaskSummary>,
+    /// Tool executions for the currently active task
+    pub active_tool_executions: Vec<ToolExecutionDisplay>,
 }
 
 /// Summary of a completed task
@@ -350,6 +352,29 @@ pub struct TaskSummary {
     pub index: usize,
     pub description: String,
     pub success: bool,
+    pub output: Option<String>,
+    /// Duration of the task in milliseconds
+    pub duration_ms: Option<u64>,
+    /// Tool executions performed during this task
+    pub tool_executions: Vec<ToolExecutionDisplay>,
+}
+
+/// Display state for a single tool execution within a task
+#[derive(Debug, Clone)]
+pub struct ToolExecutionDisplay {
+    pub execution_id: String,
+    pub tool_name: String,
+    pub state: ToolExecutionDisplayStatus,
+    pub duration_ms: Option<u64>,
+}
+
+/// Status of a tool execution for display
+#[derive(Debug, Clone)]
+pub enum ToolExecutionDisplayStatus {
+    Pending,
+    Running,
+    Completed { preview: String },
+    Error { message: String },
 }
 
 /// Ensemble planning progress
