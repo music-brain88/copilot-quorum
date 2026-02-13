@@ -210,11 +210,7 @@ async fn main() -> Result<()> {
     let (_output_config, repl_config) = build_configs(&cli, &config);
 
     // Parse models from CLI --model flag (empty if not specified)
-    let cli_models: Vec<Model> = cli
-        .model
-        .iter()
-        .map(|s| s.parse().unwrap())
-        .collect();
+    let cli_models: Vec<Model> = cli.model.iter().map(|s| s.parse().unwrap()).collect();
 
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
