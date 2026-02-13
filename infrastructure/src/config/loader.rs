@@ -102,8 +102,10 @@ mod tests {
     #[test]
     fn test_load_defaults() {
         let config = ConfigLoader::load_defaults();
-        assert!(config.council.models.is_empty());
-        assert!(config.behavior.enable_review);
+        assert!(config.models.exploration.is_none());
+        assert!(config.models.decision.is_none());
+        assert!(config.models.review.is_none());
+        assert_eq!(config.quorum.rule, "majority");
     }
 
     #[test]

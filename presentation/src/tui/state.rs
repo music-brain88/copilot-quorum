@@ -4,7 +4,7 @@
 //! Updated by TuiPresenter (UiEvent → state) and TuiProgressBridge (progress → state).
 
 use super::mode::InputMode;
-use quorum_domain::{AgentPhase, ConsensusLevel, InteractionType, PhaseScope};
+use quorum_domain::{AgentPhase, ConsensusLevel, PhaseScope};
 
 /// Central TUI state — owned by the TuiApp select! loop
 pub struct TuiState {
@@ -31,7 +31,6 @@ pub struct TuiState {
     // -- Config display --
     pub consensus_level: ConsensusLevel,
     pub phase_scope: PhaseScope,
-    pub interaction_type: InteractionType,
     pub model_name: String,
 
     // -- Overlay --
@@ -63,7 +62,6 @@ impl Default for TuiState {
             progress: ProgressState::default(),
             consensus_level: ConsensusLevel::Solo,
             phase_scope: PhaseScope::Full,
-            interaction_type: InteractionType::Ask,
             model_name: String::new(),
             show_help: false,
             flash_message: None,

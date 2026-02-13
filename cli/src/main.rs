@@ -5,7 +5,7 @@
 
 use anyhow::{Result, bail};
 use clap::Parser;
-use quorum_application::{BehaviorConfig, RunAgentInput, RunAgentUseCase};
+use quorum_application::{RunAgentInput, RunAgentUseCase};
 use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, Severity};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
@@ -136,10 +136,7 @@ fn init_logging(
 
 /// Convert FileConfig + CLI args to layer-specific configs
 /// This is the single place where FileConfig is translated to application/presentation types
-fn build_configs(cli: &Cli, file: &FileConfig) -> (BehaviorConfig, OutputConfig, ReplConfig) {
-    // Application layer config
-    let behavior = BehaviorConfig::from_timeout_seconds(file.behavior.timeout_seconds);
-
+fn build_configs(cli: &Cli, file: &FileConfig) -> (OutputConfig, ReplConfig) {
     // Presentation layer configs
     // CLI uses CliOutputFormat (for clap), convert to domain OutputFormat
     let output_format = cli
@@ -155,7 +152,7 @@ fn build_configs(cli: &Cli, file: &FileConfig) -> (BehaviorConfig, OutputConfig,
         file.repl.history_file.clone(),
     );
 
-    (behavior, output, repl)
+    (output, repl)
 }
 
 #[tokio::main]
@@ -210,18 +207,11 @@ async fn main() -> Result<()> {
     });
 
     // Build layer-specific configs from FileConfig + CLI
-    let (_behavior, _output_config, repl_config) = build_configs(&cli, &config);
+    let (_output_config, repl_config) = build_configs(&cli, &config);
 
-    // Parse models: CLI > config file > default
+    // Parse models: CLI > default
     let models: Vec<Model> = if !cli.model.is_empty() {
         cli.model.iter().map(|s| s.parse().unwrap()).collect()
-    } else if !config.council.models.is_empty() {
-        config
-            .council
-            .models
-            .iter()
-            .map(|s| s.parse().unwrap())
-            .collect()
     } else {
         Model::default_models()
     };
@@ -260,13 +250,13 @@ async fn main() -> Result<()> {
     let mut agent_config = AgentConfig::default();
 
     // Apply role-based model settings from config file
-    if let Some(model) = config.agent.parse_exploration_model() {
+    if let Some(model) = config.models.parse_exploration() {
         agent_config = agent_config.with_exploration_model(model);
     }
-    if let Some(model) = config.agent.parse_decision_model() {
+    if let Some(model) = config.models.parse_decision() {
         agent_config = agent_config.with_decision_model(model);
     }
-    if let Some(models) = config.agent.parse_review_models() {
+    if let Some(models) = config.models.parse_review() {
         agent_config = agent_config.with_review_models(models);
     }
 
@@ -284,12 +274,10 @@ async fn main() -> Result<()> {
         .with_max_plan_revisions(config.agent.max_plan_revisions)
         .with_hil_mode(config.agent.parse_hil_mode());
 
-    // Apply consensus level, phase scope, and interaction axes from config file
+    // Apply consensus level and phase scope from config file
     agent_config = agent_config
         .with_consensus_level(config.agent.parse_consensus_level())
-        .with_phase_scope(config.agent.parse_phase_scope())
-        .with_interaction_type(config.agent.parse_interaction_type())
-        .with_context_mode(config.agent.parse_context_mode());
+        .with_phase_scope(config.agent.parse_phase_scope());
 
     // Apply --no-quorum flag
     if cli.no_quorum {

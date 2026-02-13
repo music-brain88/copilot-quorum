@@ -16,9 +16,7 @@ use crate::ports::ui_event::{
 use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::{RunAgentInput, RunAgentUseCase};
 use crate::use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
-use quorum_domain::{
-    AgentConfig, ConsensusLevel, InteractionType, Model, OutputFormat, PhaseScope, QuorumResult,
-};
+use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -169,15 +167,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Generate the prompt string for the REPL
     ///
-    /// Format: `<level>:<interaction>>`
-    /// Examples: `solo:ask>`, `ens:discuss>`, `solo:discuss>`
+    /// Format: `<level>>`
+    /// Examples: `solo>`, `ens>`
     pub fn prompt_string(&self) -> String {
         let level = match self.consensus_level {
             ConsensusLevel::Solo => "solo",
             ConsensusLevel::Ensemble => "ens",
         };
-        let interaction = self.config.interaction_type.short_label();
-        format!("{}:{}> ", level, interaction)
+        format!("{}> ", level)
     }
 
     /// Send the welcome event
@@ -265,35 +262,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 CommandAction::Continue
             }
             "/ask" => {
-                self.config = self
-                    .config
-                    .clone()
-                    .with_interaction_type(InteractionType::Ask);
-                let _ = self.tx.send(UiEvent::InteractionChanged {
-                    interaction_type: InteractionType::Ask,
-                    description: "question → answer (lightweight)".to_string(),
+                let _ = self.tx.send(UiEvent::CommandError {
+                    message: "/ask is being redesigned as Buffer/Tab actions (Issue #119). Use the main input for now.".to_string(),
                 });
                 CommandAction::Continue
             }
             "/discuss" => {
                 if args.is_empty() {
-                    // Pure mode command: switch to Discuss mode
-                    self.config = self
-                        .config
-                        .clone()
-                        .with_interaction_type(InteractionType::Discuss);
-                    let _ = self.tx.send(UiEvent::InteractionChanged {
-                        interaction_type: InteractionType::Discuss,
-                        description: "multi-model discussion → consensus".to_string(),
+                    let _ = self.tx.send(UiEvent::CommandError {
+                        message: "/discuss is being redesigned as Buffer/Tab actions (Issue #119). Use /council <question> for ad-hoc discussions.".to_string(),
                     });
                 } else {
-                    // Legacy: /discuss <question> — hint to use /council
+                    // Legacy hint: suggest /council
                     let _ = self.tx.send(UiEvent::CommandError {
-                        message: format!(
-                            "/discuss is now a mode command (no arguments).\n\
-                             Use /council {} to run an ad-hoc discussion.",
-                            args
-                        ),
+                        message: format!("Use /council {} to run an ad-hoc discussion.", args),
                     });
                 }
                 CommandAction::Continue
@@ -316,8 +298,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     consensus_level: self.config.consensus_level,
                     phase_scope: self.config.phase_scope,
                     orchestration_strategy: self.config.orchestration_strategy.to_string(),
-                    interaction_type: self.config.interaction_type,
-                    context_mode: self.config.context_mode.to_string(),
                     require_final_review: self.config.require_final_review,
                     max_iterations: self.config.max_iterations,
                     max_plan_revisions: self.config.max_plan_revisions,
@@ -905,22 +885,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_discuss_without_args_switches_mode() {
+    async fn test_discuss_without_args_shows_redesign_message() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/discuss").await;
         let event = rx.try_recv().unwrap();
-        assert!(matches!(
-            event,
-            UiEvent::InteractionChanged {
-                interaction_type: InteractionType::Discuss,
-                ..
+        match event {
+            UiEvent::CommandError { message } => {
+                assert!(message.contains("redesigned"));
+                assert!(message.contains("#119"));
             }
-        ));
+            other => panic!("Expected CommandError, got {:?}", other),
+        }
     }
 
     #[tokio::test]
-    async fn test_discuss_with_args_shows_migration_hint() {
+    async fn test_discuss_with_args_shows_council_hint() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/discuss some question").await;
@@ -934,18 +914,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ask_command() {
+    async fn test_ask_command_shows_redesign_message() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/ask").await;
         let event = rx.try_recv().unwrap();
-        assert!(matches!(
-            event,
-            UiEvent::InteractionChanged {
-                interaction_type: InteractionType::Ask,
-                ..
+        match event {
+            UiEvent::CommandError { message } => {
+                assert!(message.contains("redesigned"));
+                assert!(message.contains("#119"));
             }
-        ));
+            other => panic!("Expected CommandError, got {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -975,14 +955,14 @@ mod tests {
     #[tokio::test]
     async fn test_prompt_string() {
         let (controller, _rx) = create_test_controller();
-        assert_eq!(controller.prompt_string(), "solo:ask> ");
+        assert_eq!(controller.prompt_string(), "solo> ");
     }
 
     #[tokio::test]
     async fn test_prompt_string_ensemble() {
         let (controller, _rx) = create_test_controller();
         let controller = controller.with_consensus_level(ConsensusLevel::Ensemble);
-        assert_eq!(controller.prompt_string(), "ens:ask> ");
+        assert_eq!(controller.prompt_string(), "ens> ");
     }
 
     #[tokio::test]

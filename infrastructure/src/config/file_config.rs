@@ -3,10 +3,7 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
-use quorum_domain::{
-    ConsensusLevel, ContextMode, HilMode, InteractionType, Model, OutputFormat, PhaseScope,
-    QuorumRule,
-};
+use quorum_domain::{ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, QuorumRule};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -16,40 +13,47 @@ pub use quorum_domain::OutputFormat as FileOutputFormat;
 /// Configuration validation errors
 #[derive(Debug, Error)]
 pub enum ConfigValidationError {
-    #[error("timeout_seconds cannot be 0")]
-    InvalidTimeout,
-
     #[error("model name cannot be empty")]
     EmptyModelName,
 }
 
-/// Raw council configuration from TOML
+/// Role-based model configuration from TOML
+///
+/// # Example
+///
+/// ```toml
+/// [models]
+/// exploration = "gpt-5.2-codex"           # Context gathering + low-risk tools
+/// decision = "claude-sonnet-4.5"          # Planning + high-risk tools
+/// review = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct FileCouncilConfig {
-    /// Model names as strings
-    pub models: Vec<String>,
-    /// Moderator model for synthesis
-    #[serde(default)]
-    pub moderator: Model,
+pub struct FileModelsConfig {
+    /// Model for exploration: context gathering + low-risk tools
+    pub exploration: Option<String>,
+    /// Model for decisions: planning + high-risk tools
+    pub decision: Option<String>,
+    /// Models for review phases
+    pub review: Option<Vec<String>>,
 }
 
-/// Raw behavior configuration from TOML
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileBehaviorConfig {
-    /// Enable peer review phase
-    pub enable_review: bool,
-    /// Timeout in seconds for API calls
-    pub timeout_seconds: Option<u64>,
-}
+impl FileModelsConfig {
+    /// Parse exploration model string into Model enum
+    pub fn parse_exploration(&self) -> Option<Model> {
+        self.exploration.as_ref().and_then(|s| s.parse().ok())
+    }
 
-impl Default for FileBehaviorConfig {
-    fn default() -> Self {
-        Self {
-            enable_review: true,
-            timeout_seconds: None,
-        }
+    /// Parse decision model string into Model enum
+    pub fn parse_decision(&self) -> Option<Model> {
+        self.decision.as_ref().and_then(|s| s.parse().ok())
+    }
+
+    /// Parse review model strings into `Vec<Model>`
+    pub fn parse_review(&self) -> Option<Vec<Model>> {
+        self.review
+            .as_ref()
+            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
     }
 }
 
@@ -93,19 +97,18 @@ impl Default for FileReplConfig {
 
 /// Raw agent configuration from TOML
 ///
-/// # Role-based Model Configuration
+/// # Example
 ///
 /// ```toml
 /// [agent]
-/// exploration_model = "claude-haiku-4.5"   # Context gathering + low-risk tools
-/// decision_model = "claude-sonnet-4.5"     # Planning + high-risk tool decisions
-/// review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]  # Reviews (quality)
 /// consensus_level = "solo"                 # "solo" or "ensemble"
 /// phase_scope = "full"                     # "full", "fast", "plan-only"
 /// strategy = "quorum"                      # "quorum" or "debate"
+/// hil_mode = "interactive"                 # "interactive", "auto_reject", "auto_approve"
+/// max_plan_revisions = 3
 /// ```
 ///
-/// All model fields are optional; defaults are defined in `AgentConfig`.
+/// Model settings are in `[models]` section, not here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileAgentConfig {
@@ -119,18 +122,6 @@ pub struct FileAgentConfig {
     pub phase_scope: String,
     /// Orchestration strategy: "quorum" or "debate"
     pub strategy: String,
-    /// Interaction type: "ask" or "discuss"
-    pub interaction_type: String,
-    /// Context mode: "shared" or "fresh"
-    pub context_mode: String,
-
-    // ==================== Role-based Model Configuration ====================
-    /// Model for exploration: context gathering + low-risk tools (optional)
-    pub exploration_model: Option<String>,
-    /// Model for decisions: planning + high-risk tool execution (optional)
-    pub decision_model: Option<String>,
-    /// Models for review phases (optional, uses default if not set)
-    pub review_models: Option<Vec<String>>,
 }
 
 impl Default for FileAgentConfig {
@@ -141,12 +132,6 @@ impl Default for FileAgentConfig {
             consensus_level: "solo".to_string(),
             phase_scope: "full".to_string(),
             strategy: "quorum".to_string(),
-            interaction_type: "ask".to_string(),
-            context_mode: "shared".to_string(),
-            // Role-based defaults are None - will use AgentConfig defaults
-            exploration_model: None,
-            decision_model: None,
-            review_models: None,
         }
     }
 }
@@ -180,49 +165,6 @@ impl FileAgentConfig {
             _ => "quorum",
         }
     }
-
-    /// Parse interaction_type string into InteractionType enum
-    ///
-    /// Accepts: "ask", "a", "discuss", "disc", "d"
-    pub fn parse_interaction_type(&self) -> InteractionType {
-        self.interaction_type.parse().unwrap_or_default()
-    }
-
-    /// Parse context_mode string into ContextMode enum
-    ///
-    /// Accepts: "shared", "s", "fresh", "f"
-    pub fn parse_context_mode(&self) -> ContextMode {
-        self.context_mode.parse().unwrap_or_default()
-    }
-
-    /// Parse exploration_model string into Model enum
-    pub fn parse_exploration_model(&self) -> Option<Model> {
-        self.exploration_model.as_ref().and_then(|s| s.parse().ok())
-    }
-
-    /// Parse decision_model string into Model enum
-    pub fn parse_decision_model(&self) -> Option<Model> {
-        self.decision_model.as_ref().and_then(|s| s.parse().ok())
-    }
-
-    /// Parse review_models strings into `Vec<Model>`
-    pub fn parse_review_models(&self) -> Option<Vec<Model>> {
-        self.review_models
-            .as_ref()
-            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
-    }
-}
-
-/// Raw GitHub integration configuration from TOML
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileGitHubConfig {
-    /// Enable GitHub Discussions integration
-    pub enabled: bool,
-    /// Repository (owner/name) - auto-detected if not set
-    pub repo: Option<String>,
-    /// Discussion category for escalations
-    pub category: Option<String>,
 }
 
 // ==================== Quorum Configuration ====================
@@ -244,44 +186,6 @@ pub struct FileGitHubConfig {
 // enable_peer_review = true
 // ```
 
-/// Quorum discussion settings
-///
-/// Controls how Quorum Discussion (multi-model dialogue) operates.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileQuorumDiscussionConfig {
-    /// Models to use for discussion (optional, uses council.models if not set)
-    pub models: Option<Vec<String>>,
-    /// Moderator model for synthesis (optional, uses council.moderator if not set)
-    pub moderator: Option<String>,
-    /// Enable peer review phase in discussion
-    pub enable_peer_review: bool,
-}
-
-impl Default for FileQuorumDiscussionConfig {
-    fn default() -> Self {
-        Self {
-            models: None,
-            moderator: None,
-            enable_peer_review: true,
-        }
-    }
-}
-
-impl FileQuorumDiscussionConfig {
-    /// Parse models into Model enums
-    pub fn parse_models(&self) -> Option<Vec<Model>> {
-        self.models
-            .as_ref()
-            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
-    }
-
-    /// Parse moderator into Model enum
-    pub fn parse_moderator(&self) -> Option<Model> {
-        self.moderator.as_ref().and_then(|s| s.parse().ok())
-    }
-}
-
 /// Quorum consensus configuration
 ///
 /// Controls how Quorum Consensus (voting for approval) works.
@@ -292,6 +196,8 @@ impl FileQuorumDiscussionConfig {
 /// [quorum]
 /// rule = "majority"           # or "unanimous", "atleast:2", "75%"
 /// min_models = 2              # minimum models required for valid consensus
+/// moderator = "claude-opus-4.5"
+/// enable_peer_review = true
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -300,8 +206,10 @@ pub struct FileQuorumConfig {
     pub rule: String,
     /// Minimum number of models required for valid consensus
     pub min_models: usize,
-    /// Discussion settings
-    pub discussion: FileQuorumDiscussionConfig,
+    /// Moderator model for synthesis
+    pub moderator: Option<String>,
+    /// Enable peer review phase
+    pub enable_peer_review: bool,
 }
 
 impl Default for FileQuorumConfig {
@@ -309,7 +217,8 @@ impl Default for FileQuorumConfig {
         Self {
             rule: "majority".to_string(),
             min_models: 2,
-            discussion: FileQuorumDiscussionConfig::default(),
+            moderator: None,
+            enable_peer_review: true,
         }
     }
 }
@@ -319,14 +228,11 @@ impl FileQuorumConfig {
     pub fn parse_rule(&self) -> QuorumRule {
         self.rule.parse().unwrap_or_default()
     }
-}
 
-/// Raw integrations configuration from TOML
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileIntegrationsConfig {
-    /// GitHub integration settings
-    pub github: FileGitHubConfig,
+    /// Parse moderator into Model enum
+    pub fn parse_moderator(&self) -> Option<Model> {
+        self.moderator.as_ref().and_then(|s| s.parse().ok())
+    }
 }
 
 // ==================== Tools Configuration ====================
@@ -709,20 +615,16 @@ pub struct FileTuiConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileConfig {
-    /// Council settings (legacy, prefer [quorum.discussion])
-    pub council: FileCouncilConfig,
-    /// Quorum settings (new unified configuration)
+    /// Role-based model selection
+    pub models: FileModelsConfig,
+    /// Quorum consensus settings
     pub quorum: FileQuorumConfig,
-    /// Behavior settings
-    pub behavior: FileBehaviorConfig,
     /// Output settings
     pub output: FileOutputConfig,
     /// REPL settings
     pub repl: FileReplConfig,
     /// Agent settings
     pub agent: FileAgentConfig,
-    /// Integration settings
-    pub integrations: FileIntegrationsConfig,
     /// Tools settings
     pub tools: FileToolsConfig,
     /// TUI settings
@@ -732,15 +634,12 @@ pub struct FileConfig {
 impl FileConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
-        // Timeout of 0 seconds doesn't make sense
-        if let Some(0) = self.behavior.timeout_seconds {
-            return Err(ConfigValidationError::InvalidTimeout);
-        }
-
-        // Check for empty model names
-        for model in &self.council.models {
-            if model.trim().is_empty() {
-                return Err(ConfigValidationError::EmptyModelName);
+        // Check for empty model names in review list
+        if let Some(ref models) = self.models.review {
+            for model in models {
+                if model.trim().is_empty() {
+                    return Err(ConfigValidationError::EmptyModelName);
+                }
             }
         }
 
@@ -755,13 +654,10 @@ mod tests {
     #[test]
     fn test_deserialize_full_config() {
         let toml_str = r#"
-[council]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
-moderator = "claude-sonnet-4.5"
-
-[behavior]
-enable_review = false
-timeout_seconds = 120
+[models]
+exploration = "gpt-5.2-codex"
+decision = "claude-sonnet-4.5"
+review = ["claude-opus-4.5", "gpt-5.2-codex"]
 
 [output]
 format = "full"
@@ -773,10 +669,12 @@ history_file = "~/.local/share/quorum/history.txt"
 "#;
 
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.council.models.len(), 2);
-        assert_eq!(config.council.moderator, Model::ClaudeSonnet45);
-        assert!(!config.behavior.enable_review);
-        assert_eq!(config.behavior.timeout_seconds, Some(120));
+        assert_eq!(config.models.exploration, Some("gpt-5.2-codex".to_string()));
+        assert_eq!(
+            config.models.decision,
+            Some("claude-sonnet-4.5".to_string())
+        );
+        assert_eq!(config.models.review.as_ref().unwrap().len(), 2);
         assert_eq!(config.output.format, Some(OutputFormat::Full));
         assert!(!config.output.color);
         assert!(!config.repl.show_progress);
@@ -785,15 +683,14 @@ history_file = "~/.local/share/quorum/history.txt"
     #[test]
     fn test_deserialize_partial_config() {
         let toml_str = r#"
-[council]
-models = ["gpt-5.2-codex"]
+[models]
+decision = "gpt-5.2-codex"
 "#;
 
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.council.models.len(), 1);
-        assert_eq!(config.council.moderator, Model::default());
+        assert_eq!(config.models.parse_decision(), Some(Model::Gpt52Codex));
         // Defaults should apply
-        assert!(config.behavior.enable_review);
+        assert!(config.models.exploration.is_none());
         assert!(config.output.color);
         assert!(config.repl.show_progress);
     }
@@ -801,9 +698,9 @@ models = ["gpt-5.2-codex"]
     #[test]
     fn test_default_config() {
         let config = FileConfig::default();
-        assert!(config.council.models.is_empty());
-        assert_eq!(config.council.moderator, Model::default());
-        assert!(config.behavior.enable_review);
+        assert!(config.models.exploration.is_none());
+        assert!(config.models.decision.is_none());
+        assert!(config.models.review.is_none());
         assert!(config.output.color);
         assert!(config.repl.show_progress);
     }
@@ -815,23 +712,10 @@ models = ["gpt-5.2-codex"]
     }
 
     #[test]
-    fn test_validate_zero_timeout() {
-        let toml_str = r#"
-[behavior]
-timeout_seconds = 0
-"#;
-        let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigValidationError::InvalidTimeout)
-        ));
-    }
-
-    #[test]
     fn test_validate_empty_model_name() {
         let toml_str = r#"
-[council]
-models = ["gpt-5.2-codex", ""]
+[models]
+review = ["gpt-5.2-codex", ""]
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert!(matches!(
@@ -910,15 +794,44 @@ args = ["-y", "@anthropic/mcp-server-filesystem"]
     }
 
     #[test]
-    fn test_agent_config_role_based_defaults() {
-        let config = FileAgentConfig::default();
-        assert!(config.exploration_model.is_none());
-        assert!(config.decision_model.is_none());
-        assert!(config.review_models.is_none());
+    fn test_models_config_defaults() {
+        let config = FileModelsConfig::default();
+        assert!(config.exploration.is_none());
+        assert!(config.decision.is_none());
+        assert!(config.review.is_none());
     }
 
     #[test]
-    fn test_agent_config_role_based_deserialize() {
+    fn test_models_config_deserialize() {
+        let toml_str = r#"
+[models]
+exploration = "gpt-5.2-codex"
+decision = "claude-sonnet-4.5"
+review = ["claude-sonnet-4.5", "gpt-5.2-codex"]
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.models.parse_exploration(), Some(Model::Gpt52Codex));
+        assert_eq!(config.models.parse_decision(), Some(Model::ClaudeSonnet45));
+        let review = config.models.parse_review().unwrap();
+        assert_eq!(review.len(), 2);
+        assert!(review.contains(&Model::ClaudeSonnet45));
+        assert!(review.contains(&Model::Gpt52Codex));
+    }
+
+    #[test]
+    fn test_models_config_partial() {
+        let toml_str = r#"
+[models]
+decision = "claude-opus-4.5"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.models.exploration.is_none());
+        assert_eq!(config.models.parse_decision(), Some(Model::ClaudeOpus45));
+        assert!(config.models.review.is_none());
+    }
+
+    #[test]
+    fn test_agent_config_deserialize() {
         let toml_str = r#"
 [agent]
 max_plan_revisions = 5
@@ -926,9 +839,6 @@ hil_mode = "auto_reject"
 consensus_level = "ensemble"
 phase_scope = "fast"
 strategy = "debate"
-exploration_model = "claude-haiku-4.5"
-decision_model = "claude-sonnet-4.5"
-review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agent.max_plan_revisions, 5);
@@ -941,21 +851,6 @@ review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
         assert_eq!(config.agent.phase_scope, "fast");
         assert_eq!(config.agent.parse_phase_scope(), PhaseScope::Fast);
         assert_eq!(config.agent.parse_strategy(), "debate");
-        assert_eq!(
-            config.agent.exploration_model,
-            Some("claude-haiku-4.5".to_string())
-        );
-        assert_eq!(
-            config.agent.decision_model,
-            Some("claude-sonnet-4.5".to_string())
-        );
-        assert_eq!(
-            config.agent.review_models,
-            Some(vec![
-                "claude-sonnet-4.5".to_string(),
-                "gpt-5.2-codex".to_string()
-            ])
-        );
     }
 
     #[test]
@@ -1004,55 +899,12 @@ phase_scope = "plan-only"
     }
 
     #[test]
-    fn test_agent_config_parse_role_models() {
-        let toml_str = r#"
-[agent]
-exploration_model = "claude-haiku-4.5"
-decision_model = "claude-sonnet-4.5"
-review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
-"#;
-        let config: FileConfig = toml::from_str(toml_str).unwrap();
-
-        assert_eq!(
-            config.agent.parse_exploration_model(),
-            Some(Model::ClaudeHaiku45)
-        );
-        assert_eq!(
-            config.agent.parse_decision_model(),
-            Some(Model::ClaudeSonnet45)
-        );
-
-        let review_models = config.agent.parse_review_models().unwrap();
-        assert_eq!(review_models.len(), 2);
-        assert!(review_models.contains(&Model::ClaudeSonnet45));
-        assert!(review_models.contains(&Model::Gpt52Codex));
-    }
-
-    #[test]
-    fn test_agent_config_partial_role_models() {
-        // Only some models specified
-        let toml_str = r#"
-[agent]
-decision_model = "claude-opus-4.5"
-"#;
-        let config: FileConfig = toml::from_str(toml_str).unwrap();
-
-        // Only decision model is set
-        assert!(config.agent.exploration_model.is_none());
-        assert_eq!(
-            config.agent.parse_decision_model(),
-            Some(Model::ClaudeOpus45)
-        );
-        assert!(config.agent.review_models.is_none());
-    }
-
-    #[test]
     fn test_quorum_config_default() {
         let config = FileQuorumConfig::default();
         assert_eq!(config.rule, "majority");
         assert_eq!(config.min_models, 2);
-        assert!(config.discussion.enable_peer_review);
-        assert!(config.discussion.models.is_none());
+        assert!(config.enable_peer_review);
+        assert!(config.moderator.is_none());
     }
 
     #[test]
@@ -1061,24 +913,15 @@ decision_model = "claude-opus-4.5"
 [quorum]
 rule = "unanimous"
 min_models = 3
-
-[quorum.discussion]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
 moderator = "claude-opus-4.5"
 enable_peer_review = false
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.quorum.rule, "unanimous");
         assert_eq!(config.quorum.min_models, 3);
-        assert!(!config.quorum.discussion.enable_peer_review);
+        assert!(!config.quorum.enable_peer_review);
 
-        let models = config.quorum.discussion.parse_models().unwrap();
-        assert_eq!(models.len(), 3);
-        assert!(models.contains(&Model::ClaudeSonnet45));
-        assert!(models.contains(&Model::Gpt52Codex));
-        assert!(models.contains(&Model::Gemini3Pro));
-
-        let moderator = config.quorum.discussion.parse_moderator().unwrap();
+        let moderator = config.quorum.parse_moderator().unwrap();
         assert_eq!(moderator, Model::ClaudeOpus45);
     }
 
@@ -1171,61 +1014,6 @@ description = "Message to echo"
     fn test_custom_tools_empty_by_default() {
         let config = FileToolsConfig::default();
         assert!(config.custom.is_empty());
-    }
-
-    #[test]
-    fn test_agent_config_interaction_type_deserialize() {
-        let toml_str = r#"
-[agent]
-interaction_type = "discuss"
-"#;
-        let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agent.interaction_type, "discuss");
-        assert_eq!(
-            config.agent.parse_interaction_type(),
-            InteractionType::Discuss
-        );
-
-        // Default is "ask"
-        let config = FileAgentConfig::default();
-        assert_eq!(config.parse_interaction_type(), InteractionType::Ask);
-    }
-
-    #[test]
-    fn test_agent_config_context_mode_deserialize() {
-        let toml_str = r#"
-[agent]
-context_mode = "fresh"
-"#;
-        let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agent.context_mode, "fresh");
-        assert_eq!(config.agent.parse_context_mode(), ContextMode::Fresh);
-
-        // Default is "shared"
-        let config = FileAgentConfig::default();
-        assert_eq!(config.parse_context_mode(), ContextMode::Shared);
-    }
-
-    #[test]
-    fn test_quorum_config_with_council_fallback() {
-        // When quorum.discussion is not set, should use council settings
-        let toml_str = r#"
-[council]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
-moderator = "claude-opus-4.5"
-
-[quorum]
-rule = "majority"
-"#;
-        let config: FileConfig = toml::from_str(toml_str).unwrap();
-
-        // quorum.discussion should be None (using defaults)
-        assert!(config.quorum.discussion.models.is_none());
-        assert!(config.quorum.discussion.moderator.is_none());
-
-        // But council is set
-        assert_eq!(config.council.models.len(), 2);
-        assert_eq!(config.council.moderator, Model::ClaudeOpus45);
     }
 
     #[test]

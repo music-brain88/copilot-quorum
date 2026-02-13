@@ -38,7 +38,6 @@ pub enum TuiEvent {
     },
     ScopeChanged(String),
     StrategyChanged(String),
-    InteractionChanged(String),
 
     // -- Agent lifecycle --
     AgentStarting,

@@ -912,7 +912,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             | TuiEvent::ModeChanged { .. }
             | TuiEvent::ScopeChanged(_)
             | TuiEvent::StrategyChanged(_)
-            | TuiEvent::InteractionChanged(_)
             | TuiEvent::CommandError(_) => {}
         }
     }
