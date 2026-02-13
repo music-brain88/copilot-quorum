@@ -62,23 +62,34 @@ fn generate_log_filename() -> String {
 ///
 /// Returns an `Option<WorkerGuard>` that must be held until program exit
 /// to ensure all buffered log entries are flushed to disk.
+///
+/// When `tui_mode` is true, the console (stderr) layer is disabled to avoid
+/// corrupting ratatui's alternate screen. Logs are still written to the file layer.
 fn init_logging(
     verbose: u8,
     log_dir_override: Option<&Path>,
     no_log_file: bool,
+    tui_mode: bool,
 ) -> Option<WorkerGuard> {
-    // Console layer: stderr, same behavior as before
-    let console_filter = match verbose {
-        0 => EnvFilter::new("warn"),
-        1 => EnvFilter::new("info"),
-        2 => EnvFilter::new("debug"),
-        _ => EnvFilter::new("trace"),
+    // Console layer: stderr — disabled in TUI mode to prevent alternate screen corruption.
+    // `Option<Layer>` with `None` acts as a no-op layer in tracing_subscriber.
+    let console_layer = if tui_mode {
+        None
+    } else {
+        let console_filter = match verbose {
+            0 => EnvFilter::new("warn"),
+            1 => EnvFilter::new("info"),
+            2 => EnvFilter::new("debug"),
+            _ => EnvFilter::new("trace"),
+        };
+        Some(
+            fmt::layer()
+                .with_timer(LocalTimer)
+                .with_target(false)
+                .with_writer(std::io::stderr)
+                .with_filter(console_filter),
+        )
     };
-    let console_layer = fmt::layer()
-        .with_timer(LocalTimer)
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .with_filter(console_filter);
 
     if no_log_file {
         tracing_subscriber::registry().with(console_layer).init();
@@ -172,8 +183,12 @@ async fn main() -> Result<()> {
         bail!("Invalid configuration: {}", e);
     }
 
+    // Determine TUI mode before initializing logging so we can suppress console output
+    let is_tui = cli.question.is_none();
+
     // Initialize logging (console + file)
-    let _log_guard = init_logging(cli.verbose, cli.log_dir.as_deref(), cli.no_log_file);
+    // In TUI mode, console layer is disabled to avoid corrupting the alternate screen
+    let _log_guard = init_logging(cli.verbose, cli.log_dir.as_deref(), cli.no_log_file, is_tui);
 
     info!("Starting Copilot Quorum");
 
