@@ -101,11 +101,7 @@ fn count_wrapped_lines(text: &Text<'_>, available_width: u16) -> u16 {
         .iter()
         .map(|line| {
             let lw = line.width();
-            if lw == 0 {
-                1u16
-            } else {
-                lw.div_ceil(w) as u16
-            }
+            if lw == 0 { 1u16 } else { lw.div_ceil(w) as u16 }
         })
         .sum()
 }
