@@ -195,6 +195,15 @@ impl AgentProgressNotifier for AgentProgressReporter {
                 println!("    {} Failed: {}", "✗".red(), task.description.red());
             }
         }
+        if let Some(ref result) = task.result
+            && !result.output.is_empty()
+        {
+            println!(
+                "      {} {}",
+                "Output:".dimmed(),
+                truncate(&result.output, 200).dimmed()
+            );
+        }
     }
 
     fn on_tool_call(&self, tool_name: &str, args: &str) {
@@ -561,6 +570,11 @@ impl AgentProgressNotifier for SimpleAgentProgress {
             println!("  {} {}", "✓".green(), task.description);
         } else {
             println!("  {} {}", "✗".red(), task.description);
+        }
+        if let Some(ref result) = task.result
+            && !result.output.is_empty()
+        {
+            println!("    Output: {}", truncate(&result.output, 200));
         }
     }
 

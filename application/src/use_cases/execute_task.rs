@@ -10,7 +10,9 @@ use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use quorum_domain::util::truncate_str;
-use quorum_domain::{AgentConfig, AgentPromptTemplate, AgentState, Model, Task, TaskId};
+use quorum_domain::{
+    AgentConfig, AgentPromptTemplate, AgentState, Model, Task, TaskId, ToolExecution,
+};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -158,9 +160,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 }
             };
 
-            // Update task status
+            // Update task status and store tool executions
             let (success, output) = match task_result {
-                Ok(output) => (true, output),
+                Ok((output, tool_executions)) => {
+                    // Store tool executions in the task
+                    if let Some(plan) = &mut state.plan
+                        && let Some(task) = plan.get_task_mut(&task_id)
+                    {
+                        task.tool_executions = tool_executions;
+                    }
+                    (true, output)
+                }
                 Err(e) => (false, e.to_string()),
             };
 
@@ -210,6 +220,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
     }
 
     /// Execute a single task using the Native Tool Use API.
+    ///
+    /// Returns `(output_text, tool_executions)` on success.
     async fn execute_single_task(
         &self,
         session: &dyn LlmSession,
@@ -218,7 +230,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
         task_id: &TaskId,
         previous_results: &str,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<String, RunAgentError> {
+    ) -> Result<(String, Vec<ToolExecution>), RunAgentError> {
         let task = state
             .plan
             .as_ref()
@@ -232,6 +244,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
     }
 
     /// Execute a task using the Native Tool Use API with multi-turn loop.
+    ///
+    /// Returns `(output_text, tool_executions)` — the output text is the
+    /// joined LLM text blocks, and tool_executions tracks each tool call's
+    /// lifecycle for state tracking and UI display.
     async fn execute_task_native(
         &self,
         session: &dyn LlmSession,
@@ -240,12 +256,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
         task: &Task,
         previous_results: &str,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<String, RunAgentError> {
+    ) -> Result<(String, Vec<ToolExecution>), RunAgentError> {
+        let task_id_str = task.id.as_str();
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
         let tools = self.tool_executor.tool_spec().to_api_tools();
         let max_turns = input.config.max_tool_turns;
         let mut turn_count = 0;
         let mut all_outputs = Vec::new();
+        let mut all_executions: Vec<ToolExecution> = Vec::new();
+        let mut exec_counter: usize = 0;
 
         // Initial request
         let mut response = match send_with_tools_cancellable(
@@ -344,15 +363,42 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
 
             // Execute low-risk calls in parallel
             if !low_risk_calls.is_empty() {
+                // Create ToolExecutions for all low-risk calls (Pending state)
+                let mut exec_indices = Vec::new();
                 let mut futures = Vec::new();
                 for call in &low_risk_calls {
+                    exec_counter += 1;
+                    let exec_id = format!("{}-exec-{}", task_id_str, exec_counter);
+                    let mut exec = ToolExecution::new(
+                        exec_id.clone(),
+                        &call.tool_name,
+                        call.arguments.clone(),
+                        call.native_id.clone(),
+                        turn_count,
+                    );
+                    progress.on_tool_execution_created(
+                        task_id_str,
+                        &exec_id,
+                        &call.tool_name,
+                        turn_count,
+                    );
+
+                    // Transition to Running
+                    exec.mark_running();
+                    progress.on_tool_execution_started(task_id_str, &exec_id, &call.tool_name);
+
+                    all_executions.push(exec);
+                    exec_indices.push(all_executions.len() - 1);
+
                     progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
                     futures.push(self.tool_executor.execute(call));
                 }
 
                 let results: Vec<_> = futures::future::join_all(futures).await;
 
-                for (call, result) in low_risk_calls.iter().zip(results) {
+                for ((call, result), &exec_idx) in
+                    low_risk_calls.iter().zip(results).zip(&exec_indices)
+                {
                     let is_error = !result.is_success();
                     let output = if is_error {
                         result
@@ -362,6 +408,35 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     } else {
                         result.output().unwrap_or("").to_string()
                     };
+
+                    // Update ToolExecution state
+                    let exec = &mut all_executions[exec_idx];
+                    let exec_id = exec.id.to_string();
+                    if is_error {
+                        exec.mark_error(&output);
+                        progress.on_tool_execution_failed(
+                            task_id_str,
+                            &exec_id,
+                            &call.tool_name,
+                            &output,
+                        );
+                    } else {
+                        exec.mark_completed(&result);
+                        let duration = exec.duration_ms().unwrap_or(0);
+                        let preview = result
+                            .output()
+                            .unwrap_or("")
+                            .chars()
+                            .take(100)
+                            .collect::<String>();
+                        progress.on_tool_execution_completed(
+                            task_id_str,
+                            &exec_id,
+                            &call.tool_name,
+                            duration,
+                            &preview,
+                        );
+                    }
 
                     progress.on_tool_result(&call.tool_name, !is_error);
 
@@ -387,6 +462,22 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
 
             // Execute high-risk calls sequentially (with action review)
             for call in &high_risk_calls {
+                exec_counter += 1;
+                let exec_id = format!("{}-exec-{}", task_id_str, exec_counter);
+                let mut exec = ToolExecution::new(
+                    exec_id.clone(),
+                    &call.tool_name,
+                    call.arguments.clone(),
+                    call.native_id.clone(),
+                    turn_count,
+                );
+                progress.on_tool_execution_created(
+                    task_id_str,
+                    &exec_id,
+                    &call.tool_name,
+                    turn_count,
+                );
+
                 // Action review for high-risk operations
                 let review_decision = {
                     let tool_call_json = serde_json::to_string_pretty(&serde_json::json!({
@@ -403,6 +494,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 match review_decision {
                     ReviewDecision::Rejected(_) => {
                         warn!("Tool call {} rejected by action review", call.tool_name);
+                        exec.mark_running();
+                        exec.mark_error("Action rejected by quorum review");
+                        progress.on_tool_execution_failed(
+                            task_id_str,
+                            &exec_id,
+                            &call.tool_name,
+                            "Action rejected by quorum review",
+                        );
+                        all_executions.push(exec);
+
                         if let Some(native_id) = call.native_id.clone() {
                             tool_result_messages.push(ToolResultMessage {
                                 tool_use_id: native_id,
@@ -423,6 +524,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     }
                 }
 
+                // Transition to Running
+                exec.mark_running();
+                progress.on_tool_execution_started(task_id_str, &exec_id, &call.tool_name);
+
                 progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
 
                 let result = self.tool_executor.execute(call).await;
@@ -435,6 +540,34 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 } else {
                     result.output().unwrap_or("").to_string()
                 };
+
+                // Update ToolExecution state
+                if is_error {
+                    exec.mark_error(&output);
+                    progress.on_tool_execution_failed(
+                        task_id_str,
+                        &exec_id,
+                        &call.tool_name,
+                        &output,
+                    );
+                } else {
+                    exec.mark_completed(&result);
+                    let duration = exec.duration_ms().unwrap_or(0);
+                    let preview = result
+                        .output()
+                        .unwrap_or("")
+                        .chars()
+                        .take(100)
+                        .collect::<String>();
+                    progress.on_tool_execution_completed(
+                        task_id_str,
+                        &exec_id,
+                        &call.tool_name,
+                        duration,
+                        &preview,
+                    );
+                }
+                all_executions.push(exec);
 
                 progress.on_tool_result(&call.tool_name, !is_error);
 
@@ -471,6 +604,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 .map_err(RunAgentError::GatewayError)?;
         }
 
-        Ok(all_outputs.join("\n---\n"))
+        Ok((all_outputs.join("\n---\n"), all_executions))
     }
 }

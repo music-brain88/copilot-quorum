@@ -34,6 +34,7 @@ pub use agent::{
         AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
         Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
     },
+    tool_execution::{ToolExecution, ToolExecutionId, ToolExecutionState},
     validation::{ConfigIssue, ConfigIssueCode, Severity},
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };

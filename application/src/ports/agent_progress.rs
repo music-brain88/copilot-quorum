@@ -81,6 +81,43 @@ pub trait AgentProgressNotifier: Send + Sync {
     /// Called when an unknown tool name has been resolved to a valid tool
     fn on_tool_resolved(&self, _original_name: &str, _resolved_name: &str) {}
 
+    // ==================== Tool Execution Lifecycle Callbacks ====================
+    // These track individual tool executions within a task (parent-child via task_id).
+
+    /// Called when a tool execution is created (Pending state).
+    fn on_tool_execution_created(
+        &self,
+        _task_id: &str,
+        _execution_id: &str,
+        _tool_name: &str,
+        _turn: usize,
+    ) {
+    }
+
+    /// Called when a tool execution starts running.
+    fn on_tool_execution_started(&self, _task_id: &str, _execution_id: &str, _tool_name: &str) {}
+
+    /// Called when a tool execution completes successfully.
+    fn on_tool_execution_completed(
+        &self,
+        _task_id: &str,
+        _execution_id: &str,
+        _tool_name: &str,
+        _duration_ms: u64,
+        _output_preview: &str,
+    ) {
+    }
+
+    /// Called when a tool execution fails.
+    fn on_tool_execution_failed(
+        &self,
+        _task_id: &str,
+        _execution_id: &str,
+        _tool_name: &str,
+        _error: &str,
+    ) {
+    }
+
     // ==================== LLM Streaming Callbacks ====================
 
     /// Called for each text chunk received during LLM streaming.
