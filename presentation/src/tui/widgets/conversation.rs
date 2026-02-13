@@ -104,7 +104,7 @@ fn count_wrapped_lines(text: &Text<'_>, available_width: u16) -> u16 {
             if lw == 0 {
                 1u16
             } else {
-                ((lw + w - 1) / w) as u16
+                lw.div_ceil(w) as u16
             }
         })
         .sum()
