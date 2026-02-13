@@ -234,7 +234,8 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_start" => {
+                    | "tool.execution_start"
+                    | "tool.execution_partial_result" => {
                         trace!("Stream: {}", event_type);
                     }
                     "tool.execution_complete" => {
@@ -368,7 +369,8 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_start" => {
+                    | "tool.execution_start"
+                    | "tool.execution_partial_result" => {
                         trace!("Tool stream: {}", event_type);
                     }
                     other => {
@@ -488,7 +490,8 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_start" => {
+                    | "tool.execution_start"
+                    | "tool.execution_partial_result" => {
                         trace!("Stream: {}", event_type);
                     }
                     "tool.execution_complete" => {
