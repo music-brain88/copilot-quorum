@@ -209,12 +209,12 @@ async fn main() -> Result<()> {
     // Build layer-specific configs from FileConfig + CLI
     let (_output_config, repl_config) = build_configs(&cli, &config);
 
-    // Parse models: CLI > default
-    let models: Vec<Model> = if !cli.model.is_empty() {
-        cli.model.iter().map(|s| s.parse().unwrap()).collect()
-    } else {
-        Model::default_models()
-    };
+    // Parse models from CLI --model flag (empty if not specified)
+    let cli_models: Vec<Model> = cli
+        .model
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
 
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
@@ -260,12 +260,12 @@ async fn main() -> Result<()> {
         agent_config = agent_config.with_review_models(models);
     }
 
-    // CLI --model flag overrides decision_model (for backward compatibility)
+    // CLI --model flag overrides config file models (for backward compatibility)
     // First model from CLI becomes decision model, rest become review models
-    if !models.is_empty() {
-        agent_config = agent_config.with_decision_model(models[0].clone());
-        if models.len() > 1 {
-            agent_config = agent_config.with_review_models(models[1..].to_vec());
+    if !cli_models.is_empty() {
+        agent_config = agent_config.with_decision_model(cli_models[0].clone());
+        if cli_models.len() > 1 {
+            agent_config = agent_config.with_review_models(cli_models[1..].to_vec());
         }
     }
 
