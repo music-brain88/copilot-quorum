@@ -61,8 +61,9 @@ impl<'a> ConversationWidget<'a> {
 impl<'a> Widget for ConversationWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let text = self.format_messages();
-        let total_lines = text.lines.len() as u16;
         let visible_height = area.height.saturating_sub(2); // borders
+        let content_width = area.width.saturating_sub(2); // borders
+        let total_lines = count_wrapped_lines(&text, content_width);
 
         // Calculate scroll: scroll_offset=0 means "show bottom"
         let scroll = if total_lines > visible_height {
@@ -84,4 +85,23 @@ impl<'a> Widget for ConversationWidget<'a> {
             .scroll((scroll, 0))
             .render(area, buf);
     }
+}
+
+/// Count the total number of physical (wrapped) lines for a given available width.
+///
+/// `Paragraph::scroll((row, 0))` operates on physical lines after word-wrap,
+/// but `Text::lines.len()` returns the logical (pre-wrap) count. This function
+/// estimates the physical line count so scroll calculations stay accurate.
+fn count_wrapped_lines(text: &Text<'_>, available_width: u16) -> u16 {
+    if available_width == 0 {
+        return text.lines.len() as u16;
+    }
+    let w = available_width as usize;
+    text.lines
+        .iter()
+        .map(|line| {
+            let lw = line.width();
+            if lw == 0 { 1u16 } else { lw.div_ceil(w) as u16 }
+        })
+        .sum()
 }

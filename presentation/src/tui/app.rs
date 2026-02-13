@@ -41,6 +41,7 @@ use futures::stream::StreamExt;
 use quorum_application::{
     AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort, UiEvent,
 };
+use quorum_domain::core::string::truncate;
 use quorum_domain::{AgentConfig, ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
@@ -685,12 +686,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                                             ("✓", d)
                                         }
                                         ToolExecutionDisplayStatus::Error { message } => {
-                                            let msg = if message.len() > 40 {
-                                                format!("{}...", &message[..37])
-                                            } else {
-                                                message.clone()
-                                            };
-                                            ("✗", msg)
+                                            ("✗", truncate(message, 40))
                                         }
                                         _ => ("…", String::new()),
                                     };
