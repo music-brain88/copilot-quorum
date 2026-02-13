@@ -194,15 +194,15 @@ impl AgentProgressNotifier for AgentProgressReporter {
             } else {
                 println!("    {} Failed: {}", "✗".red(), task.description.red());
             }
-            if let Some(ref result) = task.result
-                && !result.output.is_empty()
-            {
-                println!(
-                    "      {} {}",
-                    "Output:".dimmed(),
-                    truncate(&result.output, 200).dimmed()
-                );
-            }
+        }
+        if let Some(ref result) = task.result
+            && !result.output.is_empty()
+        {
+            println!(
+                "      {} {}",
+                "Output:".dimmed(),
+                truncate(&result.output, 200).dimmed()
+            );
         }
     }
 
@@ -571,8 +571,7 @@ impl AgentProgressNotifier for SimpleAgentProgress {
         } else {
             println!("  {} {}", "✗".red(), task.description);
         }
-        if self.verbose
-            && let Some(ref result) = task.result
+        if let Some(ref result) = task.result
             && !result.output.is_empty()
         {
             println!("    Output: {}", truncate(&result.output, 200));
