@@ -69,6 +69,61 @@ struct SessionStartEvent {
     session_id: String,
 }
 
+/// Try to extract text content from a session event's data payload.
+///
+/// Handles multiple possible JSON structures that the Copilot CLI
+/// may use for events like `assistant.turn_end`:
+///
+/// - `{ "data": { "content": "text" } }` — string content
+/// - `{ "data": { "content": [{ "type": "text", "text": "..." }] } }` — content blocks array
+/// - `{ "data": { "message": { "content": "text" } } }` — nested message
+/// - `{ "data": { "text": "..." } }` — direct text field
+fn extract_event_text(event: &serde_json::Value) -> Option<String> {
+    let data = event.get("data")?;
+
+    // Path 1: data.content as string
+    if let Some(s) = data.get("content").and_then(|c| c.as_str())
+        && !s.is_empty()
+    {
+        return Some(s.to_string());
+    }
+
+    // Path 2: data.content as array of content blocks
+    if let Some(arr) = data.get("content").and_then(|c| c.as_array()) {
+        let mut text = String::new();
+        for block in arr {
+            if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(t);
+            }
+        }
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+
+    // Path 3: data.message.content as string
+    if let Some(s) = data
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        && !s.is_empty()
+    {
+        return Some(s.to_string());
+    }
+
+    // Path 4: data.text as string
+    if let Some(s) = data.get("text").and_then(|t| t.as_str())
+        && !s.is_empty()
+    {
+        return Some(s.to_string());
+    }
+
+    None
+}
+
 /// A per-session channel for receiving routed messages.
 ///
 /// Each [`CopilotSession`](super::session::CopilotSession) owns a
@@ -107,6 +162,7 @@ impl SessionChannel {
     /// read are logged as warnings and ignored.
     pub async fn read_streaming(&mut self, mut on_chunk: impl FnMut(&str)) -> Result<String> {
         let mut full_content = String::new();
+        let mut turn_delta_bytes: usize = 0;
 
         loop {
             let msg = self.recv().await?;
@@ -119,24 +175,80 @@ impl SessionChannel {
                         {
                             on_chunk(content);
                             full_content.push_str(content);
+                            turn_delta_bytes += content.len();
                         }
                     }
                     "assistant.message" | "assistant.message.completed" => {
-                        if let Some(data) = event.get("data")
+                        // Use completed content when no deltas were received for this turn.
+                        // Unlike checking full_content.is_empty(), using turn_delta_bytes
+                        // allows content accumulation across multiple turns.
+                        if turn_delta_bytes == 0
+                            && let Some(data) = event.get("data")
                             && let Some(content) = data.get("content").and_then(|c| c.as_str())
                             && !content.is_empty()
-                            && full_content.is_empty()
                         {
                             on_chunk(content);
                             full_content.push_str(content);
                         }
                     }
+                    "assistant.turn_start" => {
+                        turn_delta_bytes = 0;
+                    }
+                    "assistant.turn_end" => {
+                        // Fallback: extract content from turn_end when no deltas were received
+                        if turn_delta_bytes == 0
+                            && let Some(text) = extract_event_text(&event)
+                        {
+                            debug!("Stream: turn_end fallback content ({} bytes)", text.len());
+                            on_chunk(&text);
+                            full_content.push_str(&text);
+                        }
+                        debug!(
+                            "Stream: assistant.turn_end (turn_deltas: {}, total: {} bytes)",
+                            turn_delta_bytes,
+                            full_content.len()
+                        );
+                    }
                     "session.idle" => {
-                        debug!("Session idle, streaming complete");
+                        debug!(
+                            "Session idle, streaming complete ({} bytes)",
+                            full_content.len()
+                        );
                         return Ok(full_content);
                     }
+                    "session.error" => {
+                        let error_msg = event
+                            .get("data")
+                            .and_then(|d| d.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Unknown session error");
+                        warn!("Session error: {}", error_msg);
+                        return Err(CopilotError::RpcError {
+                            code: -1,
+                            message: error_msg.to_string(),
+                        });
+                    }
+                    // Known informational events
+                    "pending_messages.modified"
+                    | "user.message"
+                    | "session.usage_info"
+                    | "assistant.usage"
+                    | "assistant.reasoning"
+                    | "tool.execution_start" => {
+                        trace!("Stream: {}", event_type);
+                    }
+                    "tool.execution_complete" => {
+                        debug!(
+                            "Stream: tool.execution_complete: {}",
+                            serde_json::to_string(&event).unwrap_or_default()
+                        );
+                    }
                     other => {
-                        trace!("Ignoring event type: {}", other);
+                        debug!(
+                            "Stream: unhandled event '{}': {}",
+                            other,
+                            serde_json::to_string(&event).unwrap_or_default()
+                        );
                     }
                 },
                 RoutedMessage::ToolCall { request_id, params } => {
@@ -170,6 +282,7 @@ impl SessionChannel {
         mut on_chunk: impl FnMut(&str),
     ) -> Result<StreamingOutcome> {
         let mut full_content = String::new();
+        let mut turn_delta_bytes: usize = 0;
 
         loop {
             let msg = self.recv().await?;
@@ -182,24 +295,88 @@ impl SessionChannel {
                         {
                             on_chunk(content);
                             full_content.push_str(content);
+                            turn_delta_bytes += content.len();
+                        } else {
+                            debug!(
+                                "Tool stream: delta with unexpected format: {}",
+                                serde_json::to_string(&event).unwrap_or_default()
+                            );
                         }
                     }
                     "assistant.message" | "assistant.message.completed" => {
-                        if let Some(data) = event.get("data")
+                        // Use completed content when no deltas were received for this turn.
+                        // Unlike checking full_content.is_empty(), using turn_delta_bytes
+                        // allows content accumulation across multiple turns.
+                        if turn_delta_bytes == 0
+                            && let Some(data) = event.get("data")
                             && let Some(content) = data.get("content").and_then(|c| c.as_str())
                             && !content.is_empty()
-                            && full_content.is_empty()
                         {
                             on_chunk(content);
                             full_content.push_str(content);
                         }
                     }
+                    "assistant.turn_start" => {
+                        turn_delta_bytes = 0;
+                    }
+                    "assistant.turn_end" => {
+                        // Fallback: extract content from turn_end when no deltas were received
+                        if turn_delta_bytes == 0
+                            && let Some(text) = extract_event_text(&event)
+                        {
+                            debug!(
+                                "Tool stream: turn_end fallback content ({} bytes)",
+                                text.len()
+                            );
+                            on_chunk(&text);
+                            full_content.push_str(&text);
+                        }
+                        debug!(
+                            "Tool stream: assistant.turn_end (turn_deltas: {}, total: {} bytes)",
+                            turn_delta_bytes,
+                            full_content.len()
+                        );
+                    }
+                    "tool.execution_complete" => {
+                        debug!(
+                            "Tool stream: tool.execution_complete: {}",
+                            serde_json::to_string(&event).unwrap_or_default()
+                        );
+                    }
+                    "session.error" => {
+                        let error_msg = event
+                            .get("data")
+                            .and_then(|d| d.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Unknown session error");
+                        warn!("Tool stream: session error: {}", error_msg);
+                        return Err(CopilotError::RpcError {
+                            code: -1,
+                            message: error_msg.to_string(),
+                        });
+                    }
                     "session.idle" => {
-                        debug!("Session idle, streaming complete");
+                        debug!(
+                            "Tool stream: session idle ({} bytes collected)",
+                            full_content.len()
+                        );
                         return Ok(StreamingOutcome::Idle(full_content));
                     }
+                    // Known informational events
+                    "pending_messages.modified"
+                    | "user.message"
+                    | "session.usage_info"
+                    | "assistant.usage"
+                    | "assistant.reasoning"
+                    | "tool.execution_start" => {
+                        trace!("Tool stream: {}", event_type);
+                    }
                     other => {
-                        trace!("Ignoring event type: {}", other);
+                        debug!(
+                            "Tool stream: unhandled event '{}': {}",
+                            other,
+                            serde_json::to_string(&event).unwrap_or_default()
+                        );
                     }
                 },
                 RoutedMessage::ToolCall { request_id, params } => {
@@ -228,6 +405,7 @@ impl SessionChannel {
         cancellation: CancellationToken,
     ) -> Result<String> {
         let mut full_content = String::new();
+        let mut turn_delta_bytes: usize = 0;
 
         loop {
             if cancellation.is_cancelled() {
@@ -253,24 +431,78 @@ impl SessionChannel {
                         {
                             on_chunk(content);
                             full_content.push_str(content);
+                            turn_delta_bytes += content.len();
                         }
                     }
                     "assistant.message" | "assistant.message.completed" => {
-                        if let Some(data) = event.get("data")
+                        // Use completed content when no deltas were received for this turn.
+                        // Unlike checking full_content.is_empty(), using turn_delta_bytes
+                        // allows content accumulation across multiple turns.
+                        if turn_delta_bytes == 0
+                            && let Some(data) = event.get("data")
                             && let Some(content) = data.get("content").and_then(|c| c.as_str())
                             && !content.is_empty()
-                            && full_content.is_empty()
                         {
                             on_chunk(content);
                             full_content.push_str(content);
                         }
                     }
+                    "assistant.turn_start" => {
+                        turn_delta_bytes = 0;
+                    }
+                    "assistant.turn_end" => {
+                        if turn_delta_bytes == 0
+                            && let Some(text) = extract_event_text(&event)
+                        {
+                            debug!("Stream: turn_end fallback content ({} bytes)", text.len());
+                            on_chunk(&text);
+                            full_content.push_str(&text);
+                        }
+                        debug!(
+                            "Stream: assistant.turn_end (turn_deltas: {}, total: {} bytes)",
+                            turn_delta_bytes,
+                            full_content.len()
+                        );
+                    }
                     "session.idle" => {
-                        debug!("Session idle, streaming complete");
+                        debug!(
+                            "Session idle, streaming complete ({} bytes)",
+                            full_content.len()
+                        );
                         return Ok(full_content);
                     }
+                    "session.error" => {
+                        let error_msg = event
+                            .get("data")
+                            .and_then(|d| d.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Unknown session error");
+                        warn!("Session error: {}", error_msg);
+                        return Err(CopilotError::RpcError {
+                            code: -1,
+                            message: error_msg.to_string(),
+                        });
+                    }
+                    "pending_messages.modified"
+                    | "user.message"
+                    | "session.usage_info"
+                    | "assistant.usage"
+                    | "assistant.reasoning"
+                    | "tool.execution_start" => {
+                        trace!("Stream: {}", event_type);
+                    }
+                    "tool.execution_complete" => {
+                        debug!(
+                            "Stream: tool.execution_complete: {}",
+                            serde_json::to_string(&event).unwrap_or_default()
+                        );
+                    }
                     other => {
-                        trace!("Ignoring event type: {}", other);
+                        debug!(
+                            "Stream: unhandled event '{}': {}",
+                            other,
+                            serde_json::to_string(&event).unwrap_or_default()
+                        );
                     }
                 },
                 RoutedMessage::ToolCall { request_id, params } => {
@@ -652,13 +884,13 @@ impl MessageRouter {
                                         event: ev,
                                     });
                                 } else {
-                                    trace!(
-                                        "Router: no route for session_id={}, dropping event",
-                                        sid
+                                    debug!(
+                                        "Router: no route for session_id={}, dropping event type={}",
+                                        sid, event_type
                                     );
                                 }
                             } else {
-                                trace!("Router: session.event without sessionId/event");
+                                debug!("Router: session.event without sessionId/event");
                             }
                         }
                     } else {
@@ -842,5 +1074,93 @@ impl Drop for MessageRouter {
     fn drop(&mut self) {
         debug!("MessageRouter dropping, killing copilot-cli child process");
         let _ = self.child.start_kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_text_from_string_content() {
+        let event = serde_json::json!({
+            "type": "assistant.turn_end",
+            "data": { "content": "Hello world" }
+        });
+        assert_eq!(extract_event_text(&event).as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn extract_text_from_content_blocks_array() {
+        let event = serde_json::json!({
+            "type": "assistant.turn_end",
+            "data": {
+                "content": [
+                    { "type": "text", "text": "First block" },
+                    { "type": "text", "text": "Second block" }
+                ]
+            }
+        });
+        assert_eq!(
+            extract_event_text(&event).as_deref(),
+            Some("First block\nSecond block")
+        );
+    }
+
+    #[test]
+    fn extract_text_from_message_content() {
+        let event = serde_json::json!({
+            "type": "assistant.turn_end",
+            "data": {
+                "message": { "role": "assistant", "content": "Nested content" }
+            }
+        });
+        assert_eq!(
+            extract_event_text(&event).as_deref(),
+            Some("Nested content")
+        );
+    }
+
+    #[test]
+    fn extract_text_from_data_text() {
+        let event = serde_json::json!({
+            "type": "assistant.turn_end",
+            "data": { "text": "Direct text" }
+        });
+        assert_eq!(extract_event_text(&event).as_deref(), Some("Direct text"));
+    }
+
+    #[test]
+    fn extract_text_returns_none_for_empty() {
+        let event = serde_json::json!({
+            "type": "assistant.turn_end",
+            "data": { "content": "" }
+        });
+        assert!(extract_event_text(&event).is_none());
+    }
+
+    #[test]
+    fn extract_text_returns_none_for_no_data() {
+        let event = serde_json::json!({
+            "type": "assistant.turn_end"
+        });
+        assert!(extract_event_text(&event).is_none());
+    }
+
+    #[test]
+    fn extract_text_skips_non_text_blocks() {
+        let event = serde_json::json!({
+            "type": "assistant.turn_end",
+            "data": {
+                "content": [
+                    { "type": "tool_use", "name": "create_plan", "input": {} },
+                    { "type": "text", "text": "Here is the plan." }
+                ]
+            }
+        });
+        assert_eq!(
+            extract_event_text(&event).as_deref(),
+            Some("Here is the plan.")
+        );
     }
 }
