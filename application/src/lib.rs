@@ -27,6 +27,7 @@ pub use use_cases::init_context::{
     InitContextUseCase, NoInitContextProgress,
 };
 pub use use_cases::run_agent::{RunAgentError, RunAgentInput, RunAgentOutput, RunAgentUseCase};
+pub use use_cases::run_ask::{RunAskError, RunAskInput, RunAskOutput, RunAskUseCase};
 // Re-export ErrorCategory from domain (was previously in run_agent)
 pub use quorum_domain::ErrorCategory;
 pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
@@ -38,8 +39,8 @@ pub use use_cases::gather_context::GatherContextUseCase;
 
 // UI event types (output port for presentation layer)
 pub use ports::ui_event::{
-    AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
-    UiEvent, WelcomeInfo,
+    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
+    QuorumResultEvent, UiEvent, WelcomeInfo,
 };
 
 // Agent controller

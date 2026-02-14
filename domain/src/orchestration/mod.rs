@@ -13,6 +13,7 @@
 //! [`strategy::StrategyExecutor`] is the trait that concrete strategy
 //! implementations use to execute a discussion flow against LLM models.
 
+pub mod buffer;
 pub mod entities;
 pub mod mode;
 pub mod scope;

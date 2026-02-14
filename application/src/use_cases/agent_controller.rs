@@ -11,11 +11,12 @@ use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::NoProgress;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
-    AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
-    UiEvent, WelcomeInfo,
+    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
+    QuorumResultEvent, UiEvent, WelcomeInfo,
 };
 use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::RunAgentUseCase;
+use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
 use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
@@ -253,21 +254,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 CommandAction::Continue
             }
             "/ask" => {
-                let _ = self.tx.send(UiEvent::CommandError {
-                    message: "/ask is being redesigned as Buffer/Tab actions (Issue #119). Use the main input for now.".to_string(),
-                });
+                if args.is_empty() {
+                    let _ = self.tx.send(UiEvent::CommandError {
+                        message: "Usage: /ask <question>\nExample: /ask What does this function do?"
+                            .to_string(),
+                    });
+                } else {
+                    self.run_ask(args).await;
+                }
                 CommandAction::Continue
             }
             "/discuss" => {
                 if args.is_empty() {
                     let _ = self.tx.send(UiEvent::CommandError {
-                        message: "/discuss is being redesigned as Buffer/Tab actions (Issue #119). Use /council <question> for ad-hoc discussions.".to_string(),
+                        message: "Usage: /discuss <topic>\nExample: /discuss What's the best approach for auth?"
+                            .to_string(),
                     });
                 } else {
-                    // Legacy hint: suggest /council
-                    let _ = self.tx.send(UiEvent::CommandError {
-                        message: format!("Use /council {} to run an ad-hoc discussion.", args),
-                    });
+                    // Discuss runs as a Quorum discussion (same as /council)
+                    self.run_council(args).await;
                 }
                 CommandAction::Continue
             }
@@ -431,6 +436,32 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             ));
         }
         context
+    }
+
+    /// Run a lightweight Ask query (single-model, no plan/review).
+    pub async fn run_ask(&self, question: &str) {
+        let model_name = self.config.models().exploration.to_string();
+        let _ = self.tx.send(UiEvent::AskStarting {
+            model: model_name.clone(),
+        });
+
+        let input = self.config.to_ask_input(question);
+        let use_case = RunAskUseCase::new(self.gateway.clone());
+        let result = use_case.execute(input).await;
+
+        match result {
+            Ok(output) => {
+                let _ = self.tx.send(UiEvent::AskResult(AskResultEvent {
+                    answer: output.answer,
+                    model: output.model,
+                }));
+            }
+            Err(e) => {
+                let _ = self.tx.send(UiEvent::AskError {
+                    error: e.to_string(),
+                });
+            }
+        }
     }
 
     /// Run Quorum Discussion with conversation context
@@ -871,47 +902,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_discuss_without_args_shows_redesign_message() {
+    async fn test_discuss_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/discuss").await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
-                assert!(message.contains("redesigned"));
-                assert!(message.contains("#119"));
+                assert!(message.contains("Usage:"));
+                assert!(message.contains("/discuss"));
             }
             other => panic!("Expected CommandError, got {:?}", other),
         }
     }
 
     #[tokio::test]
-    async fn test_discuss_with_args_shows_council_hint() {
+    async fn test_discuss_with_args_runs_quorum() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/discuss some question").await;
+        // Discuss with args now runs quorum (which will fail with mock,
+        // but the first event should be QuorumStarting)
         let event = rx.try_recv().unwrap();
-        match event {
-            UiEvent::CommandError { message } => {
-                assert!(message.contains("/council"));
-            }
-            other => panic!("Expected CommandError, got {:?}", other),
-        }
+        // QuorumStarting or QuorumError (mock gateway returns a basic response)
+        assert!(
+            matches!(event, UiEvent::QuorumStarting)
+                || matches!(event, UiEvent::QuorumError { .. }),
+            "Expected QuorumStarting or QuorumError, got {:?}",
+            event
+        );
     }
 
     #[tokio::test]
-    async fn test_ask_command_shows_redesign_message() {
+    async fn test_ask_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/ask").await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
-                assert!(message.contains("redesigned"));
-                assert!(message.contains("#119"));
+                assert!(message.contains("Usage:"));
+                assert!(message.contains("/ask"));
             }
             other => panic!("Expected CommandError, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_ask_with_args_runs_ask() {
+        let (mut controller, mut rx) = create_test_controller();
+
+        controller.handle_command("/ask what is this?").await;
+        // First event should be AskStarting
+        let event = rx.try_recv().unwrap();
+        assert!(
+            matches!(event, UiEvent::AskStarting { .. }),
+            "Expected AskStarting, got {:?}",
+            event
+        );
     }
 
     #[tokio::test]

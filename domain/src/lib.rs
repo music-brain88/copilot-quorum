@@ -47,6 +47,7 @@ pub use context::{
 };
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
+    buffer::{BufferContextMode, BufferType, DEFAULT_MAX_BUFFER_DEPTH},
     entities::{Phase, QuorumRun},
     mode::{ConsensusLevel, PlanningApproach},
     scope::PhaseScope,

@@ -48,6 +48,14 @@ pub enum UiEvent {
     /// Agent execution failed
     AgentError(AgentErrorEvent),
 
+    // === Ask Query ===
+    /// Ask query starting
+    AskStarting { model: String },
+    /// Ask query completed
+    AskResult(AskResultEvent),
+    /// Ask query failed
+    AskError { error: String },
+
     // === Quorum Discussion ===
     /// Quorum discussion starting
     QuorumStarting,
@@ -120,6 +128,15 @@ pub struct AgentResultEvent {
 pub struct AgentErrorEvent {
     pub error: String,
     pub cancelled: bool,
+}
+
+/// Ask query result for display
+#[derive(Debug, Clone)]
+pub struct AskResultEvent {
+    /// The model's answer
+    pub answer: String,
+    /// Which model answered
+    pub model: String,
 }
 
 /// Quorum discussion result for display

@@ -22,6 +22,7 @@
 
 use crate::config::ExecutionParams;
 use crate::use_cases::run_agent::RunAgentInput;
+use crate::use_cases::run_ask::RunAskInput;
 use crate::use_cases::run_quorum::RunQuorumInput;
 use quorum_domain::agent::validation::{ConfigIssue, Severity};
 use quorum_domain::{AgentPolicy, ConsensusLevel, ModelConfig, SessionMode};
@@ -130,6 +131,14 @@ impl QuorumConfig {
         )
     }
 
+    /// Build a [`RunAskInput`] for a lightweight Ask buffer.
+    ///
+    /// Ask is Solo-fixed: uses only [`ModelConfig`] and [`ExecutionParams`],
+    /// excluding [`SessionMode`] and [`AgentPolicy`].
+    pub fn to_ask_input(&self, question: impl Into<String>) -> RunAskInput {
+        RunAskInput::new(question, self.models.clone(), self.execution.clone())
+    }
+
     /// Build a [`RunQuorumInput`] for an ad-hoc quorum discussion.
     ///
     /// Uses review models as participants, with the first review model as moderator.
@@ -192,6 +201,16 @@ mod tests {
         let input = config.to_agent_input("Fix the bug");
         assert_eq!(input.request, "Fix the bug");
         assert_eq!(input.mode.consensus_level, ConsensusLevel::Ensemble);
+        assert_eq!(input.execution.working_dir, Some("/project".to_string()));
+    }
+
+    #[test]
+    fn test_to_ask_input() {
+        let config = QuorumConfig::default().with_working_dir("/project");
+
+        let input = config.to_ask_input("What is this?");
+        assert_eq!(input.question, "What is this?");
+        assert_eq!(input.models.exploration, config.models().exploration);
         assert_eq!(input.execution.working_dir, Some("/project".to_string()));
     }
 

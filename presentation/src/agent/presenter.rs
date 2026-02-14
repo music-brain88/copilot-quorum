@@ -8,8 +8,8 @@ use crate::ConsoleFormatter;
 use crate::agent::thought::summarize_thoughts;
 use colored::Colorize;
 use quorum_application::{
-    AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
-    UiEvent, WelcomeInfo,
+    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
+    QuorumResultEvent, UiEvent, WelcomeInfo,
 };
 use quorum_domain::{ConsensusLevel, PhaseScope};
 
@@ -56,6 +56,12 @@ impl ReplPresenter {
             UiEvent::AgentStarting { mode } => self.render_agent_starting(*mode),
             UiEvent::AgentResult(result) => self.render_agent_result(result),
             UiEvent::AgentError(error) => self.render_agent_error(error),
+            UiEvent::AskStarting { model } => self.render_ask_starting(model),
+            UiEvent::AskResult(result) => self.render_ask_result(result),
+            UiEvent::AskError { error } => {
+                println!("{} {}", "Ask failed:".red().bold(), error);
+                println!();
+            }
             UiEvent::QuorumStarting => self.render_quorum_starting(),
             UiEvent::QuorumResult(result) => self.render_quorum_result(result),
             UiEvent::QuorumError { error } => {
@@ -160,7 +166,11 @@ impl ReplPresenter {
             "/ens".cyan()
         );
         println!(
-            "  {} - Consult quorum (Quorum Discussion)",
+            "  {}     - Quick single-model Q&A",
+            "/ask".cyan()
+        );
+        println!(
+            "  {} - Quorum Discussion (consult models)",
             "/discuss".cyan()
         );
         println!("  {}    - Toggle fast mode (skip reviews)", "/fast".cyan());
@@ -196,8 +206,9 @@ impl ReplPresenter {
         println!("{}", "Strategy Commands:".bold().blue());
         println!("  /strategy <s>        - Change strategy (quorum, debate)");
         println!();
-        println!("{}", "Quorum Commands:".bold().magenta());
-        println!("  /discuss <question>  - Quorum Discussion (consult multiple models)");
+        println!("{}", "Buffer Commands:".bold().blue());
+        println!("  /ask <question>      - Quick single-model Q&A (exploration model)");
+        println!("  /discuss <topic>     - Quorum Discussion (consult multiple models)");
         println!("  /council <question>  - Alias for /discuss");
         println!();
         println!("{}", "Other Commands:".bold());
@@ -459,6 +470,28 @@ impl ReplPresenter {
             println!();
             println!("{} {}", "Error:".red().bold(), error.error);
         }
+        println!();
+    }
+
+    fn render_ask_starting(&self, model: &str) {
+        println!();
+        println!(
+            "{} {} {}",
+            "━".repeat(50).dimmed(),
+            "Ask".bold().blue(),
+            format!("({})", model).dimmed()
+        );
+        println!();
+    }
+
+    fn render_ask_result(&self, result: &AskResultEvent) {
+        println!();
+        println!("{}", result.answer);
+        println!();
+        println!(
+            "{}",
+            format!("— {} (Ask)", result.model).dimmed()
+        );
         println!();
     }
 

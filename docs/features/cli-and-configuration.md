@@ -68,8 +68,8 @@ REPL（対話モード）で使用できるスラッシュコマンド一覧:
 | `/fast` | | PhaseScope を Fast に切り替え（レビュースキップ） |
 | `/scope <scope>` | | フェーズスコープを変更 (full, fast, plan-only) |
 | `/strategy <strategy>` | | 戦略を変更 (quorum, debate) |
-| `/ask` | | (再設計予定 — Issue #119) |
-| `/discuss` | | (再設計予定 — Issue #119、`/council <question>` を使用) |
+| `/ask <question>` | | 単一モデルQ&A（exploration モデル使用） |
+| `/discuss <topic>` | | Quorum Discussion を実行（`/council` と同等） |
 | `/council <question>` | | Quorum Discussion を実行（複数モデルに相談） |
 | `/init [--force]` | | プロジェクトコンテキストを初期化 |
 | `/config` | | 現在の設定を表示 |
