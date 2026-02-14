@@ -1038,14 +1038,11 @@ async fn controller_task<
 /// Task output contains interleaved tool results and LLM text separated by `\n---\n`.
 /// This function filters out tool result sections (lines starting with `[tool_name]:`)
 /// and returns the last LLM text block, which is typically the final analysis/summary.
-/// The result is truncated to 500 characters.
 fn extract_response_text(output: &str) -> String {
-    use quorum_domain::core::string::truncate;
-
     let sections: Vec<&str> = output.split("\n---\n").collect();
 
     // Find the last section that isn't a tool result
-    let llm_text = sections
+    sections
         .iter()
         .rev()
         .find(|section| {
@@ -1056,14 +1053,8 @@ fn extract_response_text(output: &str) -> String {
                     .next()
                     .is_some_and(|first| first.contains("]:") && first.starts_with('['))
         })
-        .map(|s| s.trim())
-        .unwrap_or("");
-
-    if llm_text.is_empty() {
-        return String::new();
-    }
-
-    truncate(llm_text, 500)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1101,11 +1092,10 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_truncates_long_text() {
-        let long_text = "A".repeat(600);
+    fn test_extract_preserves_long_text() {
+        let long_text = "A".repeat(12000);
         let result = extract_response_text(&long_text);
-        assert!(result.len() <= 503); // 500 + "..."
-        assert!(result.ends_with("..."));
+        assert_eq!(result.len(), 12000);
     }
 
     #[test]
