@@ -32,8 +32,7 @@ use crate::use_cases::gather_context::GatherContextUseCase;
 use crate::use_cases::shared::check_cancelled;
 use quorum_domain::core::string::truncate;
 use quorum_domain::{
-    AgentPhase, AgentPromptTemplate, AgentState, HumanDecision, ModelVote, ReviewRound,
-    StreamEvent, Thought,
+    AgentPhase, AgentPromptTemplate, HumanDecision, ModelVote, ReviewRound, StreamEvent, Thought,
 };
 use review::QuorumActionReviewer;
 use std::path::Path;
@@ -219,14 +218,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         // Initialize agent state
         let agent_id = format!("agent-{}", chrono_lite_timestamp());
-        let mut state = AgentState::new(
-            agent_id,
-            &input.request,
-            input.mode.clone(),
-            input.models.clone(),
-            input.policy.clone(),
-            input.execution.max_iterations,
-        );
+        let mut state = input.to_agent_state(agent_id);
 
         // Create system prompt (shared across phases)
         let system_prompt = AgentPromptTemplate::agent_system();

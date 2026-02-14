@@ -5,7 +5,7 @@ use crate::ports::llm_gateway::GatewayError;
 use quorum_domain::agent::agent_policy::AgentPolicy;
 use quorum_domain::agent::model_config::ModelConfig;
 use quorum_domain::orchestration::session_mode::SessionMode;
-use quorum_domain::{EnsemblePlanResult, Plan};
+use quorum_domain::{AgentId, AgentState, EnsemblePlanResult, Plan};
 use thiserror::Error;
 
 /// Errors that can occur during Agent execution
@@ -123,6 +123,18 @@ impl RunAgentInput {
             policy,
             execution,
         }
+    }
+
+    /// Build an [`AgentState`] from this input, starting in the ContextGathering phase.
+    pub fn to_agent_state(&self, id: impl Into<AgentId>) -> AgentState {
+        AgentState::new(
+            id,
+            &self.request,
+            self.mode.clone(),
+            self.models.clone(),
+            self.policy.clone(),
+            self.execution.max_iterations,
+        )
     }
 }
 
