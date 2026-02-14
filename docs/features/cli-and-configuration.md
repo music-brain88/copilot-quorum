@@ -13,7 +13,7 @@ copilot-quorum は CLI ツールとして動作し、ワンショット実行と
 2 段階で設定できます。`/init` コマンドによるプロジェクトコンテキストの自動生成も可能です。
 
 エージェントの動作は 3 つの直交する軸（`ConsensusLevel`, `PhaseScope`, `OrchestrationStrategy`）で構成され、
-それぞれ独立して設定・切り替えが可能です。
+それぞれ独立して設定・切り替えが可能です。モデル設定は `[models]` セクションで一元管理されます。
 
 ---
 
@@ -67,8 +67,8 @@ REPL（対話モード）で使用できるスラッシュコマンド一覧:
 | `/fast` | | PhaseScope を Fast に切り替え（レビュースキップ） |
 | `/scope <scope>` | | フェーズスコープを変更 (full, fast, plan-only) |
 | `/strategy <strategy>` | | 戦略を変更 (quorum, debate) |
-| `/ask` | | Ask モードに切り替え（Q&A、軽量） |
-| `/discuss` | | Discuss モードに切り替え（マルチモデル議論） |
+| `/ask` | | (再設計予定 — Issue #119) |
+| `/discuss` | | (再設計予定 — Issue #119、`/council <question>` を使用) |
 | `/council <question>` | | Quorum Discussion を実行（複数モデルに相談） |
 | `/init [--force]` | | プロジェクトコンテキストを初期化 |
 | `/config` | | 現在の設定を表示 |
@@ -110,31 +110,9 @@ REPL では 2 つの合意レベルが利用可能です。`/mode <level>` ま�
 
 定義ファイル: `domain/src/orchestration/strategy.rs`（`OrchestrationStrategy` enum）
 
-### Interaction Type / インタラクションタイプ
-
-ユーザーとの対話方式を制御します。
-
-| Type | Command | Description |
-|------|---------|-------------|
-| **Ask** (default) | `/ask` | 質問 → 回答（軽量、シングルターン） |
-| **Discuss** | `/discuss` | マルチモデル議論 → 合意形成 |
-
-定義ファイル: `domain/src/orchestration/interaction.rs`（`InteractionType` enum）
-
-### Context Mode / コンテキストモード
-
-会話コンテキストの共有を制御します。
-
-| Mode | Description |
-|------|-------------|
-| **Shared** (default) | 現在の会話コンテキストを共有 |
-| **Fresh** | コンテキストなしで実行 |
-
-定義ファイル: `domain/src/orchestration/interaction.rs`（`ContextMode` enum）
-
 ### Combination Validation / 組み合わせバリデーション
 
-上記 5 軸の一部の組み合わせは無効・未サポートです。起動時に自動検出され、Warning または Error が表示されます。
+上記 3 軸の一部の組み合わせは無効・未サポートです。起動時に自動検出され、Warning または Error が表示されます。
 
 | 組み合わせ | Severity | 理由 |
 |------------|----------|------|
@@ -148,14 +126,12 @@ Error の場合は実行が中断されます。詳細は [Agent System](./agent
 
 ### Prompt Display / プロンプト表示
 
-REPL のプロンプトは現在のモード（ConsensusLevel × InteractionType）に応じて変わります:
+REPL のプロンプトは現在の ConsensusLevel に応じて変わります:
 
-| ConsensusLevel | InteractionType | Prompt |
-|----------------|----------------|--------|
-| Solo | Ask | `solo:ask>` |
-| Solo | Discuss | `solo:discuss>` |
-| Ensemble | Ask | `ens:ask>` |
-| Ensemble | Discuss | `ens:discuss>` |
+| ConsensusLevel | Prompt |
+|----------------|--------|
+| Solo | `solo>` |
+| Ensemble | `ens>` |
 
 ### Context Management / コンテキスト管理
 
@@ -193,23 +169,21 @@ REPL のプロンプトは現在のモード（ConsensusLevel × InteractionType
 
 ```toml
 # ============================================================
+# Model Settings / モデル設定
+# ============================================================
+[models]
+exploration = "gpt-5.2-codex"           # コンテキスト収集用（高速・低コスト）
+decision = "claude-sonnet-4.5"          # 計画作成・高リスクツール判断用
+review = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]  # Quorum レビュー用
+
+# ============================================================
 # Quorum Settings / 合議設定
 # ============================================================
 [quorum]
 rule = "majority"        # 合意ルール: "majority", "unanimous", "atleast:N", "N%"
 min_models = 2           # 有効な合意に必要な最小モデル数
-
-[quorum.discussion]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
-moderator = "claude-opus-4.5"
-enable_peer_review = true   # Phase 2 (Peer Review) の有効化
-
-# ============================================================
-# Legacy Council Settings（後方互換、quorum.discussion に移行推奨）
-# ============================================================
-[council]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
-moderator = "claude-sonnet-4.5"
+moderator = "claude-opus-4.5"    # シンセシスモデル
+enable_peer_review = true        # Phase 2 (Peer Review) の有効化
 
 # ============================================================
 # Agent Settings / エージェント設定
@@ -220,16 +194,6 @@ phase_scope = "full"                      # "full", "fast", "plan-only"
 strategy = "quorum"                       # "quorum" or "debate"
 hil_mode = "interactive"                  # "interactive", "auto_reject", "auto_approve"
 max_plan_revisions = 3                    # 人間介入までの最大計画修正回数
-exploration_model = "claude-haiku-4.5"    # コンテキスト収集用（高速・低コスト）
-decision_model = "claude-sonnet-4.5"      # 計画作成・高リスクツール判断用
-review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]  # Quorum レビュー用
-
-# ============================================================
-# Behavior Settings / 動作設定
-# ============================================================
-[behavior]
-enable_review = true       # ピアレビューをデフォルトで有効化
-timeout_seconds = null     # タイムアウト秒数（null = 無制限）
 
 # ============================================================
 # Output Settings / 出力設定
@@ -248,27 +212,14 @@ history_file = null        # 履歴ファイルのパス（null = デフォル�
 # ============================================================
 # Tool Settings / ツール設定
 # ============================================================
-[tools]
-providers = ["cli", "builtin"]    # 有効化するプロバイダー
-suggest_enhanced_tools = true     # 強化ツール検知時の提案
-
-[tools.builtin]
-enabled = true
-
-[tools.cli]
-enabled = true
-
-[tools.cli.aliases]
-grep_search = "grep"    # "grep" or "rg" (ripgrep)
-glob_search = "find"    # "find" or "fd"
-
-[tools.mcp]
-enabled = false
-
-[[tools.mcp.servers]]
-name = "filesystem"
-command = "npx"
-args = ["-y", "@anthropic/mcp-server-filesystem", "/workspace"]
+# [tools.custom.my_tool]
+# description = "My custom tool"
+# command = "echo {input}"
+# risk_level = "high"
+# [tools.custom.my_tool.parameters.input]
+# type = "string"
+# description = "Input text"
+# required = true
 
 # ============================================================
 # TUI Settings / TUI 設定
@@ -331,4 +282,4 @@ CLI Arguments / REPL Input
 - [Ensemble Mode](./ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
 - [Tool System](./tool-system.md) - ツール設定の詳細
 
-<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /ask, /discuss, /council, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。5つの直交設定軸: ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）、InteractionType（Ask/Discuss）、ContextMode（Shared/Fresh）。/discuss は引数なしのモードコマンドに変更、旧 /discuss <question> は /council に移行。プロンプト表示は solo:ask> / ens:discuss> 等。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults。[tui.input] セクションで TUI の入力設定（max_height, context_header, submit_key, newline_key, editor_key, editor_action, dynamic_height）を管理。主要ファイルは application/src/use_cases/agent_controller.rs と infrastructure/src/config/。 -->
+<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /council, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。3つの直交設定軸: ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）。モデル設定は [models] セクションで一元管理（exploration, decision, review）。プロンプト表示は solo> / ens>。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults。[tui.input] セクションで TUI の入力設定（max_height, context_header, submit_key, newline_key, editor_key, editor_action, dynamic_height）を管理。主要ファイルは application/src/use_cases/agent_controller.rs と infrastructure/src/config/。 -->
