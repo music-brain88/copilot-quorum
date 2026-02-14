@@ -121,41 +121,37 @@ pub fn extract_references(text: &str) -> Vec<ResourceReference> {
 
         // === Pattern 2: Cross-repo `owner/repo#N` ===
         // Look for `{owner}/{repo}#{N}` — owner/repo must be alphanumeric + hyphens
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-            if let Some(parsed) = try_parse_cross_repo(&chars, char_idx, byte_idx, text) {
-                if !is_matched(byte_idx, &matched_positions) {
+        if (ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+            && let Some(parsed) = try_parse_cross_repo(&chars, char_idx, byte_idx, text)
+                && !is_matched(byte_idx, &matched_positions) {
                     matched_positions.push((parsed.start_byte, parsed.end_byte));
                     seen.insert(parsed.reference);
                     byte_idx = parsed.end_byte;
                     char_idx = parsed.end_char;
                     continue;
                 }
-            }
-        }
 
         // === Pattern 3: Typed explicit (Issue #N, PR #N, Pull Request #N) ===
-        if (ch == 'I' || ch == 'i') && char_idx + 6 < chars.len() {
-            if let Some(parsed) = try_parse_typed_issue(&chars, char_idx, byte_idx, text) {
+        if (ch == 'I' || ch == 'i') && char_idx + 6 < chars.len()
+            && let Some(parsed) = try_parse_typed_issue(&chars, char_idx, byte_idx, text) {
                 matched_positions.push((parsed.start_byte, parsed.end_byte));
                 seen.insert(parsed.reference);
                 byte_idx = parsed.end_byte;
                 char_idx = parsed.end_char;
                 continue;
             }
-        }
-        if (ch == 'P' || ch == 'p') && char_idx + 3 < chars.len() {
-            if let Some(parsed) = try_parse_typed_pr(&chars, char_idx, byte_idx, text) {
+        if (ch == 'P' || ch == 'p') && char_idx + 3 < chars.len()
+            && let Some(parsed) = try_parse_typed_pr(&chars, char_idx, byte_idx, text) {
                 matched_positions.push((parsed.start_byte, parsed.end_byte));
                 seen.insert(parsed.reference);
                 byte_idx = parsed.end_byte;
                 char_idx = parsed.end_char;
                 continue;
             }
-        }
 
         // === Skip Discussion #N ===
-        if (ch == 'D' || ch == 'd') && char_idx + 11 < chars.len() {
-            if matches_word_ci(&chars, char_idx, "Discussion") {
+        if (ch == 'D' || ch == 'd') && char_idx + 11 < chars.len()
+            && matches_word_ci(&chars, char_idx, "Discussion") {
                 // Skip past "Discussion" and any following "#N"
                 let skip_len = "Discussion".len();
                 let mut skip_char = char_idx + skip_len;
@@ -182,11 +178,10 @@ pub fn extract_references(text: &str) -> Vec<ResourceReference> {
                     continue;
                 }
             }
-        }
 
         // === Pattern 4 & 5: Bare #N or range #N-M ===
-        if ch == '#' && !is_matched(byte_idx, &matched_positions) {
-            if let Some(parsed) = try_parse_bare_ref(&chars, char_idx, byte_idx) {
+        if ch == '#' && !is_matched(byte_idx, &matched_positions)
+            && let Some(parsed) = try_parse_bare_ref(&chars, char_idx, byte_idx) {
                 for r in parsed.references {
                     seen.insert(r);
                 }
@@ -195,7 +190,6 @@ pub fn extract_references(text: &str) -> Vec<ResourceReference> {
                 char_idx = parsed.end_char;
                 continue;
             }
-        }
 
         byte_idx += ch_len;
         char_idx += 1;
@@ -379,7 +373,7 @@ fn try_parse_cross_repo(
             repo: Some(full_repo),
             number,
         },
-        start_byte: start_byte,
+        start_byte,
         end_byte: bi,
         end_char: ci,
     })
@@ -482,8 +476,8 @@ fn try_parse_typed_pr(
                     }
                     if ci > num_start {
                         let num_str: String = chars[num_start..ci].iter().collect();
-                        if let Ok(number) = num_str.parse::<u64>() {
-                            if number > 0 {
+                        if let Ok(number) = num_str.parse::<u64>()
+                            && number > 0 {
                                 return Some(ParsedRef {
                                     reference: ResourceReference::GitHubPullRequest {
                                         repo: None,
@@ -494,7 +488,6 @@ fn try_parse_typed_pr(
                                     end_char: ci,
                                 });
                             }
-                        }
                     }
                 }
             }
@@ -531,8 +524,8 @@ fn try_parse_typed_pr(
             }
             if ci > num_start {
                 let num_str: String = chars[num_start..ci].iter().collect();
-                if let Ok(number) = num_str.parse::<u64>() {
-                    if number > 0 {
+                if let Ok(number) = num_str.parse::<u64>()
+                    && number > 0 {
                         return Some(ParsedRef {
                             reference: ResourceReference::GitHubPullRequest { repo: None, number },
                             start_byte,
@@ -540,7 +533,6 @@ fn try_parse_typed_pr(
                             end_char: ci,
                         });
                     }
-                }
             }
         }
     }
@@ -590,8 +582,8 @@ fn try_parse_bare_ref(
 
         if ci > range_num_start {
             let range_str: String = chars[range_num_start..ci].iter().collect();
-            if let Ok(second_num) = range_str.parse::<u64>() {
-                if second_num > first_num && (second_num - first_num) <= 10 {
+            if let Ok(second_num) = range_str.parse::<u64>()
+                && second_num > first_num && (second_num - first_num) <= 10 {
                     // Valid range
                     let refs: Vec<ResourceReference> = (first_num..=second_num)
                         .map(|n| ResourceReference::GitHubIssue {
@@ -601,12 +593,11 @@ fn try_parse_bare_ref(
                         .collect();
                     return Some(ParsedBareRef {
                         references: refs,
-                        start_byte: start_byte,
+                        start_byte,
                         end_byte: bi,
                         end_char: ci,
                     });
                 }
-            }
         }
 
         // Not a valid range — fall back to single ref (reset past dash)
@@ -619,7 +610,7 @@ fn try_parse_bare_ref(
             repo: None,
             number: first_num,
         }],
-        start_byte: start_byte,
+        start_byte,
         end_byte: bi,
         end_char: ci,
     })
