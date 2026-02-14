@@ -123,73 +123,82 @@ pub fn extract_references(text: &str) -> Vec<ResourceReference> {
         // Look for `{owner}/{repo}#{N}` — owner/repo must be alphanumeric + hyphens
         if (ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
             && let Some(parsed) = try_parse_cross_repo(&chars, char_idx, byte_idx, text)
-                && !is_matched(byte_idx, &matched_positions) {
-                    matched_positions.push((parsed.start_byte, parsed.end_byte));
-                    seen.insert(parsed.reference);
-                    byte_idx = parsed.end_byte;
-                    char_idx = parsed.end_char;
-                    continue;
-                }
+            && !is_matched(byte_idx, &matched_positions)
+        {
+            matched_positions.push((parsed.start_byte, parsed.end_byte));
+            seen.insert(parsed.reference);
+            byte_idx = parsed.end_byte;
+            char_idx = parsed.end_char;
+            continue;
+        }
 
         // === Pattern 3: Typed explicit (Issue #N, PR #N, Pull Request #N) ===
-        if (ch == 'I' || ch == 'i') && char_idx + 6 < chars.len()
-            && let Some(parsed) = try_parse_typed_issue(&chars, char_idx, byte_idx, text) {
-                matched_positions.push((parsed.start_byte, parsed.end_byte));
-                seen.insert(parsed.reference);
-                byte_idx = parsed.end_byte;
-                char_idx = parsed.end_char;
-                continue;
-            }
-        if (ch == 'P' || ch == 'p') && char_idx + 3 < chars.len()
-            && let Some(parsed) = try_parse_typed_pr(&chars, char_idx, byte_idx, text) {
-                matched_positions.push((parsed.start_byte, parsed.end_byte));
-                seen.insert(parsed.reference);
-                byte_idx = parsed.end_byte;
-                char_idx = parsed.end_char;
-                continue;
-            }
+        if (ch == 'I' || ch == 'i')
+            && char_idx + 6 < chars.len()
+            && let Some(parsed) = try_parse_typed_issue(&chars, char_idx, byte_idx, text)
+        {
+            matched_positions.push((parsed.start_byte, parsed.end_byte));
+            seen.insert(parsed.reference);
+            byte_idx = parsed.end_byte;
+            char_idx = parsed.end_char;
+            continue;
+        }
+        if (ch == 'P' || ch == 'p')
+            && char_idx + 3 < chars.len()
+            && let Some(parsed) = try_parse_typed_pr(&chars, char_idx, byte_idx, text)
+        {
+            matched_positions.push((parsed.start_byte, parsed.end_byte));
+            seen.insert(parsed.reference);
+            byte_idx = parsed.end_byte;
+            char_idx = parsed.end_char;
+            continue;
+        }
 
         // === Skip Discussion #N ===
-        if (ch == 'D' || ch == 'd') && char_idx + 11 < chars.len()
-            && matches_word_ci(&chars, char_idx, "Discussion") {
-                // Skip past "Discussion" and any following "#N"
-                let skip_len = "Discussion".len();
-                let mut skip_char = char_idx + skip_len;
-                let mut skip_byte = byte_idx;
-                for c in "Discussion".chars() {
-                    skip_byte += c.len_utf8();
-                }
-                // skip whitespace
-                while skip_char < chars.len() && chars[skip_char] == ' ' {
-                    skip_byte += 1;
-                    skip_char += 1;
-                }
-                // skip #N
-                if skip_char < chars.len() && chars[skip_char] == '#' {
-                    skip_byte += 1;
-                    skip_char += 1;
-                    while skip_char < chars.len() && chars[skip_char].is_ascii_digit() {
-                        skip_byte += chars[skip_char].len_utf8();
-                        skip_char += 1;
-                    }
-                    matched_positions.push((byte_idx, skip_byte));
-                    byte_idx = skip_byte;
-                    char_idx = skip_char;
-                    continue;
-                }
+        if (ch == 'D' || ch == 'd')
+            && char_idx + 11 < chars.len()
+            && matches_word_ci(&chars, char_idx, "Discussion")
+        {
+            // Skip past "Discussion" and any following "#N"
+            let skip_len = "Discussion".len();
+            let mut skip_char = char_idx + skip_len;
+            let mut skip_byte = byte_idx;
+            for c in "Discussion".chars() {
+                skip_byte += c.len_utf8();
             }
-
-        // === Pattern 4 & 5: Bare #N or range #N-M ===
-        if ch == '#' && !is_matched(byte_idx, &matched_positions)
-            && let Some(parsed) = try_parse_bare_ref(&chars, char_idx, byte_idx) {
-                for r in parsed.references {
-                    seen.insert(r);
+            // skip whitespace
+            while skip_char < chars.len() && chars[skip_char] == ' ' {
+                skip_byte += 1;
+                skip_char += 1;
+            }
+            // skip #N
+            if skip_char < chars.len() && chars[skip_char] == '#' {
+                skip_byte += 1;
+                skip_char += 1;
+                while skip_char < chars.len() && chars[skip_char].is_ascii_digit() {
+                    skip_byte += chars[skip_char].len_utf8();
+                    skip_char += 1;
                 }
-                matched_positions.push((parsed.start_byte, parsed.end_byte));
-                byte_idx = parsed.end_byte;
-                char_idx = parsed.end_char;
+                matched_positions.push((byte_idx, skip_byte));
+                byte_idx = skip_byte;
+                char_idx = skip_char;
                 continue;
             }
+        }
+
+        // === Pattern 4 & 5: Bare #N or range #N-M ===
+        if ch == '#'
+            && !is_matched(byte_idx, &matched_positions)
+            && let Some(parsed) = try_parse_bare_ref(&chars, char_idx, byte_idx)
+        {
+            for r in parsed.references {
+                seen.insert(r);
+            }
+            matched_positions.push((parsed.start_byte, parsed.end_byte));
+            byte_idx = parsed.end_byte;
+            char_idx = parsed.end_char;
+            continue;
+        }
 
         byte_idx += ch_len;
         char_idx += 1;
@@ -477,17 +486,18 @@ fn try_parse_typed_pr(
                     if ci > num_start {
                         let num_str: String = chars[num_start..ci].iter().collect();
                         if let Ok(number) = num_str.parse::<u64>()
-                            && number > 0 {
-                                return Some(ParsedRef {
-                                    reference: ResourceReference::GitHubPullRequest {
-                                        repo: None,
-                                        number,
-                                    },
-                                    start_byte,
-                                    end_byte: bi,
-                                    end_char: ci,
-                                });
-                            }
+                            && number > 0
+                        {
+                            return Some(ParsedRef {
+                                reference: ResourceReference::GitHubPullRequest {
+                                    repo: None,
+                                    number,
+                                },
+                                start_byte,
+                                end_byte: bi,
+                                end_char: ci,
+                            });
+                        }
                     }
                 }
             }
@@ -525,14 +535,15 @@ fn try_parse_typed_pr(
             if ci > num_start {
                 let num_str: String = chars[num_start..ci].iter().collect();
                 if let Ok(number) = num_str.parse::<u64>()
-                    && number > 0 {
-                        return Some(ParsedRef {
-                            reference: ResourceReference::GitHubPullRequest { repo: None, number },
-                            start_byte,
-                            end_byte: bi,
-                            end_char: ci,
-                        });
-                    }
+                    && number > 0
+                {
+                    return Some(ParsedRef {
+                        reference: ResourceReference::GitHubPullRequest { repo: None, number },
+                        start_byte,
+                        end_byte: bi,
+                        end_char: ci,
+                    });
+                }
             }
         }
     }
@@ -583,21 +594,23 @@ fn try_parse_bare_ref(
         if ci > range_num_start {
             let range_str: String = chars[range_num_start..ci].iter().collect();
             if let Ok(second_num) = range_str.parse::<u64>()
-                && second_num > first_num && (second_num - first_num) <= 10 {
-                    // Valid range
-                    let refs: Vec<ResourceReference> = (first_num..=second_num)
-                        .map(|n| ResourceReference::GitHubIssue {
-                            repo: None,
-                            number: n,
-                        })
-                        .collect();
-                    return Some(ParsedBareRef {
-                        references: refs,
-                        start_byte,
-                        end_byte: bi,
-                        end_char: ci,
-                    });
-                }
+                && second_num > first_num
+                && (second_num - first_num) <= 10
+            {
+                // Valid range
+                let refs: Vec<ResourceReference> = (first_num..=second_num)
+                    .map(|n| ResourceReference::GitHubIssue {
+                        repo: None,
+                        number: n,
+                    })
+                    .collect();
+                return Some(ParsedBareRef {
+                    references: refs,
+                    start_byte,
+                    end_byte: bi,
+                    end_char: ci,
+                });
+            }
         }
 
         // Not a valid range — fall back to single ref (reset past dash)

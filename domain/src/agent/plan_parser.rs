@@ -149,14 +149,16 @@ pub fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
         }
 
         if let Some(mode_str) = task_json.get("context_mode").and_then(|v| v.as_str())
-            && let Ok(mode) = mode_str.parse::<ContextMode>() {
-                task = task.with_context_mode(mode);
-            }
+            && let Ok(mode) = mode_str.parse::<ContextMode>()
+        {
+            task = task.with_context_mode(mode);
+        }
 
         if let Some(brief) = task_json.get("context_brief").and_then(|v| v.as_str())
-            && !brief.is_empty() {
-                task = task.with_context_brief(brief);
-            }
+            && !brief.is_empty()
+        {
+            task = task.with_context_brief(brief);
+        }
 
         plan.add_task(task);
     }
