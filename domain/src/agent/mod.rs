@@ -76,6 +76,7 @@
 //! ```
 
 pub mod agent_policy;
+pub mod context_mode;
 pub mod entities;
 pub mod model_config;
 pub mod plan_parser;
@@ -84,6 +85,7 @@ pub mod validation;
 pub mod value_objects;
 
 pub use agent_policy::{AgentPolicy, HilAction};
+pub use context_mode::ContextMode;
 pub use entities::{
     AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote, Plan,
     PlanCandidate, ReviewRound, Task, TaskStatus,

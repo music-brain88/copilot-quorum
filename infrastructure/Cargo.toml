@@ -38,6 +38,9 @@ tracing = { workspace = true }
 glob = "0.3"
 regex = "1"
 
+# Async utilities
+futures = { workspace = true }
+
 # CLI tool detection
 which = "7"
 

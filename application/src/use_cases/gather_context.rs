@@ -11,11 +11,12 @@ use crate::config::ExecutionParams;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{LlmSession, ToolResultMessage};
+use crate::ports::reference_resolver::{ReferenceResolverPort, ResolvedReference};
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::run_agent::RunAgentError;
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use quorum_domain::core::string::truncate;
-use quorum_domain::{AgentContext, AgentPromptTemplate, ProjectContext};
+use quorum_domain::{AgentContext, AgentPromptTemplate, ProjectContext, extract_references};
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -31,6 +32,7 @@ pub struct GatherContextUseCase<T: ToolExecutorPort, C: ContextLoaderPort> {
     tool_executor: Arc<T>,
     context_loader: Option<Arc<C>>,
     cancellation_token: Option<CancellationToken>,
+    reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
 }
 
 impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContextUseCase<T, C> {
@@ -43,7 +45,14 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
             tool_executor,
             context_loader,
             cancellation_token,
+            reference_resolver: None,
         }
+    }
+
+    /// Set a reference resolver for automatic reference resolution.
+    pub fn with_reference_resolver(mut self, resolver: Arc<dyn ReferenceResolverPort>) -> Self {
+        self.reference_resolver = Some(resolver);
+        self
     }
 
     /// Gather context about the project using 3-stage fallback strategy.
@@ -79,10 +88,9 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
                     "Stage 1: Using existing context from: {}",
                     project_ctx.source_description()
                 );
-                return Ok(Self::context_from_project_ctx(
-                    project_ctx,
-                    execution.working_dir.as_deref(),
-                ));
+                let ctx =
+                    Self::context_from_project_ctx(project_ctx, execution.working_dir.as_deref());
+                return Ok(self.resolve_references(ctx, request).await);
             }
 
             // Even if not sufficient, preserve any partial context
@@ -101,7 +109,7 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
         {
             Ok(enriched_ctx) => {
                 info!("Stage 2: Exploration agent succeeded");
-                return Ok(enriched_ctx);
+                return Ok(self.resolve_references(enriched_ctx, request).await);
             }
             Err(e) => {
                 warn!("Stage 2: Exploration agent failed: {}", e);
@@ -111,7 +119,7 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
 
         // ========== Stage 3: Proceed with minimal context ==========
         warn!("Stage 3: Proceeding with minimal context");
-        Ok(context)
+        Ok(self.resolve_references(context, request).await)
     }
 
     /// Convert ProjectContext to AgentContext
@@ -152,6 +160,24 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
             context.set_structure_summary(&summary);
         }
 
+        context
+    }
+
+    /// Resolve references found in the request text and add them to context.
+    async fn resolve_references(&self, mut context: AgentContext, request: &str) -> AgentContext {
+        let Some(resolver) = &self.reference_resolver else {
+            return context;
+        };
+        let refs = extract_references(request);
+        if refs.is_empty() {
+            return context;
+        }
+        info!("Found {} reference(s), resolving...", refs.len());
+        let resolved = resolver.resolve_all(&refs).await;
+        if !resolved.is_empty() {
+            info!("Resolved {} reference(s)", resolved.len());
+            context.add_context("Referenced Resources", format_reference_context(&resolved));
+        }
         context
     }
 
@@ -270,4 +296,32 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
 
         Ok(context)
     }
+}
+
+/// Format resolved references into a context string.
+///
+/// Each reference is formatted as a section with title and truncated content.
+/// Per-ref budget: 3000 chars, total budget: 12000 chars.
+fn format_reference_context(resolved: &[ResolvedReference]) -> String {
+    const PER_REF_BUDGET: usize = 3000;
+    const TOTAL_BUDGET: usize = 12000;
+
+    let mut output = String::new();
+    let mut total_len = 0;
+
+    for r in resolved {
+        let section = format!(
+            "### {} — {}\n{}\n\n",
+            r.reference.label(),
+            r.title,
+            truncate(&r.content, PER_REF_BUDGET),
+        );
+        if total_len + section.len() > TOTAL_BUDGET {
+            break;
+        }
+        output.push_str(&section);
+        total_len += section.len();
+    }
+
+    output
 }

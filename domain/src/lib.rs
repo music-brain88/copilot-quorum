@@ -31,6 +31,7 @@ pub mod util;
 // Re-export commonly used types
 pub use agent::{
     agent_policy::{AgentPolicy, HilAction},
+    context_mode::ContextMode,
     entities::{
         AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote, Plan,
         PlanCandidate, ReviewRound, Task, TaskStatus,
@@ -41,7 +42,9 @@ pub use agent::{
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
 pub use config::OutputFormat;
-pub use context::{KnownContextFile, LoadedContextFile, ProjectContext};
+pub use context::{
+    KnownContextFile, LoadedContextFile, ProjectContext, ResourceReference, extract_references,
+};
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
     entities::{Phase, QuorumRun},

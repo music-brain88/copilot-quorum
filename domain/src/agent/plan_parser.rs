@@ -7,6 +7,7 @@
 //! All types referenced ([`Plan`], [`Task`], [`LlmResponse`], [`ContentBlock`])
 //! are domain types, making this pure domain logic.
 
+use crate::agent::context_mode::ContextMode;
 use crate::agent::entities::{Plan, Task};
 use crate::session::response::{ContentBlock, LlmResponse};
 
@@ -145,6 +146,18 @@ pub fn parse_plan_json(json: &serde_json::Value) -> Option<Plan> {
                     task = task.with_dependency(dep_id);
                 }
             }
+        }
+
+        if let Some(mode_str) = task_json.get("context_mode").and_then(|v| v.as_str())
+            && let Ok(mode) = mode_str.parse::<ContextMode>()
+        {
+            task = task.with_context_mode(mode);
+        }
+
+        if let Some(brief) = task_json.get("context_brief").and_then(|v| v.as_str())
+            && !brief.is_empty()
+        {
+            task = task.with_context_brief(brief);
         }
 
         plan.add_task(task);
@@ -388,5 +401,97 @@ Here's my plan:
         assert_eq!(plan.tasks[0].id, TaskId::new("alpha"));
         assert_eq!(plan.tasks[1].id, TaskId::new("42"));
         assert_eq!(plan.tasks[2].id, TaskId::new("3"));
+    }
+
+    #[test]
+    fn test_parse_plan_context_mode() {
+        use crate::agent::context_mode::ContextMode;
+
+        let json = serde_json::json!({
+            "objective": "Review code",
+            "reasoning": "Need focused review",
+            "tasks": [
+                {
+                    "id": "1",
+                    "description": "Read file",
+                    "context_mode": "none"
+                },
+                {
+                    "id": "2",
+                    "description": "Review architecture",
+                    "context_mode": "projected",
+                    "context_brief": "This project uses DDD with onion architecture."
+                },
+                {
+                    "id": "3",
+                    "description": "Full analysis",
+                    "context_mode": "full"
+                }
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+
+        assert_eq!(plan.tasks[0].context_mode, Some(ContextMode::None));
+        assert_eq!(plan.tasks[0].context_brief, None);
+
+        // with_context_brief auto-sets mode to Projected
+        assert_eq!(plan.tasks[1].context_mode, Some(ContextMode::Projected));
+        assert_eq!(
+            plan.tasks[1].context_brief.as_deref(),
+            Some("This project uses DDD with onion architecture.")
+        );
+
+        assert_eq!(plan.tasks[2].context_mode, Some(ContextMode::Full));
+    }
+
+    #[test]
+    fn test_parse_plan_invalid_context_mode_ignored() {
+        let json = serde_json::json!({
+            "objective": "Test",
+            "reasoning": "testing",
+            "tasks": [
+                {
+                    "id": "1",
+                    "description": "Task with invalid mode",
+                    "context_mode": "invalid_mode"
+                }
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+        // Invalid context_mode should be silently ignored
+        assert_eq!(plan.tasks[0].context_mode, None);
+    }
+
+    #[test]
+    fn test_parse_plan_empty_context_brief_ignored() {
+        let json = serde_json::json!({
+            "objective": "Test",
+            "reasoning": "testing",
+            "tasks": [
+                {
+                    "id": "1",
+                    "description": "Task with empty brief",
+                    "context_brief": ""
+                }
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+        // Empty context_brief should be ignored
+        assert_eq!(plan.tasks[0].context_brief, None);
+        assert_eq!(plan.tasks[0].context_mode, None);
+    }
+
+    #[test]
+    fn test_parse_plan_without_context_fields_backward_compatible() {
+        let json = serde_json::json!({
+            "objective": "Simple task",
+            "reasoning": "No context fields",
+            "tasks": [
+                {"id": "1", "description": "Do something", "tool": "read_file"}
+            ]
+        });
+        let plan = parse_plan_json(&json).unwrap();
+        assert_eq!(plan.tasks[0].context_mode, None);
+        assert_eq!(plan.tasks[0].context_brief, None);
     }
 }

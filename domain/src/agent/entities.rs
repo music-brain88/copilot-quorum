@@ -18,6 +18,7 @@
 //! - `AutoApprove` - Automatically approve (use with caution!)
 
 use super::agent_policy::{AgentPolicy, HilAction};
+use super::context_mode::ContextMode;
 use super::model_config::ModelConfig;
 use super::tool_execution::ToolExecution;
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
@@ -268,6 +269,14 @@ pub struct Task {
     /// Tool executions performed during this task (Native Tool Use loop)
     #[serde(default)]
     pub tool_executions: Vec<ToolExecution>,
+    /// How much project context the task executor receives.
+    /// When `None`, defaults to `Full` behavior (backward compatible).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_mode: Option<ContextMode>,
+    /// Focused context summary for `Projected` mode.
+    /// Written by the planner to give the executor only what it needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_brief: Option<String>,
 }
 
 impl Task {
@@ -284,6 +293,8 @@ impl Task {
             started_at: None,
             completed_at: None,
             tool_executions: Vec::new(),
+            context_mode: None,
+            context_brief: None,
         }
     }
 
@@ -304,6 +315,21 @@ impl Task {
 
     pub fn with_dependency(mut self, task_id: impl Into<TaskId>) -> Self {
         self.depends_on.push(task_id.into());
+        self
+    }
+
+    pub fn with_context_mode(mut self, mode: ContextMode) -> Self {
+        self.context_mode = Some(mode);
+        self
+    }
+
+    /// Set a focused context brief for this task.
+    ///
+    /// Automatically sets `context_mode` to [`ContextMode::Projected`] since
+    /// a brief implies the executor should use projected context.
+    pub fn with_context_brief(mut self, brief: impl Into<String>) -> Self {
+        self.context_brief = Some(brief.into());
+        self.context_mode = Some(ContextMode::Projected);
         self
     }
 

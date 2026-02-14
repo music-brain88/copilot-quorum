@@ -57,7 +57,9 @@
 //! ```
 
 pub mod entities;
+pub mod reference;
 pub mod value_objects;
 
 pub use entities::ProjectContext;
+pub use reference::{ResourceReference, extract_references};
 pub use value_objects::{KnownContextFile, LoadedContextFile};
