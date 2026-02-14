@@ -29,11 +29,15 @@ pub mod tool;
 pub mod util;
 
 // Re-export commonly used types
+#[allow(deprecated)]
+pub use agent::AgentConfig;
 pub use agent::{
+    agent_policy::{AgentPolicy, HilAction},
     entities::{
-        AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
+        AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
         Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
     },
+    model_config::ModelConfig,
     tool_execution::{ToolExecution, ToolExecutionId, ToolExecutionState},
     validation::{ConfigIssue, ConfigIssueCode, Severity},
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
@@ -45,6 +49,7 @@ pub use orchestration::{
     entities::{Phase, QuorumRun},
     mode::{ConsensusLevel, PlanningApproach},
     scope::PhaseScope,
+    session_mode::SessionMode,
     strategy::{DebateConfig, DebateIntensity, OrchestrationStrategy, StrategyExecutor},
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };

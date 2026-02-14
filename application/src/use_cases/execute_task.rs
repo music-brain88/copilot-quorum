@@ -10,9 +10,8 @@ use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use quorum_domain::util::truncate_str;
-use quorum_domain::{
-    AgentConfig, AgentPromptTemplate, AgentState, Model, Task, TaskId, ToolExecution,
-};
+use quorum_domain::agent::model_config::ModelConfig;
+use quorum_domain::{AgentPromptTemplate, AgentState, Model, Task, TaskId, ToolExecution};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -74,7 +73,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
 
                 match plan.next_task() {
                     Some(task) => {
-                        let model = self.select_model_for_task(task, &input.config);
+                        let model = self.select_model_for_task(task, &input.models);
                         let index =
                             plan.tasks.iter().position(|t| t.id == task.id).unwrap_or(0) + 1;
                         let total = plan.tasks.len();
@@ -206,16 +205,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
     }
 
     /// Determine the appropriate model for a task based on tool risk level.
-    fn select_model_for_task<'a>(&self, task: &Task, config: &'a AgentConfig) -> &'a Model {
+    fn select_model_for_task<'a>(&self, task: &Task, models: &'a ModelConfig) -> &'a Model {
         if let Some(tool_name) = &task.tool_name {
             if self.action_reviewer.is_high_risk_tool(tool_name) {
-                &config.decision_model
+                &models.decision
             } else {
-                &config.exploration_model
+                &models.exploration
             }
         } else {
             // Tool not specified yet - model will decide, so use decision_model
-            &config.decision_model
+            &models.decision
         }
     }
 
@@ -260,7 +259,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
         let task_id_str = task.id.as_str();
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
         let tools = self.tool_executor.tool_spec().to_api_tools();
-        let max_turns = input.config.max_tool_turns;
+        let max_turns = input.execution.max_tool_turns;
         let mut turn_count = 0;
         let mut all_outputs = Vec::new();
         let mut all_executions: Vec<ToolExecution> = Vec::new();
@@ -487,7 +486,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     .unwrap_or_default();
 
                     self.action_reviewer
-                        .review_action(&tool_call_json, task, state, &input.config, progress)
+                        .review_action(&tool_call_json, task, state, &input.models, progress)
                         .await?
                 };
 

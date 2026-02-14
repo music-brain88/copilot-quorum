@@ -71,16 +71,22 @@
 //! assert_eq!(config.consensus_level, ConsensusLevel::Ensemble);
 //! ```
 
+pub mod agent_policy;
 pub mod entities;
+pub mod model_config;
 pub mod plan_parser;
 pub mod tool_execution;
 pub mod validation;
 pub mod value_objects;
 
+pub use agent_policy::{AgentPolicy, HilAction};
+#[allow(deprecated)]
+pub use entities::AgentConfig;
 pub use entities::{
-    AgentConfig, AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
+    AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
     Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
 };
+pub use model_config::ModelConfig;
 pub use plan_parser::{extract_plan_from_response, parse_plan, parse_plan_json};
 pub use tool_execution::{ToolExecution, ToolExecutionId, ToolExecutionState};
 pub use validation::{ConfigIssue, ConfigIssueCode, Severity};

@@ -4,6 +4,7 @@
 //! Manages command processing, state changes, and use case orchestration.
 //! Emits UiEvent messages to a channel for the presentation layer to render.
 
+use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
@@ -14,9 +15,9 @@ use crate::ports::ui_event::{
     UiEvent, WelcomeInfo,
 };
 use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
-use crate::use_cases::run_agent::{RunAgentInput, RunAgentUseCase};
-use crate::use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
-use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
+use crate::use_cases::run_agent::RunAgentUseCase;
+use crate::use_cases::run_quorum::RunQuorumUseCase;
+use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -55,15 +56,12 @@ pub struct AgentController<
     gateway: Arc<G>,
     use_case: RunAgentUseCase<G, T, C>,
     context_loader: Arc<C>,
-    config: AgentConfig,
+    config: QuorumConfig,
     /// Moderator model for synthesis (if explicitly configured)
     moderator: Option<Model>,
     verbose: bool,
-    working_dir: Option<String>,
     /// Conversation history for /discuss context
     conversation_history: Vec<HistoryEntry>,
-    /// Current consensus level (Solo or Ensemble)
-    consensus_level: ConsensusLevel,
     /// Cancellation token for graceful shutdown
     cancellation_token: Option<CancellationToken>,
     /// Channel sender for UI events
@@ -78,7 +76,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         gateway: Arc<G>,
         tool_executor: Arc<T>,
         context_loader: Arc<C>,
-        config: AgentConfig,
+        config: QuorumConfig,
         human_intervention: Arc<dyn HumanInterventionPort>,
         tx: mpsc::UnboundedSender<UiEvent>,
     ) -> Self {
@@ -94,9 +92,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             config,
             moderator: None,
             verbose: false,
-            working_dir: None,
             conversation_history: Vec::new(),
-            consensus_level: ConsensusLevel::Solo,
             cancellation_token: None,
             tx,
         }
@@ -116,8 +112,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Set working directory
     pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
-        let dir = dir.into();
-        self.working_dir = Some(dir.clone());
         self.config = self.config.with_working_dir(dir);
         self
     }
@@ -139,14 +133,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Set initial consensus level (Solo or Ensemble)
     pub fn with_consensus_level(mut self, level: ConsensusLevel) -> Self {
-        self.consensus_level = level;
         self.config = self.config.with_consensus_level(level);
         self
     }
 
     /// Get the current consensus level
     pub fn consensus_level(&self) -> ConsensusLevel {
-        self.consensus_level
+        self.config.mode().consensus_level
     }
 
     /// Whether verbose mode is enabled
@@ -170,7 +163,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     /// Format: `<level>>`
     /// Examples: `solo>`, `ens>`
     pub fn prompt_string(&self) -> String {
-        let level = match self.consensus_level {
+        let level = match self.config.mode().consensus_level {
             ConsensusLevel::Solo => "solo",
             ConsensusLevel::Ensemble => "ens",
         };
@@ -182,14 +175,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let moderator = self
             .moderator
             .clone()
-            .or_else(|| self.config.review_models.first().cloned());
+            .or_else(|| self.config.models().review.first().cloned());
 
         let _ = self.tx.send(UiEvent::Welcome(WelcomeInfo {
-            decision_model: self.config.decision_model.clone(),
-            review_models: self.config.review_models.clone(),
+            decision_model: self.config.models().decision.clone(),
+            review_models: self.config.models().review.clone(),
             moderator,
-            working_dir: self.working_dir.clone(),
-            consensus_level: self.consensus_level,
+            working_dir: self.config.execution().working_dir.clone(),
+            consensus_level: self.config.mode().consensus_level,
         }));
     }
 
@@ -213,11 +206,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 CommandAction::Continue
             }
             "/solo" => {
-                self.consensus_level = ConsensusLevel::Solo;
-                self.config = self
-                    .config
-                    .clone()
-                    .with_consensus_level(ConsensusLevel::Solo);
+                self.config.mode_mut().consensus_level = ConsensusLevel::Solo;
                 let _ = self.tx.send(UiEvent::ModeChanged {
                     level: ConsensusLevel::Solo,
                     description: "single model, quick execution".to_string(),
@@ -225,11 +214,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 CommandAction::Continue
             }
             "/ens" | "/ensemble" => {
-                self.consensus_level = ConsensusLevel::Ensemble;
-                self.config = self
-                    .config
-                    .clone()
-                    .with_consensus_level(ConsensusLevel::Ensemble);
+                self.config.mode_mut().consensus_level = ConsensusLevel::Ensemble;
                 let _ = self.tx.send(UiEvent::ModeChanged {
                     level: ConsensusLevel::Ensemble,
                     description: "multi-model ensemble planning".to_string(),
@@ -237,12 +222,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 CommandAction::Continue
             }
             "/fast" => {
-                let new_scope = if self.config.phase_scope == PhaseScope::Fast {
+                let new_scope = if self.config.mode().phase_scope == PhaseScope::Fast {
                     PhaseScope::Full
                 } else {
                     PhaseScope::Fast
                 };
-                self.config = self.config.clone().with_phase_scope(new_scope);
+                self.config.mode_mut().phase_scope = new_scope;
                 let description = match new_scope {
                     PhaseScope::Fast => "reviews will be skipped".to_string(),
                     _ => "all review phases enabled".to_string(),
@@ -292,17 +277,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
             "/config" => {
                 let _ = self.tx.send(UiEvent::ConfigDisplay(ConfigSnapshot {
-                    exploration_model: self.config.exploration_model.clone(),
-                    decision_model: self.config.decision_model.clone(),
-                    review_models: self.config.review_models.clone(),
-                    consensus_level: self.config.consensus_level,
-                    phase_scope: self.config.phase_scope,
-                    orchestration_strategy: self.config.orchestration_strategy.to_string(),
-                    require_final_review: self.config.require_final_review,
-                    max_iterations: self.config.max_iterations,
-                    max_plan_revisions: self.config.max_plan_revisions,
-                    hil_mode: self.config.hil_mode,
-                    working_dir: self.working_dir.clone(),
+                    exploration_model: self.config.models().exploration.clone(),
+                    decision_model: self.config.models().decision.clone(),
+                    review_models: self.config.models().review.clone(),
+                    consensus_level: self.config.mode().consensus_level,
+                    phase_scope: self.config.mode().phase_scope,
+                    orchestration_strategy: self.config.mode().strategy.to_string(),
+                    require_final_review: self.config.policy().require_final_review,
+                    max_iterations: self.config.execution().max_iterations,
+                    max_plan_revisions: self.config.policy().max_plan_revisions,
+                    hil_mode: self.config.policy().hil_mode,
+                    working_dir: self.config.execution().working_dir.clone(),
                     verbose: self.verbose,
                     history_count: self.conversation_history.len(),
                 }));
@@ -334,19 +319,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     fn handle_mode_command(&mut self, args: &str) {
         if args.is_empty() {
+            let level = self.config.mode().consensus_level;
             let _ = self.tx.send(UiEvent::CommandError {
                 message: format!(
                     "Usage: /mode <level>\nAvailable levels: solo, ensemble\nCurrent level: {} ({})",
-                    self.consensus_level,
-                    self.consensus_level.short_description()
+                    level,
+                    level.short_description()
                 ),
             });
             return;
         }
 
         if let Ok(level) = args.parse::<ConsensusLevel>() {
-            self.consensus_level = level;
-            self.config = self.config.clone().with_consensus_level(level);
+            self.config.mode_mut().consensus_level = level;
             let _ = self.tx.send(UiEvent::ModeChanged {
                 level,
                 description: level.description().to_string(),
@@ -363,14 +348,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let _ = self.tx.send(UiEvent::CommandError {
                 message: format!(
                     "Usage: /scope <scope>\nAvailable scopes: full, fast, plan\nCurrent scope: {}",
-                    self.config.phase_scope
+                    self.config.mode().phase_scope
                 ),
             });
             return;
         }
 
         if let Ok(scope) = args.parse::<PhaseScope>() {
-            self.config = self.config.clone().with_phase_scope(scope);
+            self.config.mode_mut().phase_scope = scope;
             let _ = self.tx.send(UiEvent::ScopeChanged {
                 scope,
                 description: format!("Phase scope changed to: {}", scope),
@@ -390,7 +375,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let _ = self.tx.send(UiEvent::CommandError {
                 message: format!(
                     "Usage: /strategy <strategy>\nAvailable strategies: quorum, debate\nCurrent strategy: {}",
-                    self.config.orchestration_strategy
+                    self.config.mode().strategy
                 ),
             });
             return;
@@ -398,20 +383,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         match args.split_whitespace().next().unwrap_or("") {
             "quorum" | "q" => {
-                self.config = self
-                    .config
-                    .clone()
-                    .with_orchestration_strategy(quorum_domain::OrchestrationStrategy::default());
+                self.config.mode_mut().strategy =
+                    quorum_domain::OrchestrationStrategy::default();
                 let _ = self.tx.send(UiEvent::StrategyChanged {
                     strategy: "quorum".to_string(),
                     description: "equal discussion + review + synthesis".to_string(),
                 });
             }
             "debate" | "d" => {
-                self.config = self.config.clone().with_orchestration_strategy(
-                    quorum_domain::OrchestrationStrategy::Debate(
-                        quorum_domain::DebateConfig::default(),
-                    ),
+                self.config.mode_mut().strategy = quorum_domain::OrchestrationStrategy::Debate(
+                    quorum_domain::DebateConfig::default(),
                 );
                 let _ = self.tx.send(UiEvent::StrategyChanged {
                     strategy: "debate".to_string(),
@@ -459,13 +440,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             format!("{}\n\n## Current Question\n\n{}", context, question)
         };
 
-        // Create quorum input using review models
-        let mut input = RunQuorumInput::new(full_question, self.config.review_models.clone());
-
-        // Use first review model as moderator if available
-        if let Some(moderator) = self.config.review_models.first() {
-            input = input.with_moderator(moderator.clone());
-        }
+        // Create quorum input using factory method
+        let input = self.config.to_quorum_input(full_question);
 
         // Run quorum
         let use_case = RunQuorumUseCase::new(self.gateway.clone());
@@ -491,11 +467,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub async fn run_init_context(&self, args: &str) {
         let force = args.contains("--force") || args.contains("-f");
 
-        let working_dir = self.working_dir.clone().unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string())
-        });
+        let working_dir = self
+            .config
+            .execution()
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string())
+            });
 
         // Check if context file already exists
         if !force
@@ -508,13 +489,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         let _ = self.tx.send(UiEvent::ContextInitStarting {
-            model_count: self.config.review_models.len(),
+            model_count: self.config.models().review.len(),
         });
 
         // Create the init context input using review models
-        let mut input = InitContextInput::new(&working_dir, self.config.review_models.clone());
+        let mut input =
+            InitContextInput::new(&working_dir, self.config.models().review.clone());
 
-        if let Some(moderator) = self.config.review_models.first() {
+        if let Some(moderator) = self.config.models().review.first() {
             input = input.with_moderator(moderator.clone());
         }
 
@@ -547,10 +529,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     /// Process a user request (run agent)
     pub async fn process_request(&mut self, request: &str, progress: &dyn AgentProgressNotifier) {
         let _ = self.tx.send(UiEvent::AgentStarting {
-            mode: self.consensus_level,
+            mode: self.config.mode().consensus_level,
         });
 
-        let input = RunAgentInput::new(request, self.config.clone());
+        let input = self.config.to_agent_input(request);
         let result = self.use_case.execute_with_progress(input, progress).await;
 
         match result {
@@ -715,7 +697,7 @@ mod tests {
         let tool_executor = Arc::new(MockToolExecutor::new());
         let context_loader = Arc::new(MockContextLoader);
         let human_intervention = Arc::new(MockHumanIntervention);
-        let config = AgentConfig::default();
+        let config = QuorumConfig::default();
 
         let controller = AgentController::new(
             gateway,

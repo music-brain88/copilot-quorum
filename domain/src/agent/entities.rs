@@ -18,11 +18,14 @@
 //! - `AutoReject` - Automatically abort the agent
 //! - `AutoApprove` - Automatically approve (use with caution!)
 
+use super::agent_policy::{AgentPolicy, HilAction};
+use super::model_config::ModelConfig;
 use super::tool_execution::ToolExecution;
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
 use crate::core::model::Model;
 use crate::orchestration::mode::ConsensusLevel;
 use crate::orchestration::scope::PhaseScope;
+use crate::orchestration::session_mode::SessionMode;
 use crate::orchestration::strategy::OrchestrationStrategy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -763,6 +766,10 @@ impl EnsemblePlanResult {
 /// decision_model = "claude-sonnet-4.5"    # Planning + high-risk tool decisions
 /// review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
 /// ```
+#[deprecated(
+    since = "0.8.0",
+    note = "Use SessionMode + ModelConfig + AgentPolicy + ExecutionParams instead"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     // ==================== Role-based Model Configuration ====================
@@ -818,6 +825,7 @@ pub struct AgentConfig {
     pub ensemble_session_timeout: Option<Duration>,
 }
 
+#[allow(deprecated)]
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -845,6 +853,7 @@ impl Default for AgentConfig {
     }
 }
 
+#[allow(deprecated)]
 impl AgentConfig {
     /// Create a new AgentConfig with a specific decision model
     ///
@@ -926,6 +935,36 @@ impl AgentConfig {
         &self.review_models
     }
 
+    // ==================== Bridge Methods (migration to split types) ====================
+
+    /// Convert mode-related fields to a [`SessionMode`].
+    pub fn session_mode(&self) -> super::super::orchestration::session_mode::SessionMode {
+        super::super::orchestration::session_mode::SessionMode {
+            consensus_level: self.consensus_level.clone(),
+            phase_scope: self.phase_scope.clone(),
+            strategy: self.orchestration_strategy.clone(),
+        }
+    }
+
+    /// Convert model-related fields to a [`ModelConfig`].
+    pub fn model_config(&self) -> super::model_config::ModelConfig {
+        super::model_config::ModelConfig {
+            exploration: self.exploration_model.clone(),
+            decision: self.decision_model.clone(),
+            review: self.review_models.clone(),
+        }
+    }
+
+    /// Convert policy-related fields to an [`AgentPolicy`].
+    pub fn agent_policy(&self) -> super::agent_policy::AgentPolicy {
+        super::agent_policy::AgentPolicy {
+            hil_mode: self.hil_mode,
+            require_plan_review: self.require_plan_review,
+            require_final_review: self.require_final_review,
+            max_plan_revisions: self.max_plan_revisions,
+        }
+    }
+
     // ==================== Behavior Builders ====================
 
     pub fn with_final_review(mut self) -> Self {
@@ -989,14 +1028,32 @@ impl AgentConfig {
 /// - Agent's reasoning history (thoughts)
 /// - Iteration count for loop limits
 /// - Plan revision count for HiL (Human-in-the-Loop) triggering
+///
+/// # Config Split
+///
+/// Instead of holding a monolithic `AgentConfig`, AgentState holds the
+/// domain-layer subsets directly:
+///
+/// | Field | Source Type | Purpose |
+/// |-------|-----------|---------|
+/// | `mode` | [`SessionMode`] | Runtime-mutable orchestration settings |
+/// | `models` | [`ModelConfig`] | Role-based model selection |
+/// | `policy` | [`AgentPolicy`] | Domain behavioral constraints |
+/// | `max_iterations` | scalar from `ExecutionParams` | Loop limit (app-layer value) |
 #[derive(Debug, Clone)]
 pub struct AgentState {
     /// Unique identifier for this agent run
     pub id: AgentId,
     /// The user's original request
     pub request: String,
-    /// Configuration for this agent
-    pub config: AgentConfig,
+    /// Runtime-mutable orchestration mode (consensus, scope, strategy)
+    pub mode: SessionMode,
+    /// Role-based model configuration
+    pub models: ModelConfig,
+    /// Domain behavioral policy (HiL, plan review, revision limits)
+    pub policy: AgentPolicy,
+    /// Maximum number of execution iterations (from ExecutionParams)
+    pub max_iterations: usize,
     /// Current phase of execution
     pub phase: AgentPhase,
     /// Gathered context about the project
@@ -1016,11 +1073,21 @@ pub struct AgentState {
 
 impl AgentState {
     /// Creates a new agent state starting in the ContextGathering phase.
-    pub fn new(id: impl Into<AgentId>, request: impl Into<String>, config: AgentConfig) -> Self {
+    pub fn new(
+        id: impl Into<AgentId>,
+        request: impl Into<String>,
+        mode: SessionMode,
+        models: ModelConfig,
+        policy: AgentPolicy,
+        max_iterations: usize,
+    ) -> Self {
         Self {
             id: id.into(),
             request: request.into(),
-            config,
+            mode,
+            models,
+            policy,
+            max_iterations,
             phase: AgentPhase::ContextGathering,
             context: AgentContext::default(),
             plan: None,
@@ -1029,6 +1096,26 @@ impl AgentState {
             plan_revision_count: 0,
             error: None,
         }
+    }
+
+    /// Creates a new agent state from a legacy `AgentConfig`.
+    ///
+    /// Bridge constructor for migration — converts `AgentConfig` into split types.
+    #[deprecated(since = "0.8.0", note = "Use AgentState::new() with split types")]
+    #[allow(deprecated)]
+    pub fn from_config(
+        id: impl Into<AgentId>,
+        request: impl Into<String>,
+        config: &AgentConfig,
+    ) -> Self {
+        Self::new(
+            id,
+            request,
+            config.session_mode(),
+            config.model_config(),
+            config.agent_policy(),
+            config.max_iterations,
+        )
     }
 
     /// Records a reasoning step in the agent's thought history.
@@ -1085,12 +1172,20 @@ impl AgentState {
     /// Used to prevent infinite loops during planning and execution.
     pub fn increment_iteration(&mut self) -> bool {
         self.iteration_count += 1;
-        self.iteration_count <= self.config.max_iterations
+        self.iteration_count <= self.max_iterations
     }
 
     /// Returns `true` if the agent has finished (completed or failed).
     pub fn is_finished(&self) -> bool {
         matches!(self.phase, AgentPhase::Completed | AgentPhase::Failed)
+    }
+
+    /// Determine the HiL action given the current plan revision count.
+    ///
+    /// Delegates to [`AgentPolicy::hil_action`], encapsulating the domain rule:
+    /// "if revision count >= limit, act based on hil_mode".
+    pub fn hil_action(&self) -> HilAction {
+        self.policy.hil_action(self.plan_revision_count)
     }
 }
 
@@ -1167,8 +1262,14 @@ mod tests {
 
     #[test]
     fn test_agent_state_lifecycle() {
-        let config = AgentConfig::default();
-        let mut state = AgentState::new("agent-1", "Update the README", config);
+        let mut state = AgentState::new(
+            "agent-1",
+            "Update the README",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            50,
+        );
 
         assert_eq!(state.phase, AgentPhase::ContextGathering);
         assert!(!state.is_finished());
@@ -1188,8 +1289,14 @@ mod tests {
 
     #[test]
     fn test_agent_iteration_limit() {
-        let config = AgentConfig::default().with_max_iterations(3);
-        let mut state = AgentState::new("agent-1", "Test", config);
+        let mut state = AgentState::new(
+            "agent-1",
+            "Test",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            3,
+        );
 
         assert!(state.increment_iteration()); // 1
         assert!(state.increment_iteration()); // 2
@@ -1255,8 +1362,14 @@ mod tests {
 
     #[test]
     fn test_agent_state_plan_revision_count() {
-        let config = AgentConfig::default();
-        let mut state = AgentState::new("agent-1", "Test request", config);
+        let mut state = AgentState::new(
+            "agent-1",
+            "Test request",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            50,
+        );
 
         // Initially zero
         assert_eq!(state.plan_revision_count, 0);
@@ -1286,18 +1399,54 @@ mod tests {
         assert_eq!(state.plan_revision_count, 3);
 
         // This would trigger HiL with default max_plan_revisions = 3
-        assert!(state.plan_revision_count >= state.config.max_plan_revisions);
+        assert!(state.plan_revision_count >= state.policy.max_plan_revisions);
     }
 
     #[test]
     fn test_reject_plan_without_plan() {
-        let config = AgentConfig::default();
-        let mut state = AgentState::new("agent-1", "Test", config);
+        let mut state = AgentState::new(
+            "agent-1",
+            "Test",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            50,
+        );
 
         // Rejecting without a plan should still increment counter
         // (defensive behavior - counter tracks attempts)
         state.reject_plan("No plan feedback");
         assert_eq!(state.plan_revision_count, 1);
+    }
+
+    #[test]
+    fn test_agent_state_hil_action() {
+
+        let mut state = AgentState::new(
+            "agent-1",
+            "Test",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(), // max_plan_revisions = 3, hil_mode = Interactive
+            50,
+        );
+
+        // Under limit → Continue
+        assert_eq!(state.hil_action(), HilAction::Continue);
+        state.plan_revision_count = 2;
+        assert_eq!(state.hil_action(), HilAction::Continue);
+
+        // At limit → RequestIntervention (Interactive mode)
+        state.plan_revision_count = 3;
+        assert_eq!(state.hil_action(), HilAction::RequestIntervention);
+
+        // AutoReject mode
+        state.policy = AgentPolicy::default().with_hil_mode(HilMode::AutoReject);
+        assert_eq!(state.hil_action(), HilAction::Abort);
+
+        // AutoApprove mode
+        state.policy = AgentPolicy::default().with_hil_mode(HilMode::AutoApprove);
+        assert_eq!(state.hil_action(), HilAction::ForceApprove);
     }
 
     #[test]

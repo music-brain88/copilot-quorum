@@ -17,10 +17,8 @@
 //! assert!(issues.is_empty()); // Valid combination
 //! ```
 
+#[allow(deprecated)]
 use super::entities::AgentConfig;
-use crate::orchestration::mode::ConsensusLevel;
-use crate::orchestration::scope::PhaseScope;
-use crate::orchestration::strategy::OrchestrationStrategy;
 
 /// Severity level of a configuration issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,52 +48,15 @@ pub struct ConfigIssue {
     pub message: String,
 }
 
+#[allow(deprecated)]
 impl AgentConfig {
     /// Validate the combination of `consensus_level` × `phase_scope` × `orchestration_strategy`.
     ///
     /// Returns a list of issues. An empty list means the combination is valid.
+    ///
+    /// Delegates to [`SessionMode::validate_combination()`](crate::orchestration::session_mode::SessionMode::validate_combination).
     pub fn validate_combination(&self) -> Vec<ConfigIssue> {
-        let mut issues = Vec::new();
-        let is_debate = matches!(
-            self.orchestration_strategy,
-            OrchestrationStrategy::Debate(_)
-        );
-
-        if is_debate {
-            if self.consensus_level == ConsensusLevel::Solo {
-                // Solo + Debate is an error (debate with one model is impossible).
-                // Don't also emit DebateNotImplemented — the error subsumes it.
-                issues.push(ConfigIssue {
-                    severity: Severity::Error,
-                    code: ConfigIssueCode::SoloWithDebate,
-                    message: "Solo mode with Debate strategy is invalid: \
-                              a single model cannot debate with itself"
-                        .to_string(),
-                });
-            } else {
-                // Ensemble + Debate: warn that it's not implemented yet
-                issues.push(ConfigIssue {
-                    severity: Severity::Warning,
-                    code: ConfigIssueCode::DebateNotImplemented,
-                    message: "Debate strategy is not yet implemented \
-                              (no StrategyExecutor available)"
-                        .to_string(),
-                });
-            }
-        }
-
-        if self.consensus_level == ConsensusLevel::Ensemble && self.phase_scope == PhaseScope::Fast
-        {
-            issues.push(ConfigIssue {
-                severity: Severity::Warning,
-                code: ConfigIssueCode::EnsembleWithFast,
-                message: "Ensemble mode with Fast scope skips review phases, \
-                          reducing the value of multi-model consensus"
-                    .to_string(),
-            });
-        }
-
-        issues
+        self.session_mode().validate_combination()
     }
 
     /// Check whether any issues are errors (i.e. fatal).
@@ -107,6 +68,8 @@ impl AgentConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestration::mode::ConsensusLevel;
+    use crate::orchestration::scope::PhaseScope;
     use crate::orchestration::strategy::{DebateConfig, OrchestrationStrategy};
 
     // ==================== Helper ====================

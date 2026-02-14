@@ -132,8 +132,8 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 domain/src/
 ├── core/           # Model, Question, Error
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
-├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
-├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
+├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, SessionMode, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
+├── agent/          # AgentState, Plan, Task, ModelConfig, AgentPolicy (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolSpec, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
 ├── session/        # Message, LlmSessionRepository, LlmResponse, ContentBlock, StopReason
@@ -173,9 +173,11 @@ The agent system extends quorum to autonomous task execution with safety through
 - High-risk (write/command): Requires quorum review before execution
 
 **Key Components**:
-- `domain/agent/`: AgentState, Plan, Task, AgentConfig (max_tool_turns)
+- `domain/agent/`: AgentState, Plan, Task, ModelConfig, AgentPolicy, HilAction
+- `domain/orchestration/session_mode.rs`: SessionMode (runtime-mutable: consensus_level, phase_scope, strategy)
 - `domain/tool/`: ToolDefinition, ToolCall (native_id), ToolResult, RiskLevel
 - `domain/session/response.rs`: LlmResponse, ContentBlock, StopReason
+- `application/config/`: ExecutionParams (use case loop control), QuorumConfig (4-type container for buffer propagation)
 - `application/use_cases/run_agent.rs`: RunAgentUseCase orchestrates the flow (Native Tool Use)
 - `application/ports/llm_gateway.rs`: LlmSession trait (send_with_tools, send_tool_results)
 - `infrastructure/tools/`: LocalToolExecutor implements ToolExecutorPort

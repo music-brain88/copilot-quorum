@@ -5,8 +5,8 @@
 
 use anyhow::{Result, bail};
 use clap::Parser;
-use quorum_application::{RunAgentInput, RunAgentUseCase};
-use quorum_domain::{AgentConfig, ConsensusLevel, Model, OutputFormat, Severity};
+use quorum_application::{QuorumConfig, RunAgentUseCase};
+use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
 };
@@ -14,6 +14,7 @@ use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
     TuiInputConfig,
 };
+use quorum_application::ExecutionParams;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -241,76 +242,75 @@ async fn main() -> Result<()> {
     // Create context loader
     let context_loader = Arc::new(LocalContextLoader::new());
 
-    // Build agent config with role-based model configuration
-    // Start with defaults, then apply config file overrides, then CLI overrides
-    let mut agent_config = AgentConfig::default();
+    // === Build QuorumConfig from split types ===
 
-    // Apply role-based model settings from config file
+    // Build ModelConfig
+    let mut models = ModelConfig::default();
     if let Some(model) = config.models.parse_exploration() {
-        agent_config = agent_config.with_exploration_model(model);
+        models = models.with_exploration(model);
     }
     if let Some(model) = config.models.parse_decision() {
-        agent_config = agent_config.with_decision_model(model);
+        models = models.with_decision(model);
     }
-    if let Some(models) = config.models.parse_review() {
-        agent_config = agent_config.with_review_models(models);
+    if let Some(review) = config.models.parse_review() {
+        models = models.with_review(review);
     }
 
     // CLI --model flag overrides config file models (for backward compatibility)
     // First model from CLI becomes decision model, rest become review models
     if !cli_models.is_empty() {
-        agent_config = agent_config.with_decision_model(cli_models[0].clone());
+        models = models.with_decision(cli_models[0].clone());
         if cli_models.len() > 1 {
-            agent_config = agent_config.with_review_models(cli_models[1..].to_vec());
+            models = models.with_review(cli_models[1..].to_vec());
         }
     }
 
-    // Apply HiL settings from config
-    agent_config = agent_config
+    // Build AgentPolicy
+    let mut policy = AgentPolicy::default()
         .with_max_plan_revisions(config.agent.max_plan_revisions)
         .with_hil_mode(config.agent.parse_hil_mode());
 
-    // Apply consensus level and phase scope from config file
-    agent_config = agent_config
+    // Apply --no-quorum flag
+    if cli.no_quorum {
+        models = models.with_review(vec![]);
+        policy = policy.with_require_plan_review(false);
+    }
+
+    // Build SessionMode
+    let mut mode = SessionMode::default()
         .with_consensus_level(config.agent.parse_consensus_level())
         .with_phase_scope(config.agent.parse_phase_scope());
 
-    // Apply --no-quorum flag
-    if cli.no_quorum {
-        agent_config = agent_config
-            .with_review_models(vec![])
-            .with_skip_plan_review();
+    // --ensemble flag overrides config file setting
+    if cli.ensemble {
+        mode = mode.with_consensus_level(ConsensusLevel::Ensemble);
     }
 
-    // Determine initial consensus level
-    // --ensemble flag overrides config file setting
-    let _initial_level = if cli.ensemble {
-        agent_config = agent_config.with_ensemble();
-        ConsensusLevel::Ensemble
-    } else {
-        agent_config.consensus_level
-    };
+    // Build ExecutionParams
+    let mut execution = ExecutionParams::default();
 
     // Validate configuration combination
-    let issues = agent_config.validate_combination();
+    let issues = mode.validate_combination();
     for issue in &issues {
         match issue.severity {
-            Severity::Warning => eprintln!("Warning: {}", issue.message),
-            Severity::Error => eprintln!("Error: {}", issue.message),
+            quorum_domain::Severity::Warning => eprintln!("Warning: {}", issue.message),
+            quorum_domain::Severity::Error => eprintln!("Error: {}", issue.message),
         }
     }
-    if AgentConfig::has_errors(&issues) {
+    if SessionMode::has_errors(&issues) {
         bail!("Invalid configuration combination");
     }
 
     // No question provided -> Start TUI (default)
     if cli.question.is_none() {
         if let Some(dir) = &working_dir {
-            agent_config = agent_config.with_working_dir(dir);
+            execution = execution.with_working_dir(dir);
         }
         if cli.final_review {
-            agent_config = agent_config.with_final_review();
+            policy = policy.with_require_final_review(true);
         }
+
+        let quorum_config = QuorumConfig::new(mode, models, policy, execution);
 
         let tui_input_config = TuiInputConfig {
             max_input_height: config.tui.input.max_height,
@@ -321,7 +321,7 @@ async fn main() -> Result<()> {
             gateway.clone(),
             tool_executor.clone(),
             context_loader.clone(),
-            agent_config,
+            quorum_config,
         )
         .with_tui_config(tui_input_config);
         tui_app.run().await?;
@@ -332,12 +332,14 @@ async fn main() -> Result<()> {
     let request = cli.question.unwrap();
 
     if let Some(dir) = &working_dir {
-        agent_config = agent_config.with_working_dir(dir);
+        execution = execution.with_working_dir(dir);
     }
 
     if cli.final_review {
-        agent_config = agent_config.with_final_review();
+        policy = policy.with_require_final_review(true);
     }
+
+    let quorum_config = QuorumConfig::new(mode, models, policy, execution);
 
     // Print header
     if repl_config.show_progress {
@@ -347,14 +349,15 @@ async fn main() -> Result<()> {
         println!("+============================================================+");
         println!();
         println!("Request: {}", request);
-        println!("Decision Model: {}", agent_config.decision_model);
+        println!("Decision Model: {}", quorum_config.models().decision);
         if cli.no_quorum {
             println!("Quorum: Disabled (--no-quorum)");
         } else {
             println!(
                 "Review Models: {}",
-                agent_config
-                    .review_models
+                quorum_config
+                    .models()
+                    .review
                     .iter()
                     .map(|m| m.to_string())
                     .collect::<Vec<_>>()
@@ -371,7 +374,7 @@ async fn main() -> Result<()> {
     let use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
         .with_cancellation(cancellation_token.clone())
         .with_human_intervention(human_intervention);
-    let input = RunAgentInput::new(request, agent_config);
+    let input = quorum_config.to_agent_input(request);
 
     let result = if repl_config.show_progress {
         let progress = AgentProgressReporter::with_options(cli.verbose > 0, cli.show_votes);

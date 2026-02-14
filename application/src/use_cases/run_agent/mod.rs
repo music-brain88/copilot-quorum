@@ -219,7 +219,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         // Initialize agent state
         let agent_id = format!("agent-{}", chrono_lite_timestamp());
-        let mut state = AgentState::new(agent_id, &input.request, input.config.clone());
+        let mut state = AgentState::new(
+            agent_id,
+            &input.request,
+            input.mode.clone(),
+            input.models.clone(),
+            input.policy.clone(),
+            input.execution.max_iterations,
+        );
 
         // Create system prompt (shared across phases)
         let system_prompt = AgentPromptTemplate::agent_system();
@@ -231,7 +238,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         let context_session = self
             .gateway
-            .create_session_with_system_prompt(&input.config.exploration_model, &system_prompt)
+            .create_session_with_system_prompt(&input.models.exploration, &system_prompt)
             .await?;
 
         let gather_uc = GatherContextUseCase::new(
@@ -244,7 +251,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             .execute(
                 context_session.as_ref(),
                 &input.request,
-                &input.config,
+                &input.execution,
                 progress,
             )
             .await
@@ -279,12 +286,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             state.set_phase(AgentPhase::Planning);
 
             // Branch based on planning mode
-            if input.config.planning_approach().is_ensemble() {
+            if input.mode.planning_approach().is_ensemble() {
                 // ==================== Ensemble Planning ====================
                 // Multiple models create plans independently, then vote
                 info!(
                     "Ensemble planning: {} models will generate plans",
-                    input.config.review_models.len()
+                    input.models.review.len()
                 );
 
                 match self
@@ -359,7 +366,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // Uses decision_model (default: Sonnet - needs strong reasoning for planning)
             let planning_session = self
                 .gateway
-                .create_session_with_system_prompt(&input.config.decision_model, &system_prompt)
+                .create_session_with_system_prompt(&input.models.decision, &system_prompt)
                 .await?;
 
             let plan = match self
@@ -403,12 +410,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             state.set_plan(plan);
 
             // Phase 3: Plan Review (Quorum) - controlled by PhaseScope
-            if !input.config.phase_scope.includes_plan_review() {
+            if !input.mode.includes_plan_review() {
                 // Skip plan review (Fast/PlanOnly) — auto-approve
                 state.approve_plan();
                 state.add_thought(Thought::observation(format!(
                     "Plan review skipped (scope: {})",
-                    input.config.phase_scope
+                    input.mode.phase_scope
                 )));
                 break;
             }
@@ -463,7 +470,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // because the Plan is recreated on each revision attempt, losing history.
             let revision_count = state.plan_revision_count;
 
-            if revision_count >= input.config.max_plan_revisions {
+            if revision_count >= input.policy.max_plan_revisions {
                 // Human intervention required
                 let decision = self
                     .handle_human_intervention(&input, &state, progress)
@@ -521,7 +528,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // ==================== PlanOnly Early Return ====================
-        if !input.config.phase_scope.includes_execution() {
+        if !input.mode.includes_execution() {
             let plan_summary = state
                 .plan
                 .as_ref()
@@ -537,7 +544,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         // ==================== Execution Confirmation Gate ====================
-        if input.config.phase_scope.requires_execution_confirmation() {
+        if input.mode.requires_execution_confirmation() {
             let decision = self
                 .handle_execution_confirmation(&input, &state, progress)
                 .await?;
@@ -593,7 +600,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         };
 
         // Phase 5: Final Review (optional, requires action review scope)
-        if input.config.require_final_review && input.config.phase_scope.includes_action_review() {
+        if input.policy.require_final_review && input.mode.includes_action_review() {
             progress.on_phase_change(&AgentPhase::FinalReview);
             state.set_phase(AgentPhase::FinalReview);
 
@@ -1223,7 +1230,8 @@ mod tests {
                 use_case = use_case.with_human_intervention(intervention);
             }
 
-            let input = RunAgentInput::new("Test request", self.config);
+            #[allow(deprecated)]
+            let input = RunAgentInput::from_config("Test request", &self.config);
             let result = use_case.execute_with_progress(input, &progress).await;
 
             (result, progress)

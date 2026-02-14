@@ -198,7 +198,7 @@ agent-hil>
 
 ### Three Orthogonal Axes / 3つの直交する設定軸
 
-`AgentConfig` のオーケストレーション設定は、3 つの独立した軸で構成されています：
+エージェントのオーケストレーション設定は、3 つの独立した軸で構成されています（`SessionMode` に集約）：
 
 | 軸 | 型 | 役割 |
 |----|------|------|
@@ -213,7 +213,7 @@ enum が「何を使うか」を、trait が「どう実行するか」を担い
 ### Combination Validation / 組み合わせバリデーション
 
 3 軸の組み合わせのうち、無効・未サポートなものは起動時にバリデーションされます。
-`AgentConfig::validate_combination()` が `Vec<ConfigIssue>` を返し、CLI 層で Warning 表示 or Error 中断します。
+`SessionMode::validate_combination()` が `Vec<ConfigIssue>` を返し、CLI 層で Warning 表示 or Error 中断します。
 
 | ConsensusLevel | PhaseScope | Strategy | Severity | Code | 理由 |
 |---|---|---|---|---|---|
@@ -228,30 +228,70 @@ enum が「何を使うか」を、trait が「どう実行するか」を担い
 
 定義ファイル: `domain/src/agent/validation.rs`（`Severity`, `ConfigIssueCode`, `ConfigIssue`）
 
-### AgentConfig
+### Configuration Types / 設定型（4型分割）
+
+旧 `AgentConfig`（deprecated）は 4 つの focused な型に分割されました：
+
+| 型 | 層 | 性質 | 用途 |
+|----|-----|------|------|
+| `SessionMode` | domain | runtime-mutable | TUI で切り替え可能なオーケストレーション設定 |
+| `ModelConfig` | domain | static | ロールベースモデル選択 |
+| `AgentPolicy` | domain | static | ドメイン動作制約（HiL、レビュー設定） |
+| `ExecutionParams` | application | static | Use case ループ制御パラメータ |
 
 ```rust
-pub struct AgentConfig {
-    // ---- Role-based Model Configuration ----
-    pub exploration_model: Model,      // コンテキスト収集用（デフォルト: Haiku）
-    pub decision_model: Model,         // 計画作成・高リスクツール判断用（デフォルト: Sonnet）
-    pub review_models: Vec<Model>,     // Quorum レビュー投票用
+// domain/src/orchestration/session_mode.rs — TUI /solo, /ens, /fast で切替
+pub struct SessionMode {
+    pub consensus_level: ConsensusLevel,       // Solo or Ensemble
+    pub phase_scope: PhaseScope,               // Full, Fast, PlanOnly
+    pub strategy: OrchestrationStrategy,       // Quorum or Debate
+}
 
-    // ---- Orchestration Configuration ----
-    pub consensus_level: ConsensusLevel,             // Solo or Ensemble
-    pub phase_scope: PhaseScope,                     // Full, Fast, PlanOnly
-    pub orchestration_strategy: OrchestrationStrategy, // Quorum or Debate
+// domain/src/agent/model_config.rs — ロールベースモデル設定
+pub struct ModelConfig {
+    pub exploration: Model,   // コンテキスト収集用（デフォルト: Haiku）
+    pub decision: Model,      // 計画作成・高リスクツール判断用（デフォルト: Sonnet）
+    pub review: Vec<Model>,   // Quorum レビュー投票用
+}
 
-    // ---- Behavior Configuration ----
-    pub require_plan_review: bool,     // 常に true（計画レビューは必須）
-    pub require_final_review: bool,    // 最終レビューを有効化
-    pub max_iterations: usize,         // 最大実行イテレーション数
-    pub working_dir: Option<String>,   // ツール実行の作業ディレクトリ
-    pub max_tool_retries: usize,       // ツールバリデーションエラー時の最大リトライ数
-    pub max_plan_revisions: usize,     // 人間介入までの最大計画修正回数
-    pub hil_mode: HilMode,            // 人間介入モード
+// domain/src/agent/agent_policy.rs — ドメインポリシー
+pub struct AgentPolicy {
+    pub hil_mode: HilMode,
+    pub require_plan_review: bool,     // 常に true
+    pub require_final_review: bool,
+    pub max_plan_revisions: usize,
+}
+
+// application/src/config/execution_params.rs — 実行制御
+pub struct ExecutionParams {
+    pub max_iterations: usize,
+    pub max_tool_turns: usize,
+    pub max_tool_retries: usize,
+    pub working_dir: Option<String>,
+    pub ensemble_session_timeout: Option<Duration>,
 }
 ```
+
+`QuorumConfig`（application 層）が 4 型をまとめるコンテナとして機能し、Buffer Controller 間の伝播を担います：
+
+```rust
+// application/src/config/quorum_config.rs
+pub struct QuorumConfig { /* SessionMode, ModelConfig, AgentPolicy, ExecutionParams */ }
+impl QuorumConfig {
+    pub fn mode_mut(&mut self) -> &mut SessionMode; // runtime-mutable
+    pub fn to_agent_input(&self, request: impl Into<String>) -> RunAgentInput;
+    pub fn to_quorum_input(&self, question: impl Into<String>) -> RunQuorumInput;
+}
+```
+
+#### Buffer 必要性マップ
+
+| 型 | Agent | Ask | Discuss |
+|----|-------|-----|---------|
+| `SessionMode` | Yes | No (Solo固定) | Yes |
+| `ModelConfig` | Yes | Yes | Yes |
+| `AgentPolicy` | Yes | No | No |
+| `ExecutionParams` | Yes | Yes | No |
 
 ### Role-Based Model Configuration / ロールベースモデル設定
 
@@ -287,7 +327,10 @@ strategy = "quorum"            # "quorum" or "debate"
 
 | File | Description |
 |------|-------------|
-| `domain/src/agent/entities.rs` | `AgentState`, `AgentConfig`, `Plan`, `Task`, `AgentPhase` |
+| `domain/src/agent/entities.rs` | `AgentState`, `Plan`, `Task`, `AgentPhase` |
+| `domain/src/agent/model_config.rs` | `ModelConfig`（ロールベースモデル設定） |
+| `domain/src/agent/agent_policy.rs` | `AgentPolicy`, `HilAction`（ドメインポリシー） |
+| `domain/src/orchestration/session_mode.rs` | `SessionMode`（runtime-mutable オーケストレーション設定） |
 | `domain/src/agent/validation.rs` | `ConfigIssue`, `ConfigIssueCode`, `Severity`（組み合わせバリデーション） |
 | `domain/src/agent/value_objects.rs` | `AgentId`, `AgentContext`, `TaskResult`, `Thought` |
 | `domain/src/tool/entities.rs` | `ToolDefinition`, `ToolCall`, `ToolSpec`, `RiskLevel` |
@@ -295,6 +338,8 @@ strategy = "quorum"            # "quorum" or "debate"
 | `domain/src/tool/traits.rs` | `ToolValidator` |
 | `domain/src/prompt/agent.rs` | `AgentPromptTemplate` |
 | `application/src/ports/tool_executor.rs` | `ToolExecutorPort` trait |
+| `application/src/config/execution_params.rs` | `ExecutionParams`（実行ループ制御） |
+| `application/src/config/quorum_config.rs` | `QuorumConfig`（4型コンテナ、Buffer 伝播用） |
 | `application/src/use_cases/run_agent.rs` | `RunAgentUseCase`, `RunAgentInput`, `RunAgentOutput`, `AgentProgressNotifier` |
 | `infrastructure/src/tools/` | `LocalToolExecutor` 実装 |
 | `presentation/src/agent/repl.rs` | エージェント REPL UI |
@@ -418,4 +463,4 @@ pub enum HumanDecision {
 - [Tool System](./tool-system.md) - エージェントが使用するツールの詳細
 - [CLI & Configuration](./cli-and-configuration.md) - エージェントの設定と REPL コマンド
 
-<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。AgentConfig は ConsensusLevel（Solo/Ensemble）、PhaseScope（Full/Fast/PlanOnly）、OrchestrationStrategy（Quorum/Debate）の3つの直交軸で設定。モデル設定は [models] セクションで一元管理（exploration, decision, review）。組み合わせバリデーション: Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。定義は domain/src/agent/validation.rs。主要ファイルは domain/src/agent/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->
+<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。設定は4型に分割: SessionMode(domain, runtime-mutable: consensus_level/phase_scope/strategy)、ModelConfig(domain: exploration/decision/review)、AgentPolicy(domain: hil_mode/require_plan_review/require_final_review/max_plan_revisions)、ExecutionParams(application: max_iterations/max_tool_turns/max_tool_retries/working_dir/ensemble_session_timeout)。QuorumConfig(application)が4型コンテナとしてBuffer間の伝播を担う。旧AgentConfigはdeprecated。組み合わせバリデーション: SessionMode::validate_combination()。Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。定義は domain/src/agent/validation.rs + domain/src/orchestration/session_mode.rs。主要ファイルは domain/src/agent/、domain/src/orchestration/session_mode.rs、application/src/config/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->

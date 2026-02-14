@@ -8,7 +8,8 @@ pub mod ports;
 pub mod use_cases;
 
 // Re-export commonly used types
-pub use config::BehaviorConfig;
+pub use config::ExecutionParams;
+pub use config::QuorumConfig;
 pub use ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 pub use ports::{
     context_loader::ContextLoaderPort,

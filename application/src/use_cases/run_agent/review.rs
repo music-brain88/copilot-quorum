@@ -12,7 +12,8 @@ use crate::ports::llm_gateway::{GatewayError, LlmGateway};
 use crate::ports::tool_executor::ToolExecutorPort;
 use async_trait::async_trait;
 use quorum_domain::quorum::parsing::{parse_final_review_response, parse_review_response};
-use quorum_domain::{AgentConfig, AgentPromptTemplate, AgentState, Model, Task};
+use quorum_domain::agent::model_config::ModelConfig;
+use quorum_domain::{AgentPromptTemplate, AgentState, Model, Task};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -70,10 +71,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ActionReviewer
         tool_call_json: &str,
         task: &Task,
         state: &AgentState,
-        config: &AgentConfig,
+        models: &ModelConfig,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<ReviewDecision, RunAgentError> {
-        let models = &config.review_models;
+        let models = &models.review;
         if models.is_empty() {
             return Ok(ReviewDecision::SkipReview);
         }
@@ -195,7 +196,7 @@ where
             .ok_or_else(|| RunAgentError::PlanningFailed("No plan to review".to_string()))?;
 
         // Skip plan review if configured to do so (e.g., --no-quorum flag)
-        if !input.config.require_plan_review {
+        if !input.policy.require_plan_review {
             info!("Plan review disabled, auto-approving plan");
             return Ok(QuorumReviewResult {
                 approved: true,
@@ -204,7 +205,7 @@ where
             });
         }
 
-        let models = &input.config.review_models;
+        let models = &input.models.review;
         if models.is_empty() {
             // No quorum models configured, auto-approve
             info!("No quorum models configured, auto-approving plan");
@@ -301,7 +302,7 @@ where
             RunAgentError::TaskExecutionFailed("No plan for final review".to_string())
         })?;
 
-        let models = &input.config.review_models;
+        let models = &input.models.review;
         if models.is_empty() {
             return Ok(QuorumReviewResult {
                 approved: true,

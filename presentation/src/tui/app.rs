@@ -42,7 +42,8 @@ use quorum_application::{
     AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort, UiEvent,
 };
 use quorum_domain::core::string::truncate;
-use quorum_domain::{AgentConfig, ConsensusLevel, HumanDecision, Model};
+use quorum_application::QuorumConfig;
+use quorum_domain::{ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -88,7 +89,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         gateway: Arc<G>,
         tool_executor: Arc<T>,
         context_loader: Arc<C>,
-        config: AgentConfig,
+        config: QuorumConfig,
     ) -> Self {
         // Channels
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();

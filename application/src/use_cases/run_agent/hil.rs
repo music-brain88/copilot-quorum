@@ -39,11 +39,11 @@ where
             &input.request,
             plan,
             review_history,
-            input.config.max_plan_revisions,
+            input.policy.max_plan_revisions,
         );
 
         // Determine decision based on HiL mode
-        match input.config.hil_mode {
+        match input.policy.hil_mode {
             HilMode::AutoReject => {
                 info!("Auto-rejecting due to HilMode::AutoReject");
                 Ok(HumanDecision::Reject)
@@ -91,7 +91,7 @@ where
 
         progress.on_execution_confirmation_required(&input.request, plan);
 
-        match input.config.hil_mode {
+        match input.policy.hil_mode {
             HilMode::AutoApprove => {
                 info!("Execution confirmation auto-approved (HilMode::AutoApprove)");
                 Ok(HumanDecision::Approve)

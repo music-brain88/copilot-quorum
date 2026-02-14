@@ -16,5 +16,6 @@
 pub mod entities;
 pub mod mode;
 pub mod scope;
+pub mod session_mode;
 pub mod strategy;
 pub mod value_objects;
