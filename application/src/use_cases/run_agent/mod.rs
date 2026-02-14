@@ -679,9 +679,7 @@ mod tests {
     use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::tool::value_objects::ToolResult;
-    use quorum_domain::{
-        AgentConfig, ConsensusLevel, ContextMode, InteractionType, Model, PhaseScope,
-    };
+    use quorum_domain::{AgentConfig, ConsensusLevel, Model, PhaseScope};
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
 
@@ -1010,8 +1008,6 @@ mod tests {
                 review_models: vec![Model::ClaudeSonnet45],
                 consensus_level: ConsensusLevel::Solo,
                 phase_scope: PhaseScope::Full,
-                interaction_type: InteractionType::Ask,
-                context_mode: ContextMode::Shared,
                 require_plan_review: true,
                 require_final_review: false,
                 max_iterations: 50,
@@ -1088,8 +1084,6 @@ mod tests {
                 review_models: vec![Model::ClaudeHaiku45, Model::ClaudeSonnet45],
                 consensus_level: ConsensusLevel::Ensemble,
                 phase_scope: PhaseScope::Fast,
-                interaction_type: InteractionType::Ask,
-                context_mode: ContextMode::Shared,
                 require_plan_review: false,
                 require_final_review: false,
                 max_iterations: 50,

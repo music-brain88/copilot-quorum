@@ -29,8 +29,6 @@ cargo run -p copilot-quorum -- --ensemble "Design the auth system"
 # REPL commands
 /solo      # Switch to Solo mode
 /ens       # Switch to Ensemble mode
-/ask       # Switch to Ask mode (Q&A)
-/discuss   # Switch to Discuss mode (multi-model discussion)
 /council <question>  # Run ad-hoc Quorum Discussion
 ```
 
@@ -61,23 +59,18 @@ cargo run -p copilot-quorum -- /init
 Project-level config: `quorum.toml` (or `~/.config/copilot-quorum/config.toml` for global)
 
 ```toml
-# Quorum settings (new unified configuration)
+# Role-based model selection
+[models]
+exploration = "gpt-5.2-codex"           # Context gathering + low-risk tools
+decision = "claude-sonnet-4.5"          # Planning + high-risk tools
+review = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+
+# Quorum consensus rules
 [quorum]
 rule = "majority"        # "majority", "unanimous", "atleast:2", "75%"
 min_models = 2           # Minimum models for valid consensus
-
-[quorum.discussion]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
 moderator = "claude-opus-4.5"
 enable_peer_review = true
-
-# Legacy council settings (still supported)
-[council]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
-moderator = "claude-opus-4.5"
-
-[behavior]
-enable_review = true
 
 [output]
 format = "synthesis"  # "full", "synthesis", or "json"
@@ -86,8 +79,6 @@ format = "synthesis"  # "full", "synthesis", or "json"
 consensus_level = "solo"  # "solo" or "ensemble"
 phase_scope = "full"      # "full", "fast", "plan-only"
 strategy = "quorum"       # "quorum" or "debate"
-interaction_type = "ask"  # "ask" or "discuss"
-context_mode = "shared"   # "shared" or "fresh"
 hil_mode = "interactive"  # "interactive", "auto_reject", "auto_approve"
 
 [tui.input]
@@ -120,7 +111,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 
 | Layer | Crate | Description |
 |-------|-------|-------------|
-| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy, InteractionType, ContextMode, LlmResponse, ContentBlock, StopReason) |
+| domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy, LlmResponse, ContentBlock, StopReason) |
 | application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort, ToolResultMessage) |
 | infrastructure | `quorum-infrastructure` | Copilot CLI adapter, LocalToolExecutor (file, command, search tools) |
 | presentation | `quorum-presentation` | CLI commands, ChatRepl, ConsoleFormatter, ProgressReporter |
@@ -141,7 +132,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 domain/src/
 ├── core/           # Model, Question, Error
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
-├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, InteractionType, ContextMode, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
+├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
 ├── agent/          # AgentState, Plan, Task, AgentConfig (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolSpec, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate

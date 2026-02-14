@@ -43,17 +43,6 @@ impl ReplPresenter {
                 strategy,
                 description,
             } => self.render_strategy_changed(strategy, description),
-            UiEvent::InteractionChanged {
-                interaction_type,
-                description,
-            } => {
-                println!(
-                    "{} Interaction: {} ({})",
-                    "→".cyan(),
-                    interaction_type.to_string().cyan().bold(),
-                    description
-                );
-            }
             UiEvent::HistoryCleared => {
                 println!("{}", "Conversation history cleared.".green());
             }
@@ -257,8 +246,6 @@ impl ReplPresenter {
         );
         println!("  Phase Scope:       {}", snapshot.phase_scope);
         println!("  Strategy:          {}", snapshot.orchestration_strategy);
-        println!("  Interaction:       {}", snapshot.interaction_type);
-        println!("  Context Mode:      {}", snapshot.context_mode);
         println!("  Plan Review:       {}", "Always required".green());
         println!(
             "  Final Review:      {}",

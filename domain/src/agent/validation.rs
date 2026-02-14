@@ -2,7 +2,6 @@
 //!
 //! Validates the orthogonal configuration axes:
 //! [`ConsensusLevel`] × [`PhaseScope`] × [`OrchestrationStrategy`]
-//! × [`InteractionType`] × [`ContextMode`]
 //!
 //! Some combinations are invalid or unsupported. This module detects them
 //! and returns structured issues with severity levels.
@@ -13,13 +12,12 @@
 //! use quorum_domain::agent::{AgentConfig, ConfigIssue};
 //! use quorum_domain::agent::validation::Severity;
 //!
-//! let config = AgentConfig::default(); // Solo + Full + Quorum + Ask + Shared
+//! let config = AgentConfig::default(); // Solo + Full + Quorum
 //! let issues = config.validate_combination();
 //! assert!(issues.is_empty()); // Valid combination
 //! ```
 
 use super::entities::AgentConfig;
-use crate::orchestration::interaction::InteractionType;
 use crate::orchestration::mode::ConsensusLevel;
 use crate::orchestration::scope::PhaseScope;
 use crate::orchestration::strategy::OrchestrationStrategy;
@@ -42,8 +40,6 @@ pub enum ConfigIssueCode {
     DebateNotImplemented,
     /// Ensemble + Fast: review phases are skipped, reducing Ensemble's value.
     EnsembleWithFast,
-    /// Solo + Ask with non-default orchestration: orchestration has no effect.
-    AskWithOrchestration,
 }
 
 /// A detected issue in the AgentConfig combination.
@@ -99,27 +95,6 @@ impl AgentConfig {
             });
         }
 
-        // Solo + Ask + non-default orchestration: orchestration has no effect
-        if self.consensus_level == ConsensusLevel::Solo
-            && self.interaction_type == InteractionType::Ask
-            && is_debate
-        {
-            // Solo + Ask + Debate is already caught by SoloWithDebate (Error).
-            // Only warn if not already an error for the same reason.
-            if !issues
-                .iter()
-                .any(|i| i.code == ConfigIssueCode::SoloWithDebate)
-            {
-                issues.push(ConfigIssue {
-                    severity: Severity::Warning,
-                    code: ConfigIssueCode::AskWithOrchestration,
-                    message: "Solo + Ask mode does not use orchestration; \
-                              the orchestration strategy setting has no effect"
-                        .to_string(),
-                });
-            }
-        }
-
         issues
     }
 
@@ -132,7 +107,6 @@ impl AgentConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orchestration::interaction::{ContextMode, InteractionType};
     use crate::orchestration::strategy::{DebateConfig, OrchestrationStrategy};
 
     // ==================== Helper ====================
@@ -146,18 +120,6 @@ mod tests {
             .with_consensus_level(level)
             .with_phase_scope(scope)
             .with_orchestration_strategy(strategy)
-    }
-
-    fn make_full_config(
-        level: ConsensusLevel,
-        scope: PhaseScope,
-        strategy: OrchestrationStrategy,
-        interaction: InteractionType,
-        context: ContextMode,
-    ) -> AgentConfig {
-        make_config(level, scope, strategy)
-            .with_interaction_type(interaction)
-            .with_context_mode(context)
     }
 
     fn quorum() -> OrchestrationStrategy {
@@ -296,96 +258,5 @@ mod tests {
     fn has_errors_returns_false_for_empty() {
         let issues: Vec<ConfigIssue> = vec![];
         assert!(!AgentConfig::has_errors(&issues));
-    }
-
-    // ==================== InteractionType + ContextMode combinations ====================
-
-    #[test]
-    fn solo_ask_quorum_is_valid() {
-        let issues = make_full_config(
-            ConsensusLevel::Solo,
-            PhaseScope::Full,
-            quorum(),
-            InteractionType::Ask,
-            ContextMode::Shared,
-        )
-        .validate_combination();
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn solo_discuss_quorum_is_valid() {
-        let issues = make_full_config(
-            ConsensusLevel::Solo,
-            PhaseScope::Full,
-            quorum(),
-            InteractionType::Discuss,
-            ContextMode::Shared,
-        )
-        .validate_combination();
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn ensemble_ask_quorum_is_valid() {
-        let issues = make_full_config(
-            ConsensusLevel::Ensemble,
-            PhaseScope::Full,
-            quorum(),
-            InteractionType::Ask,
-            ContextMode::Shared,
-        )
-        .validate_combination();
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn ensemble_discuss_quorum_is_valid() {
-        let issues = make_full_config(
-            ConsensusLevel::Ensemble,
-            PhaseScope::Full,
-            quorum(),
-            InteractionType::Discuss,
-            ContextMode::Shared,
-        )
-        .validate_combination();
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn context_mode_does_not_affect_validation() {
-        // Fresh context should not trigger any issues on its own
-        let issues = make_full_config(
-            ConsensusLevel::Solo,
-            PhaseScope::Full,
-            quorum(),
-            InteractionType::Ask,
-            ContextMode::Fresh,
-        )
-        .validate_combination();
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn solo_ask_debate_is_error_not_warning() {
-        // Solo + Ask + Debate should be Error (SoloWithDebate), not AskWithOrchestration
-        let issues = make_full_config(
-            ConsensusLevel::Solo,
-            PhaseScope::Full,
-            debate(),
-            InteractionType::Ask,
-            ContextMode::Shared,
-        )
-        .validate_combination();
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].severity, Severity::Error);
-        assert_eq!(issues[0].code, ConfigIssueCode::SoloWithDebate);
-    }
-
-    #[test]
-    fn default_config_includes_new_axes() {
-        let config = AgentConfig::default();
-        assert_eq!(config.interaction_type, InteractionType::Ask);
-        assert_eq!(config.context_mode, ContextMode::Shared);
     }
 }

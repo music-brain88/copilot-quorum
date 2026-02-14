@@ -25,7 +25,7 @@ impl<'a> Widget for HeaderWidget<'a> {
             quorum_domain::ConsensusLevel::Solo => "solo",
             quorum_domain::ConsensusLevel::Ensemble => "ens",
         };
-        let mode_label = format!("{}:{}", level_short, self.state.interaction_type);
+        let mode_label = level_short.to_string();
         let mode_color = if self.state.consensus_level.is_ensemble() {
             Color::Magenta
         } else {

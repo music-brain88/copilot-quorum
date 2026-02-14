@@ -14,9 +14,8 @@ mod loader;
 
 pub use file_config::{
     ConfigValidationError, EnhancedToolConfig, FileAgentConfig, FileBuiltinToolsConfig,
-    FileCliToolsConfig, FileConfig, FileCouncilConfig, FileCustomToolConfig,
-    FileCustomToolParameter, FileGitHubConfig, FileIntegrationsConfig, FileMcpServerConfig,
-    FileMcpToolsConfig, FileOutputConfig, FileOutputFormat, FileReplConfig, FileToolsConfig,
-    FileTuiConfig, FileTuiInputConfig, ToolProviderType,
+    FileCliToolsConfig, FileConfig, FileCustomToolConfig, FileCustomToolParameter,
+    FileMcpServerConfig, FileMcpToolsConfig, FileModelsConfig, FileOutputConfig, FileOutputFormat,
+    FileReplConfig, FileToolsConfig, FileTuiConfig, FileTuiInputConfig, ToolProviderType,
 };
 pub use loader::ConfigLoader;
