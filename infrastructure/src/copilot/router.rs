@@ -259,10 +259,8 @@ impl SessionChannel {
                     );
                     let result =
                         ToolCallResult::error("Tool not available in this session context");
-                    let response = JsonRpcResponseOut::new(
-                        request_id,
-                        serde_json::to_value(result).unwrap_or_default(),
-                    );
+                    let response =
+                        JsonRpcResponseOut::new(request_id, result.into_rpc_value());
                     let _ = self.router.send_response(&response).await;
                 }
             }
@@ -515,10 +513,8 @@ impl SessionChannel {
                     );
                     let result =
                         ToolCallResult::error("Tool not available in this session context");
-                    let response = JsonRpcResponseOut::new(
-                        request_id,
-                        serde_json::to_value(result).unwrap_or_default(),
-                    );
+                    let response =
+                        JsonRpcResponseOut::new(request_id, result.into_rpc_value());
                     let _ = self.router.send_response(&response).await;
                 }
             }
@@ -825,10 +821,8 @@ impl MessageRouter {
                                 let result = ToolCallResult::error(
                                     "Session no longer active (timed out or completed)",
                                 );
-                                let response = JsonRpcResponseOut::new(
-                                    id,
-                                    serde_json::to_value(result).unwrap_or_default(),
-                                );
+                                let response =
+                                    JsonRpcResponseOut::new(id, result.into_rpc_value());
                                 if let Ok(json) = serde_json::to_string(&response) {
                                     let header = format!("Content-Length: {}\r\n\r\n", json.len());
                                     let mut w = writer.lock().await;

@@ -300,6 +300,19 @@ pub struct ToolCallResult {
     pub result_type: String,
 }
 
+/// Wire-format wrapper matching the official Copilot SDK's `toolCallResponse`.
+///
+/// The CLI expects the JSON-RPC `result` field to contain
+/// `{ "result": <ToolCallResult> }`, not the bare `ToolCallResult` at the
+/// top level.  Both the [Go SDK] and [Node.js SDK] wrap the payload this way.
+///
+/// [Go SDK]: https://github.com/github/copilot-sdk/blob/main/go/client.go
+/// [Node.js SDK]: https://github.com/github/copilot-sdk/blob/main/nodejs/src/client.ts
+#[derive(Debug, Clone, Serialize)]
+struct ToolCallResponse {
+    result: ToolCallResult,
+}
+
 impl ToolCallResult {
     pub fn success(text: impl Into<String>) -> Self {
         Self {
@@ -313,6 +326,13 @@ impl ToolCallResult {
             text_result_for_llm: text.into(),
             result_type: "failure".to_string(),
         }
+    }
+
+    /// Serialize into the `{ "result": { ... } }` envelope expected by the
+    /// Copilot CLI on the wire.
+    pub fn into_rpc_value(self) -> serde_json::Value {
+        serde_json::to_value(ToolCallResponse { result: self })
+            .expect("ToolCallResponse serialization cannot fail")
     }
 }
 
@@ -428,16 +448,18 @@ mod tests {
 
     #[test]
     fn json_rpc_response_out_serialize() {
+        // Use into_rpc_value() which wraps in { "result": ... } envelope
         let resp = JsonRpcResponseOut::new(
             42,
-            serde_json::to_value(ToolCallResult::success("file contents")).unwrap(),
+            ToolCallResult::success("file contents").into_rpc_value(),
         );
 
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 42);
-        assert_eq!(json["result"]["textResultForLlm"], "file contents");
-        assert_eq!(json["result"]["resultType"], "success");
+        // CLI accesses response.result.result.resultType (double-nested)
+        assert_eq!(json["result"]["result"]["textResultForLlm"], "file contents");
+        assert_eq!(json["result"]["result"]["resultType"], "success");
     }
 
     #[test]
@@ -445,5 +467,17 @@ mod tests {
         let result = ToolCallResult::error("File not found");
         assert_eq!(result.result_type, "failure");
         assert_eq!(result.text_result_for_llm, "File not found");
+    }
+
+    #[test]
+    fn tool_call_result_into_rpc_value_wraps_in_result_envelope() {
+        let rpc = ToolCallResult::success("output").into_rpc_value();
+        // Must have { "result": { "textResultForLlm": ..., "resultType": ... } }
+        assert!(rpc.get("result").is_some(), "missing 'result' wrapper");
+        assert_eq!(rpc["result"]["textResultForLlm"], "output");
+        assert_eq!(rpc["result"]["resultType"], "success");
+
+        let rpc_err = ToolCallResult::error("boom").into_rpc_value();
+        assert_eq!(rpc_err["result"]["resultType"], "failure");
     }
 }
