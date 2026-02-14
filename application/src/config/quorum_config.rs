@@ -32,7 +32,7 @@ use quorum_domain::{AgentPolicy, ConsensusLevel, ModelConfig, SessionMode};
 /// - Read-only accessors for static config (models, policy, execution)
 /// - Mutable accessor for runtime-mutable mode (`mode_mut()`)
 /// - Factory methods to build Use Case inputs (`to_agent_input()`, `to_quorum_input()`)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct QuorumConfig {
     mode: SessionMode,
     models: ModelConfig,
@@ -140,17 +140,6 @@ impl QuorumConfig {
             input = input.with_moderator(moderator.clone());
         }
         input
-    }
-}
-
-impl Default for QuorumConfig {
-    fn default() -> Self {
-        Self {
-            mode: SessionMode::default(),
-            models: ModelConfig::default(),
-            policy: AgentPolicy::default(),
-            execution: ExecutionParams::default(),
-        }
     }
 }
 
