@@ -87,19 +87,19 @@ impl QuorumConfig {
 
     /// Set the working directory.
     pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
-        self.execution.working_dir = Some(dir.into());
+        self.execution = self.execution.with_working_dir(dir);
         self
     }
 
     /// Enable final review.
     pub fn with_final_review(mut self) -> Self {
-        self.policy.require_final_review = true;
+        self.policy = self.policy.with_require_final_review(true);
         self
     }
 
     /// Set the consensus level.
     pub fn with_consensus_level(mut self, level: ConsensusLevel) -> Self {
-        self.mode.consensus_level = level;
+        self.mode = self.mode.with_consensus_level(level);
         self
     }
 
