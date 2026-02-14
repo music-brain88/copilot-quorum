@@ -7,6 +7,7 @@
 //! 2. **Stage 2** — Run exploration agent with tool use
 //! 3. **Stage 3** — Proceed with minimal context
 
+use crate::config::ExecutionParams;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{LlmSession, ToolResultMessage};
@@ -14,7 +15,7 @@ use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::run_agent::RunAgentError;
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use quorum_domain::core::string::truncate;
-use quorum_domain::{AgentConfig, AgentContext, AgentPromptTemplate, ProjectContext};
+use quorum_domain::{AgentContext, AgentPromptTemplate, ProjectContext};
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -50,24 +51,24 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
     /// # Arguments
     /// * `session` - LLM session for exploration (Stage 2)
     /// * `request` - The user's request (used to guide exploration)
-    /// * `config` - Agent configuration
+    /// * `execution` - Execution parameters (working_dir, max_tool_turns)
     /// * `progress` - Progress notifier for UI updates
     pub async fn execute(
         &self,
         session: &dyn LlmSession,
         request: &str,
-        config: &AgentConfig,
+        execution: &ExecutionParams,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<AgentContext, RunAgentError> {
         let mut context = AgentContext::new();
 
-        if let Some(working_dir) = &config.working_dir {
+        if let Some(working_dir) = &execution.working_dir {
             context = context.with_project_root(working_dir);
         }
 
         // ========== Stage 1: Load known files directly (no LLM needed) ==========
         if let Some(ref context_loader) = self.context_loader
-            && let Some(ref working_dir) = config.working_dir
+            && let Some(ref working_dir) = execution.working_dir
         {
             let project_root = Path::new(working_dir);
             let files = context_loader.load_known_files(project_root);
@@ -78,7 +79,10 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
                     "Stage 1: Using existing context from: {}",
                     project_ctx.source_description()
                 );
-                return Ok(Self::context_from_project_ctx(project_ctx, config));
+                return Ok(Self::context_from_project_ctx(
+                    project_ctx,
+                    execution.working_dir.as_deref(),
+                ));
             }
 
             // Even if not sufficient, preserve any partial context
@@ -92,7 +96,7 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
         info!("Stage 2: Running exploration agent for additional context");
 
         match self
-            .run_exploration_agent(session, request, config, progress)
+            .run_exploration_agent(session, request, execution, progress)
             .await
         {
             Ok(enriched_ctx) => {
@@ -111,10 +115,13 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
     }
 
     /// Convert ProjectContext to AgentContext
-    fn context_from_project_ctx(project_ctx: ProjectContext, config: &AgentConfig) -> AgentContext {
+    fn context_from_project_ctx(
+        project_ctx: ProjectContext,
+        working_dir: Option<&str>,
+    ) -> AgentContext {
         let mut context = AgentContext::new();
 
-        if let Some(ref working_dir) = config.working_dir {
+        if let Some(working_dir) = working_dir {
             context = context.with_project_root(working_dir);
         }
 
@@ -153,19 +160,20 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
         &self,
         session: &dyn LlmSession,
         request: &str,
-        config: &AgentConfig,
+        execution: &ExecutionParams,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<AgentContext, RunAgentError> {
         let mut context = AgentContext::new();
 
-        if let Some(working_dir) = &config.working_dir {
+        if let Some(working_dir) = &execution.working_dir {
             context = context.with_project_root(working_dir);
         }
 
         // Ask the model to gather context using tools (Native multi-turn loop)
-        let prompt = AgentPromptTemplate::context_gathering(request, config.working_dir.as_deref());
+        let prompt =
+            AgentPromptTemplate::context_gathering(request, execution.working_dir.as_deref());
         let tools = self.tool_executor.tool_spec().to_api_tools();
-        let max_turns = config.max_tool_turns;
+        let max_turns = execution.max_tool_turns;
         let mut turn_count = 0;
         let mut results = Vec::new();
 

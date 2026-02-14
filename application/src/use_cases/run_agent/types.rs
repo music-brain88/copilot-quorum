@@ -1,6 +1,10 @@
 //! Type definitions for the RunAgent use case.
 
+use crate::config::ExecutionParams;
 use crate::ports::llm_gateway::GatewayError;
+use quorum_domain::agent::agent_policy::AgentPolicy;
+use quorum_domain::agent::model_config::ModelConfig;
+use quorum_domain::orchestration::session_mode::SessionMode;
 use quorum_domain::{EnsemblePlanResult, Plan};
 use thiserror::Error;
 
@@ -78,27 +82,46 @@ pub(super) enum EnsemblePlanningOutcome {
     TextResponse(String),
 }
 
-/// Input for the RunAgent use case
+/// Input for the RunAgent use case.
+///
+/// # Config Split
+///
+/// Input groups configuration by concern:
+///
+/// | Field | Type | Purpose |
+/// |-------|------|---------|
+/// | `mode` | [`SessionMode`] | Runtime-mutable orchestration settings |
+/// | `models` | [`ModelConfig`] | Role-based model selection |
+/// | `policy` | [`AgentPolicy`] | Domain behavioral constraints |
+/// | `execution` | [`ExecutionParams`] | Use case loop control |
 #[derive(Debug, Clone)]
 pub struct RunAgentInput {
     /// The user's request
     pub request: String,
-    /// Agent configuration
-    pub config: quorum_domain::AgentConfig,
+    /// Runtime-mutable orchestration mode (consensus, scope, strategy)
+    pub mode: SessionMode,
+    /// Role-based model configuration
+    pub models: ModelConfig,
+    /// Domain behavioral policy (HiL, plan review, revision limits)
+    pub policy: AgentPolicy,
+    /// Execution loop control parameters
+    pub execution: ExecutionParams,
 }
 
 impl RunAgentInput {
-    pub fn new(request: impl Into<String>, config: quorum_domain::AgentConfig) -> Self {
+    pub fn new(
+        request: impl Into<String>,
+        mode: SessionMode,
+        models: ModelConfig,
+        policy: AgentPolicy,
+        execution: ExecutionParams,
+    ) -> Self {
         Self {
             request: request.into(),
-            config,
-        }
-    }
-
-    pub fn with_model(request: impl Into<String>, model: quorum_domain::Model) -> Self {
-        Self {
-            request: request.into(),
-            config: quorum_domain::AgentConfig::new(model),
+            mode,
+            models,
+            policy,
+            execution,
         }
     }
 }

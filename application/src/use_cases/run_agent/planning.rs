@@ -90,7 +90,7 @@ where
         previous_feedback: Option<&str>,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<EnsemblePlanningOutcome, RunAgentError> {
-        let models = &input.config.review_models;
+        let models = &input.models.review;
 
         if models.is_empty() {
             return Err(RunAgentError::EnsemblePlanningFailed(
@@ -111,7 +111,7 @@ where
         );
         progress.on_ensemble_start(models.len());
 
-        let session_timeout = input.config.ensemble_session_timeout;
+        let session_timeout = input.execution.ensemble_session_timeout;
         let mut join_set = JoinSet::new();
 
         for model in models {
@@ -289,7 +289,7 @@ where
                     .synthesize_text_responses(
                         &input.request,
                         &text_responses,
-                        &input.config.decision_model,
+                        &input.models.decision,
                     )
                     .await?;
                 return Ok(EnsemblePlanningOutcome::TextResponse(synthesized));

@@ -7,7 +7,8 @@
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::use_cases::run_agent::RunAgentError;
 use async_trait::async_trait;
-use quorum_domain::{AgentConfig, AgentState, Task};
+use quorum_domain::agent::model_config::ModelConfig;
+use quorum_domain::{AgentState, Task};
 
 /// Decision from the action review process
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,14 +33,14 @@ pub trait ActionReviewer: Send + Sync {
     /// * `tool_call_json` - JSON representation of the tool call
     /// * `task` - The task that triggered this tool call
     /// * `state` - Current agent state (for context)
-    /// * `config` - Agent configuration (for review models, etc.)
+    /// * `models` - Model configuration (for review models)
     /// * `progress` - Progress notifier for UI updates
     async fn review_action(
         &self,
         tool_call_json: &str,
         task: &Task,
         state: &AgentState,
-        config: &AgentConfig,
+        models: &ModelConfig,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<ReviewDecision, RunAgentError>;
 
