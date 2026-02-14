@@ -458,7 +458,10 @@ mod tests {
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 42);
         // CLI accesses response.result.result.resultType (double-nested)
-        assert_eq!(json["result"]["result"]["textResultForLlm"], "file contents");
+        assert_eq!(
+            json["result"]["result"]["textResultForLlm"],
+            "file contents"
+        );
         assert_eq!(json["result"]["result"]["resultType"], "success");
     }
 
