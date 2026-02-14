@@ -83,7 +83,7 @@ pub trait StrategyExecutor: Send + Sync {
 /// [`ConsensusLevel`](super::mode::ConsensusLevel): strategies define *how*
 /// models discuss, while consensus level defines *whether* multiple models
 /// participate at all.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrchestrationStrategy {
     /// Quorum strategy: equal discussion → review → synthesis.
     /// Uses the existing [`QuorumConfig`] for configuration.
@@ -150,7 +150,7 @@ impl std::fmt::Display for OrchestrationStrategy {
 ///
 /// Debate is an adversarial discussion format where models argue
 /// opposing positions, moderated by an optional moderator model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DebateConfig {
     /// Models participating in the debate
     pub models: Vec<Model>,

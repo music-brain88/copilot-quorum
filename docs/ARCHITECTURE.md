@@ -589,7 +589,9 @@ Quorum（合意形成）に関する型を定義します。
 | Type | Kind | Description |
 |------|------|-------------|
 | `AgentState` | Entity | エージェント実行の現在状態 |
-| `AgentConfig` | Entity | エージェント設定（プライマリモデル、合議モデル等） |
+| `SessionMode` | Value Object | ランタイム可変オーケストレーション設定 |
+| `ModelConfig` | Value Object | ロールベースモデル選択 |
+| `AgentPolicy` | Value Object | ドメイン動作制約（HiL、レビュー設定） |
 | `Plan` | Value Object | タスク計画（目的、理由付け、タスクリスト） |
 | `Task` | Value Object | 単一タスク（ツール呼び出し、依存関係） |
 | `AgentContext` | Value Object | 収集されたプロジェクトコンテキスト |
