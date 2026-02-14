@@ -9,7 +9,8 @@ use quorum_application::ExecutionParams;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
-    ConfigLoader, CopilotLlmGateway, FileConfig, LocalContextLoader, LocalToolExecutor,
+    ConfigLoader, CopilotLlmGateway, FileConfig, GitHubReferenceResolver, LocalContextLoader,
+    LocalToolExecutor,
 };
 use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
@@ -317,6 +318,10 @@ async fn main() -> Result<()> {
             context_header: config.tui.input.context_header,
         };
 
+        // Create reference resolver (graceful: None if gh CLI not available)
+        let reference_resolver =
+            GitHubReferenceResolver::try_new(working_dir.clone()).await;
+
         let mut tui_app = TuiApp::new(
             gateway.clone(),
             tool_executor.clone(),
@@ -324,6 +329,9 @@ async fn main() -> Result<()> {
             quorum_config,
         )
         .with_tui_config(tui_input_config);
+        if let Some(resolver) = reference_resolver {
+            tui_app = tui_app.with_reference_resolver(Arc::new(resolver));
+        }
         tui_app.run().await?;
         return Ok(());
     }
@@ -370,10 +378,17 @@ async fn main() -> Result<()> {
     // Create human intervention handler for interactive mode
     let human_intervention = Arc::new(InteractiveHumanIntervention::new());
 
+    // Create reference resolver (graceful: None if gh CLI not available)
+    let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
+
     // Create and run agent with cancellation support
-    let use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
-        .with_cancellation(cancellation_token.clone())
-        .with_human_intervention(human_intervention);
+    let mut use_case =
+        RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
+            .with_cancellation(cancellation_token.clone())
+            .with_human_intervention(human_intervention);
+    if let Some(resolver) = reference_resolver {
+        use_case = use_case.with_reference_resolver(Arc::new(resolver));
+    }
     let input = quorum_config.to_agent_input(request);
 
     let result = if repl_config.show_progress {

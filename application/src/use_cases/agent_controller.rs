@@ -24,6 +24,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::ports::human_intervention::HumanInterventionPort;
+use crate::ports::reference_resolver::ReferenceResolverPort;
 
 /// Entry in conversation history
 #[derive(Debug, Clone)]
@@ -156,6 +157,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub fn set_cancellation(&mut self, token: CancellationToken) {
         self.cancellation_token = Some(token.clone());
         self.use_case = self.use_case.clone().with_cancellation(token);
+    }
+
+    /// Set reference resolver for automatic reference resolution
+    pub fn set_reference_resolver(&mut self, resolver: Arc<dyn ReferenceResolverPort>) {
+        self.use_case = self.use_case.clone().with_reference_resolver(resolver);
     }
 
     /// Generate the prompt string for the REPL

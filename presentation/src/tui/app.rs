@@ -159,6 +159,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self
     }
 
+    pub fn with_reference_resolver(
+        self,
+        resolver: std::sync::Arc<dyn quorum_application::ReferenceResolverPort>,
+    ) -> Self {
+        let _ = self
+            .cmd_tx
+            .send(TuiCommand::SetReferenceResolver(resolver));
+        self
+    }
+
     pub fn with_tui_config(mut self, config: TuiInputConfig) -> Self {
         self.tui_config = config;
         self
@@ -1025,6 +1035,9 @@ async fn controller_task<
             }
             TuiCommand::SetCancellation(token) => {
                 controller.set_cancellation(token);
+            }
+            TuiCommand::SetReferenceResolver(resolver) => {
+                controller.set_reference_resolver(resolver);
             }
             TuiCommand::Quit => {
                 break;

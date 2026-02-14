@@ -26,6 +26,7 @@ use crate::ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
+use crate::ports::reference_resolver::ReferenceResolverPort;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::execute_task::ExecuteTaskUseCase;
 use crate::use_cases::gather_context::GatherContextUseCase;
@@ -51,6 +52,7 @@ pub struct RunAgentUseCase<
     pub(super) context_loader: Option<Arc<C>>,
     pub(super) cancellation_token: Option<CancellationToken>,
     pub(super) human_intervention: Option<Arc<dyn HumanInterventionPort>>,
+    pub(super) reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
 }
 
 impl<G, T, C> Clone for RunAgentUseCase<G, T, C>
@@ -66,6 +68,7 @@ where
             context_loader: self.context_loader.clone(),
             cancellation_token: self.cancellation_token.clone(),
             human_intervention: self.human_intervention.clone(),
+            reference_resolver: self.reference_resolver.clone(),
         }
     }
 }
@@ -97,6 +100,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
             context_loader: None,
             cancellation_token: None,
             human_intervention: None,
+            reference_resolver: None,
         }
     }
 }
@@ -115,6 +119,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             context_loader: Some(context_loader),
             cancellation_token: None,
             human_intervention: None,
+            reference_resolver: None,
         }
     }
 
@@ -127,6 +132,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     /// Set a cancellation token for graceful interruption
     pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
         self.cancellation_token = Some(token);
+        self
+    }
+
+    /// Set a reference resolver for automatic reference resolution during context gathering.
+    pub fn with_reference_resolver(mut self, resolver: Arc<dyn ReferenceResolverPort>) -> Self {
+        self.reference_resolver = Some(resolver);
         self
     }
 
@@ -233,11 +244,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             .create_session_with_system_prompt(&input.models.exploration, &system_prompt)
             .await?;
 
-        let gather_uc = GatherContextUseCase::new(
+        let mut gather_uc = GatherContextUseCase::new(
             self.tool_executor.clone(),
             self.context_loader.clone(),
             self.cancellation_token.clone(),
         );
+        if let Some(ref resolver) = self.reference_resolver {
+            gather_uc = gather_uc.with_reference_resolver(resolver.clone());
+        }
 
         match gather_uc
             .execute(
