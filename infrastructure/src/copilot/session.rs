@@ -472,11 +472,8 @@ impl LlmSession for CopilotSession {
         };
 
         // Send the JSON-RPC response back to the CLI
-        let response = JsonRpcResponseOut::new(
-            request_id,
-            serde_json::to_value(&tool_result)
-                .map_err(|e| GatewayError::RequestFailed(e.to_string()))?,
-        );
+        // Wrap in { "result": ... } envelope per official Copilot SDK wire format
+        let response = JsonRpcResponseOut::new(request_id, tool_result.into_rpc_value());
 
         self.router
             .send_response(&response)
