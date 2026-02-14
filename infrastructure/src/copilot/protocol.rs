@@ -295,7 +295,8 @@ impl JsonRpcResponseOut {
 pub struct ToolCallResult {
     /// The text result that the LLM should see.
     pub text_result_for_llm: String,
-    /// Result type: "text" for normal results, "error" for errors.
+    /// Result type per official Copilot SDK `ToolResultType`:
+    /// `"success"`, `"failure"`, `"rejected"`, or `"denied"`.
     pub result_type: String,
 }
 
@@ -303,14 +304,14 @@ impl ToolCallResult {
     pub fn success(text: impl Into<String>) -> Self {
         Self {
             text_result_for_llm: text.into(),
-            result_type: "text".to_string(),
+            result_type: "success".to_string(),
         }
     }
 
     pub fn error(text: impl Into<String>) -> Self {
         Self {
             text_result_for_llm: text.into(),
-            result_type: "error".to_string(),
+            result_type: "failure".to_string(),
         }
     }
 }
@@ -436,13 +437,13 @@ mod tests {
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 42);
         assert_eq!(json["result"]["textResultForLlm"], "file contents");
-        assert_eq!(json["result"]["resultType"], "text");
+        assert_eq!(json["result"]["resultType"], "success");
     }
 
     #[test]
     fn tool_call_result_error() {
         let result = ToolCallResult::error("File not found");
-        assert_eq!(result.result_type, "error");
+        assert_eq!(result.result_type, "failure");
         assert_eq!(result.text_result_for_llm, "File not found");
     }
 }
