@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// assert_eq!(config.decision, Model::ClaudeOpus45);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelConfig {
     /// Model for exploration: context gathering + low-risk tool execution.
     pub exploration: Model,
