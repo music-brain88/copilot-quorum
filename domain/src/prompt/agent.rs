@@ -1,5 +1,6 @@
 //! Prompt templates for the Agent system
 
+use crate::agent::context_mode::ContextMode;
 use crate::agent::{AgentContext, Plan, Task};
 use serde_json::json;
 
@@ -97,6 +98,15 @@ Call tools directly without preamble. Do not wrap tool calls in code blocks."#
                                     "type": "array",
                                     "items": { "type": "string" },
                                     "description": "IDs of tasks this depends on"
+                                },
+                                "context_mode": {
+                                    "type": "string",
+                                    "enum": ["full", "projected", "none"],
+                                    "description": "How much project context the task executor needs. 'full' = all gathered context (default), 'projected' = only context_brief, 'none' = no context."
+                                },
+                                "context_brief": {
+                                    "type": "string",
+                                    "description": "Focused context for 'projected' mode. Write the specific architectural context, conventions, or patterns the executor needs to know for this task."
                                 }
                             },
                             "required": ["id", "description"],
@@ -209,6 +219,18 @@ You MUST use the exact tool names listed below. Common mistakes are shown for re
 | `glob_search`   | `glob`, `find`, `find_files`, `list`      |
 | `grep_search`   | `grep`, `rg`, `search`, `ripgrep`, `find_in_files` |
 
+## Context Control (Optional)
+
+For tasks where the executor needs specific architectural context rather than the full
+project context, specify `context_mode` and `context_brief`:
+
+- `"full"` (default): All gathered project context
+- `"projected"`: Only the context_brief you write
+- `"none"`: No project context (simple tool execution)
+
+Use `projected` for code reviews, design analysis, or any task where understanding
+specific conventions/patterns matters more than knowing the whole project.
+
 ## Submitting Your Plan
 
 Use the `create_plan` tool to submit your plan. Be thorough but focused. Don't include unnecessary steps."#,
@@ -231,7 +253,12 @@ Use the `create_plan` tool to submit your plan. Be thorough but focused. Don't i
                     .as_ref()
                     .map(|n| format!(" (using {})", n))
                     .unwrap_or_default();
-                format!("{}. {}{}", i + 1, t.description, tool_info)
+                let context_info = t
+                    .context_mode
+                    .as_ref()
+                    .map(|m| format!(" [context: {}]", m))
+                    .unwrap_or_default();
+                format!("{}. {}{}{}", i + 1, t.description, tool_info, context_info)
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -375,10 +402,27 @@ Respond with JSON only:
             String::new()
         };
 
-        let context_summary = if !context.to_prompt_context().is_empty() {
-            format!("\n\n## Context\n\n{}", context.to_prompt_context())
-        } else {
-            String::new()
+        let context_summary = match task.context_mode {
+            Some(ContextMode::None) => String::new(),
+            Some(ContextMode::Projected) => {
+                if let Some(ref brief) = task.context_brief {
+                    format!("\n\n## Context\n\n{}", brief)
+                } else {
+                    // Fallback to full when projected but no brief provided
+                    if !context.to_prompt_context().is_empty() {
+                        format!("\n\n## Context\n\n{}", context.to_prompt_context())
+                    } else {
+                        String::new()
+                    }
+                }
+            }
+            Some(ContextMode::Full) | None => {
+                if !context.to_prompt_context().is_empty() {
+                    format!("\n\n## Context\n\n{}", context.to_prompt_context())
+                } else {
+                    String::new()
+                }
+            }
         };
 
         let previous = if !previous_results.is_empty() {
@@ -786,6 +830,85 @@ mod tests {
         assert!(prompt.contains("Write to important file"));
         assert!(prompt.contains("high-risk operation"));
         assert!(prompt.contains("APPROVE or REJECT"));
+    }
+
+    #[test]
+    fn test_task_execution_context_mode_projected() {
+        let context = AgentContext::new()
+            .with_project_root("/project")
+            .with_project_type("rust");
+        let task = Task::new("1", "Review the code")
+            .with_context_brief("Uses DDD pattern with strict layer boundaries.");
+
+        let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
+
+        // Should contain only the brief, not the full context
+        assert!(prompt.contains("DDD pattern with strict layer boundaries"));
+        assert!(!prompt.contains("rust")); // project_type from full context
+    }
+
+    #[test]
+    fn test_task_execution_context_mode_none() {
+        let context = AgentContext::new()
+            .with_project_root("/project")
+            .with_project_type("rust");
+        let task =
+            Task::new("1", "Search for files").with_context_mode(ContextMode::None);
+
+        let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
+
+        // Should not contain any context section
+        assert!(!prompt.contains("## Context"));
+        assert!(!prompt.contains("rust"));
+    }
+
+    #[test]
+    fn test_task_execution_context_mode_full() {
+        let context = AgentContext::new()
+            .with_project_root("/project")
+            .with_project_type("rust");
+        let task =
+            Task::new("1", "Analyze project").with_context_mode(ContextMode::Full);
+
+        let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
+
+        // Should contain full context
+        assert!(prompt.contains("## Context"));
+        assert!(prompt.contains("rust"));
+    }
+
+    #[test]
+    fn test_task_execution_context_mode_default_is_full() {
+        let context = AgentContext::new()
+            .with_project_root("/project")
+            .with_project_type("rust");
+        let task = Task::new("1", "Analyze project"); // no context_mode set
+
+        let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
+
+        // Default (None) should behave like Full
+        assert!(prompt.contains("## Context"));
+        assert!(prompt.contains("rust"));
+    }
+
+    #[test]
+    fn test_plan_review_shows_context_mode() {
+        let context = AgentContext::new();
+        let plan = Plan::new("Test objective", "Test reasoning")
+            .with_task(
+                Task::new("1", "Read file")
+                    .with_tool("read_file")
+                    .with_context_mode(ContextMode::None),
+            )
+            .with_task(
+                Task::new("2", "Review code")
+                    .with_context_brief("Project uses DDD."),
+            );
+
+        let prompt = AgentPromptTemplate::plan_review("Request", &plan, &context);
+
+        assert!(prompt.contains("[context: none]"));
+        assert!(prompt.contains("[context: projected]"));
     }
 
     #[test]

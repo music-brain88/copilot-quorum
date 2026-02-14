@@ -31,6 +31,7 @@ pub mod util;
 // Re-export commonly used types
 pub use agent::{
     agent_policy::{AgentPolicy, HilAction},
+    context_mode::ContextMode,
     entities::{
         AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote, Plan,
         PlanCandidate, ReviewRound, Task, TaskStatus,
