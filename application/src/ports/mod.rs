@@ -8,5 +8,6 @@ pub mod context_loader;
 pub mod human_intervention;
 pub mod llm_gateway;
 pub mod progress;
+pub mod reference_resolver;
 pub mod tool_executor;
 pub mod ui_event;

@@ -16,6 +16,8 @@ pub enum TuiCommand {
     SetVerbose(bool),
     /// Set cancellation token
     SetCancellation(tokio_util::sync::CancellationToken),
+    /// Set reference resolver for automatic reference resolution
+    SetReferenceResolver(std::sync::Arc<dyn quorum_application::ReferenceResolverPort>),
     /// Graceful shutdown
     #[allow(dead_code)]
     Quit,

@@ -6,6 +6,7 @@
 pub mod config;
 pub mod context;
 pub mod copilot;
+pub mod reference;
 pub mod tools;
 
 // Re-export commonly used types
@@ -20,4 +21,5 @@ pub use copilot::{
     router::MessageRouter,
     session::CopilotSession,
 };
+pub use reference::GitHubReferenceResolver;
 pub use tools::{LocalToolExecutor, default_tool_spec, read_only_tool_spec};
