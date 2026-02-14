@@ -32,8 +32,7 @@ use crate::use_cases::gather_context::GatherContextUseCase;
 use crate::use_cases::shared::check_cancelled;
 use quorum_domain::core::string::truncate;
 use quorum_domain::{
-    AgentPhase, AgentPromptTemplate, HumanDecision, ModelVote, ReviewRound,
-    StreamEvent, Thought,
+    AgentPhase, AgentPromptTemplate, HumanDecision, ModelVote, ReviewRound, StreamEvent, Thought,
 };
 use review::QuorumActionReviewer;
 use std::path::Path;
