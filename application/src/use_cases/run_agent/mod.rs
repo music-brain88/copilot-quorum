@@ -679,6 +679,7 @@ mod tests {
 
     // ==================== Flow Test Infrastructure ====================
 
+    use crate::config::ExecutionParams;
     use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
     use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
     use crate::ports::tool_executor::ToolExecutorPort;
@@ -686,7 +687,6 @@ mod tests {
     use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::tool::value_objects::ToolResult;
-    use crate::config::ExecutionParams;
     use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, PhaseScope, SessionMode};
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};

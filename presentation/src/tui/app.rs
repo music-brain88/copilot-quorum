@@ -38,11 +38,11 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::stream::StreamExt;
+use quorum_application::QuorumConfig;
 use quorum_application::{
     AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort, UiEvent,
 };
 use quorum_domain::core::string::truncate;
-use quorum_application::QuorumConfig;
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;

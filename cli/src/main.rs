@@ -5,6 +5,7 @@
 
 use anyhow::{Result, bail};
 use clap::Parser;
+use quorum_application::ExecutionParams;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
@@ -14,7 +15,6 @@ use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
     TuiInputConfig,
 };
-use quorum_application::ExecutionParams;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;

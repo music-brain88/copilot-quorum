@@ -1124,7 +1124,6 @@ mod tests {
 
     #[test]
     fn test_agent_state_hil_action() {
-
         let mut state = AgentState::new(
             "agent-1",
             "Test",

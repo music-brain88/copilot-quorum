@@ -124,7 +124,6 @@ impl RunAgentInput {
             execution,
         }
     }
-
 }
 
 /// Output from the RunAgent use case

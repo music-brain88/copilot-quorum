@@ -121,8 +121,7 @@ impl SessionMode {
             }
         }
 
-        if self.consensus_level == ConsensusLevel::Ensemble
-            && self.phase_scope == PhaseScope::Fast
+        if self.consensus_level == ConsensusLevel::Ensemble && self.phase_scope == PhaseScope::Fast
         {
             issues.push(ConfigIssue {
                 severity: Severity::Warning,
@@ -186,8 +185,7 @@ mod tests {
         let solo = SessionMode::default();
         assert!(!solo.planning_approach().is_ensemble());
 
-        let ensemble =
-            SessionMode::default().with_consensus_level(ConsensusLevel::Ensemble);
+        let ensemble = SessionMode::default().with_consensus_level(ConsensusLevel::Ensemble);
         assert!(ensemble.planning_approach().is_ensemble());
     }
 }

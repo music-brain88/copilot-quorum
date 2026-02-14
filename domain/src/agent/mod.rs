@@ -85,8 +85,8 @@ pub mod value_objects;
 
 pub use agent_policy::{AgentPolicy, HilAction};
 pub use entities::{
-    AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
-    Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
+    AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote, Plan,
+    PlanCandidate, ReviewRound, Task, TaskStatus,
 };
 pub use model_config::ModelConfig;
 pub use plan_parser::{extract_plan_from_response, parse_plan, parse_plan_json};

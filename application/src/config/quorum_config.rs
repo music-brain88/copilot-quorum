@@ -141,7 +141,6 @@ impl QuorumConfig {
         }
         input
     }
-
 }
 
 impl Default for QuorumConfig {
@@ -204,10 +203,7 @@ mod tests {
         let input = config.to_agent_input("Fix the bug");
         assert_eq!(input.request, "Fix the bug");
         assert_eq!(input.mode.consensus_level, ConsensusLevel::Ensemble);
-        assert_eq!(
-            input.execution.working_dir,
-            Some("/project".to_string())
-        );
+        assert_eq!(input.execution.working_dir, Some("/project".to_string()));
     }
 
     #[test]

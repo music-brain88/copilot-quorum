@@ -32,8 +32,8 @@ pub mod util;
 pub use agent::{
     agent_policy::{AgentPolicy, HilAction},
     entities::{
-        AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
-        Plan, PlanCandidate, ReviewRound, Task, TaskStatus,
+        AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote, Plan,
+        PlanCandidate, ReviewRound, Task, TaskStatus,
     },
     model_config::ModelConfig,
     tool_execution::{ToolExecution, ToolExecutionId, ToolExecutionState},

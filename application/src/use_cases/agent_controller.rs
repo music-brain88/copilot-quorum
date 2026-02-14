@@ -383,8 +383,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         match args.split_whitespace().next().unwrap_or("") {
             "quorum" | "q" => {
-                self.config.mode_mut().strategy =
-                    quorum_domain::OrchestrationStrategy::default();
+                self.config.mode_mut().strategy = quorum_domain::OrchestrationStrategy::default();
                 let _ = self.tx.send(UiEvent::StrategyChanged {
                     strategy: "quorum".to_string(),
                     description: "equal discussion + review + synthesis".to_string(),
@@ -493,8 +492,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         });
 
         // Create the init context input using review models
-        let mut input =
-            InitContextInput::new(&working_dir, self.config.models().review.clone());
+        let mut input = InitContextInput::new(&working_dir, self.config.models().review.clone());
 
         if let Some(moderator) = self.config.models().review.first() {
             input = input.with_moderator(moderator.clone());
