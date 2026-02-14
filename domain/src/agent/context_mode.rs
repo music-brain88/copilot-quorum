@@ -123,11 +123,17 @@ mod tests {
 
     #[test]
     fn test_serde_snake_case() {
-        assert_eq!(serde_json::to_string(&ContextMode::Full).unwrap(), "\"full\"");
+        assert_eq!(
+            serde_json::to_string(&ContextMode::Full).unwrap(),
+            "\"full\""
+        );
         assert_eq!(
             serde_json::to_string(&ContextMode::Projected).unwrap(),
             "\"projected\""
         );
-        assert_eq!(serde_json::to_string(&ContextMode::None).unwrap(), "\"none\"");
+        assert_eq!(
+            serde_json::to_string(&ContextMode::None).unwrap(),
+            "\"none\""
+        );
     }
 }

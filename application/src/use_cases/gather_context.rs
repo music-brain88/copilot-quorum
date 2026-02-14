@@ -88,10 +88,8 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
                     "Stage 1: Using existing context from: {}",
                     project_ctx.source_description()
                 );
-                let ctx = Self::context_from_project_ctx(
-                    project_ctx,
-                    execution.working_dir.as_deref(),
-                );
+                let ctx =
+                    Self::context_from_project_ctx(project_ctx, execution.working_dir.as_deref());
                 return Ok(self.resolve_references(ctx, request).await);
             }
 

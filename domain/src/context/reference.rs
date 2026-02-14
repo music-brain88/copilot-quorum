@@ -11,28 +11,28 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResourceReference {
     /// A GitHub Issue reference (e.g., `#123`, `owner/repo#123`)
-    GitHubIssue {
-        repo: Option<String>,
-        number: u64,
-    },
+    GitHubIssue { repo: Option<String>, number: u64 },
     /// A GitHub Pull Request reference (e.g., `PR #123`, GitHub PR URL)
-    GitHubPullRequest {
-        repo: Option<String>,
-        number: u64,
-    },
+    GitHubPullRequest { repo: Option<String>, number: u64 },
 }
 
 impl ResourceReference {
     /// Human-readable label for this reference.
     pub fn label(&self) -> String {
         match self {
-            ResourceReference::GitHubIssue { repo: Some(r), number } => {
+            ResourceReference::GitHubIssue {
+                repo: Some(r),
+                number,
+            } => {
                 format!("Issue {}#{}", r, number)
             }
             ResourceReference::GitHubIssue { repo: None, number } => {
                 format!("Issue #{}", number)
             }
-            ResourceReference::GitHubPullRequest { repo: Some(r), number } => {
+            ResourceReference::GitHubPullRequest {
+                repo: Some(r),
+                number,
+            } => {
                 format!("PR {}#{}", r, number)
             }
             ResourceReference::GitHubPullRequest { repo: None, number } => {
@@ -81,7 +81,9 @@ pub fn extract_references(text: &str) -> Vec<ResourceReference> {
     let mut matched_positions: Vec<(usize, usize)> = Vec::new();
 
     let is_matched = |pos: usize, matched: &[(usize, usize)]| -> bool {
-        matched.iter().any(|(start, end)| pos >= *start && pos < *end)
+        matched
+            .iter()
+            .any(|(start, end)| pos >= *start && pos < *end)
     };
 
     // === Pattern 1: GitHub URLs ===
@@ -287,7 +289,12 @@ fn try_parse_cross_repo(
 
     // Collect owner
     let owner_start = ci;
-    while ci < chars.len() && (chars[ci].is_ascii_alphanumeric() || chars[ci] == '-' || chars[ci] == '_' || chars[ci] == '.') {
+    while ci < chars.len()
+        && (chars[ci].is_ascii_alphanumeric()
+            || chars[ci] == '-'
+            || chars[ci] == '_'
+            || chars[ci] == '.')
+    {
         bi += chars[ci].len_utf8();
         ci += 1;
     }
@@ -305,7 +312,12 @@ fn try_parse_cross_repo(
 
     // Collect repo
     let repo_start = ci;
-    while ci < chars.len() && (chars[ci].is_ascii_alphanumeric() || chars[ci] == '-' || chars[ci] == '_' || chars[ci] == '.') {
+    while ci < chars.len()
+        && (chars[ci].is_ascii_alphanumeric()
+            || chars[ci] == '-'
+            || chars[ci] == '_'
+            || chars[ci] == '.')
+    {
         bi += chars[ci].len_utf8();
         ci += 1;
     }
@@ -420,10 +432,7 @@ fn try_parse_typed_issue(
     }
 
     Some(ParsedRef {
-        reference: ResourceReference::GitHubIssue {
-            repo: None,
-            number,
-        },
+        reference: ResourceReference::GitHubIssue { repo: None, number },
         start_byte,
         end_byte: bi,
         end_char: ci,
@@ -525,10 +534,7 @@ fn try_parse_typed_pr(
                 if let Ok(number) = num_str.parse::<u64>() {
                     if number > 0 {
                         return Some(ParsedRef {
-                            reference: ResourceReference::GitHubPullRequest {
-                                repo: None,
-                                number,
-                            },
+                            reference: ResourceReference::GitHubPullRequest { repo: None, number },
                             start_byte,
                             end_byte: bi,
                             end_char: ci,
@@ -721,8 +727,7 @@ mod tests {
 
     #[test]
     fn test_github_issue_url() {
-        let refs =
-            extract_references("See https://github.com/owner/repo/issues/456 for context");
+        let refs = extract_references("See https://github.com/owner/repo/issues/456 for context");
         assert_eq!(refs.len(), 1);
         assert!(refs.contains(&ResourceReference::GitHubIssue {
             repo: Some("owner/repo".to_string()),

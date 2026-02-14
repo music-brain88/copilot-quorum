@@ -92,10 +92,7 @@ impl GitHubReferenceResolver {
             ReferenceError::ResolutionFailed(format!("Failed to parse gh output: {}", e))
         })?;
 
-        let title = json["title"]
-            .as_str()
-            .unwrap_or("(no title)")
-            .to_string();
+        let title = json["title"].as_str().unwrap_or("(no title)").to_string();
         let body = json["body"].as_str().unwrap_or("").to_string();
 
         Ok((title, body))
@@ -113,7 +110,10 @@ impl ReferenceResolverPort for GitHubReferenceResolver {
             ResourceReference::GitHubPullRequest { repo, number } => (repo.as_deref(), *number),
         };
 
-        debug!("Resolving {} (number={}, repo={:?})", reference, number, repo);
+        debug!(
+            "Resolving {} (number={}, repo={:?})",
+            reference, number, repo
+        );
 
         let (title, body) = self.gh_issue_view(number, repo).await?;
 

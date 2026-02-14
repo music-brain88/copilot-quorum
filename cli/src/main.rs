@@ -319,8 +319,7 @@ async fn main() -> Result<()> {
         };
 
         // Create reference resolver (graceful: None if gh CLI not available)
-        let reference_resolver =
-            GitHubReferenceResolver::try_new(working_dir.clone()).await;
+        let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
         let mut tui_app = TuiApp::new(
             gateway.clone(),
@@ -382,10 +381,9 @@ async fn main() -> Result<()> {
     let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
     // Create and run agent with cancellation support
-    let mut use_case =
-        RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
-            .with_cancellation(cancellation_token.clone())
-            .with_human_intervention(human_intervention);
+    let mut use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
+        .with_cancellation(cancellation_token.clone())
+        .with_human_intervention(human_intervention);
     if let Some(resolver) = reference_resolver {
         use_case = use_case.with_reference_resolver(Arc::new(resolver));
     }

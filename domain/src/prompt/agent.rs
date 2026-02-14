@@ -852,8 +852,7 @@ mod tests {
         let context = AgentContext::new()
             .with_project_root("/project")
             .with_project_type("rust");
-        let task =
-            Task::new("1", "Search for files").with_context_mode(ContextMode::None);
+        let task = Task::new("1", "Search for files").with_context_mode(ContextMode::None);
 
         let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
 
@@ -867,8 +866,7 @@ mod tests {
         let context = AgentContext::new()
             .with_project_root("/project")
             .with_project_type("rust");
-        let task =
-            Task::new("1", "Analyze project").with_context_mode(ContextMode::Full);
+        let task = Task::new("1", "Analyze project").with_context_mode(ContextMode::Full);
 
         let prompt = AgentPromptTemplate::task_execution(&task, &context, "");
 
@@ -900,10 +898,7 @@ mod tests {
                     .with_tool("read_file")
                     .with_context_mode(ContextMode::None),
             )
-            .with_task(
-                Task::new("2", "Review code")
-                    .with_context_brief("Project uses DDD."),
-            );
+            .with_task(Task::new("2", "Review code").with_context_brief("Project uses DDD."));
 
         let prompt = AgentPromptTemplate::plan_review("Request", &plan, &context);
 

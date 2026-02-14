@@ -163,9 +163,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self,
         resolver: std::sync::Arc<dyn quorum_application::ReferenceResolverPort>,
     ) -> Self {
-        let _ = self
-            .cmd_tx
-            .send(TuiCommand::SetReferenceResolver(resolver));
+        let _ = self.cmd_tx.send(TuiCommand::SetReferenceResolver(resolver));
         self
     }
 
