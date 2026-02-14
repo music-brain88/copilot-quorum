@@ -29,8 +29,6 @@ pub mod tool;
 pub mod util;
 
 // Re-export commonly used types
-#[allow(deprecated)]
-pub use agent::AgentConfig;
 pub use agent::{
     agent_policy::{AgentPolicy, HilAction},
     entities::{

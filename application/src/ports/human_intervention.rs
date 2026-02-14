@@ -100,8 +100,8 @@ pub trait HumanInterventionPort: Send + Sync {
     /// Request human decision when plan revision limit is exceeded.
     ///
     /// This method is called by `RunAgentUseCase` when:
-    /// 1. `AgentConfig.hil_mode` is `HilMode::Interactive`
-    /// 2. Plan revision count >= `AgentConfig.max_plan_revisions`
+    /// 1. `AgentPolicy.hil_mode` is `HilMode::Interactive`
+    /// 2. Plan revision count >= `AgentPolicy.max_plan_revisions`
     ///
     /// # Arguments
     ///

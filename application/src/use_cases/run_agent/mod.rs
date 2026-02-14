@@ -686,7 +686,8 @@ mod tests {
     use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::tool::value_objects::ToolResult;
-    use quorum_domain::{AgentConfig, ConsensusLevel, Model, PhaseScope};
+    use crate::config::ExecutionParams;
+    use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, PhaseScope, SessionMode};
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
 
@@ -1000,7 +1001,10 @@ mod tests {
 
     /// Builder for configuring and executing flow tests
     struct FlowTestBuilder {
-        config: AgentConfig,
+        mode: SessionMode,
+        models: ModelConfig,
+        policy: AgentPolicy,
+        execution: ExecutionParams,
         gateway: ScriptedGateway,
         tool_executor: MockToolExecutor,
         human_intervention: Option<Arc<dyn HumanInterventionPort>>,
@@ -1009,21 +1013,27 @@ mod tests {
     impl FlowTestBuilder {
         /// Solo + Full minimal configuration
         fn solo_full() -> Self {
-            let config = AgentConfig {
-                exploration_model: Model::ClaudeHaiku45,
-                decision_model: Model::ClaudeSonnet45,
-                review_models: vec![Model::ClaudeSonnet45],
+            let mode = SessionMode {
                 consensus_level: ConsensusLevel::Solo,
                 phase_scope: PhaseScope::Full,
+                strategy: Default::default(),
+            };
+            let models = ModelConfig {
+                exploration: Model::ClaudeHaiku45,
+                decision: Model::ClaudeSonnet45,
+                review: vec![Model::ClaudeSonnet45],
+            };
+            let policy = AgentPolicy {
+                hil_mode: HilMode::Interactive,
                 require_plan_review: true,
                 require_final_review: false,
-                max_iterations: 50,
-                working_dir: None,
-                max_tool_retries: 2,
                 max_plan_revisions: 3,
-                hil_mode: HilMode::Interactive,
+            };
+            let execution = ExecutionParams {
+                max_iterations: 50,
                 max_tool_turns: 3,
-                orchestration_strategy: Default::default(),
+                max_tool_retries: 2,
+                working_dir: None,
                 ensemble_session_timeout: None,
             };
             let mut gateway = ScriptedGateway::new();
@@ -1057,7 +1067,10 @@ mod tests {
             );
 
             Self {
-                config,
+                mode,
+                models,
+                policy,
+                execution,
                 gateway,
                 tool_executor: MockToolExecutor::new(),
                 human_intervention: None,
@@ -1067,14 +1080,14 @@ mod tests {
         /// Solo + PlanOnly minimal configuration
         fn solo_plan_only() -> Self {
             let mut builder = Self::solo_full();
-            builder.config.phase_scope = PhaseScope::PlanOnly;
+            builder.mode.phase_scope = PhaseScope::PlanOnly;
             builder
         }
 
         /// Solo + Fast minimal configuration
         fn solo_fast() -> Self {
             let mut builder = Self::solo_full();
-            builder.config.phase_scope = PhaseScope::Fast;
+            builder.mode.phase_scope = PhaseScope::Fast;
             // Fast skips plan review, so remove the review session
             // and ensure execution session is available
             builder
@@ -1085,21 +1098,27 @@ mod tests {
         /// 2 review models (ClaudeHaiku45, ClaudeSonnet45), each gets a planning session.
         /// By default, both return plans — override with `with_ensemble_plan_responses()`.
         fn ensemble_fast() -> Self {
-            let config = AgentConfig {
-                exploration_model: Model::ClaudeHaiku45,
-                decision_model: Model::ClaudeSonnet45,
-                review_models: vec![Model::ClaudeHaiku45, Model::ClaudeSonnet45],
+            let mode = SessionMode {
                 consensus_level: ConsensusLevel::Ensemble,
                 phase_scope: PhaseScope::Fast,
+                strategy: Default::default(),
+            };
+            let models = ModelConfig {
+                exploration: Model::ClaudeHaiku45,
+                decision: Model::ClaudeSonnet45,
+                review: vec![Model::ClaudeHaiku45, Model::ClaudeSonnet45],
+            };
+            let policy = AgentPolicy {
+                hil_mode: HilMode::Interactive,
                 require_plan_review: false,
                 require_final_review: false,
-                max_iterations: 50,
-                working_dir: None,
-                max_tool_retries: 2,
                 max_plan_revisions: 3,
-                hil_mode: HilMode::Interactive,
+            };
+            let execution = ExecutionParams {
+                max_iterations: 50,
                 max_tool_turns: 3,
-                orchestration_strategy: Default::default(),
+                max_tool_retries: 2,
+                working_dir: None,
                 ensemble_session_timeout: None,
             };
             let mut gateway = ScriptedGateway::new();
@@ -1141,7 +1160,10 @@ mod tests {
             );
 
             Self {
-                config,
+                mode,
+                models,
+                policy,
+                execution,
                 gateway,
                 tool_executor: MockToolExecutor::new(),
                 human_intervention: None,
@@ -1157,7 +1179,7 @@ mod tests {
 
             // Context gathering session
             gateway.add_session(
-                &self.config.exploration_model.to_string(),
+                &self.models.exploration.to_string(),
                 vec![ScriptedResponse::Response(LlmResponse::from_text(
                     "Context gathered",
                 ))],
@@ -1185,7 +1207,7 @@ mod tests {
         }
 
         fn with_phase_scope(mut self, scope: PhaseScope) -> Self {
-            self.config.phase_scope = scope;
+            self.mode.phase_scope = scope;
             self
         }
 
@@ -1194,8 +1216,8 @@ mod tests {
             self
         }
 
-        fn with_hil_mode(mut self, mode: HilMode) -> Self {
-            self.config.hil_mode = mode;
+        fn with_hil_mode(mut self, hil_mode: HilMode) -> Self {
+            self.policy.hil_mode = hil_mode;
             self
         }
 
@@ -1206,14 +1228,14 @@ mod tests {
 
             // Context gathering session
             gateway.add_session(
-                &self.config.exploration_model.to_string(),
+                &self.models.exploration.to_string(),
                 vec![ScriptedResponse::Response(LlmResponse::from_text(
                     "Context gathered",
                 ))],
             );
 
             // Custom planning session
-            gateway.add_session(&self.config.decision_model.to_string(), vec![response]);
+            gateway.add_session(&self.models.decision.to_string(), vec![response]);
 
             self.gateway = gateway;
             self
@@ -1230,8 +1252,13 @@ mod tests {
                 use_case = use_case.with_human_intervention(intervention);
             }
 
-            #[allow(deprecated)]
-            let input = RunAgentInput::from_config("Test request", &self.config);
+            let input = RunAgentInput::new(
+                "Test request",
+                self.mode,
+                self.models,
+                self.policy,
+                self.execution,
+            );
             let result = use_case.execute_with_progress(input, &progress).await;
 
             (result, progress)
@@ -1453,13 +1480,13 @@ mod tests {
         let mut builder = FlowTestBuilder::solo_fast();
         let mut gateway = ScriptedGateway::new();
         gateway.add_session(
-            &builder.config.exploration_model.to_string(),
+            &builder.models.exploration.to_string(),
             vec![ScriptedResponse::Response(LlmResponse::from_text(
                 "Context gathered",
             ))],
         );
         gateway.add_session(
-            &builder.config.decision_model.to_string(),
+            &builder.models.decision.to_string(),
             vec![
                 ScriptedResponse::Response(response),
                 // Retry response: LLM gives up on tool use, returns text

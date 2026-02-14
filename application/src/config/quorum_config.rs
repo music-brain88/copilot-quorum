@@ -142,26 +142,6 @@ impl QuorumConfig {
         input
     }
 
-    /// Bridge constructor from legacy [`AgentConfig`].
-    #[deprecated(
-        since = "0.8.0",
-        note = "Build QuorumConfig from individual config types"
-    )]
-    #[allow(deprecated)]
-    pub fn from_agent_config(config: &quorum_domain::AgentConfig) -> Self {
-        Self {
-            mode: config.session_mode(),
-            models: config.model_config(),
-            policy: config.agent_policy(),
-            execution: ExecutionParams {
-                max_iterations: config.max_iterations,
-                max_tool_turns: config.max_tool_turns,
-                max_tool_retries: config.max_tool_retries,
-                working_dir: config.working_dir.clone(),
-                ensemble_session_timeout: config.ensemble_session_timeout,
-            },
-        }
-    }
 }
 
 impl Default for QuorumConfig {

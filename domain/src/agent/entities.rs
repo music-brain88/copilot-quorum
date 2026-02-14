@@ -3,7 +3,6 @@
 //! This module contains the core entities for the autonomous agent system:
 //!
 //! - [`AgentState`] - Tracks the complete state of an agent execution
-//! - [`AgentConfig`] - Configuration for agent behavior including HiL settings
 //! - [`Plan`] - A plan consisting of tasks to execute
 //! - [`Task`] - A single unit of work within a plan
 //! - [`HilMode`] - Human-in-the-loop mode for handling plan revision limits
@@ -23,13 +22,9 @@ use super::model_config::ModelConfig;
 use super::tool_execution::ToolExecution;
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
 use crate::core::model::Model;
-use crate::orchestration::mode::ConsensusLevel;
-use crate::orchestration::scope::PhaseScope;
 use crate::orchestration::session_mode::SessionMode;
-use crate::orchestration::strategy::OrchestrationStrategy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 
 /// Human-in-the-loop mode for handling plan revision limits.
 ///
@@ -748,277 +743,6 @@ impl EnsemblePlanResult {
     }
 }
 
-/// Configuration for agent behavior with role-based model selection
-///
-/// # Role-based Model Configuration
-///
-/// Different phases of agent execution have different requirements:
-///
-/// - **Exploration**: Uses `exploration_model` (default: Haiku - info collection + low-risk tools)
-/// - **Decision**: Uses `decision_model` (default: Sonnet - planning + high-risk tool decisions)
-/// - **Reviews**: Uses `review_models` (default: [Sonnet, GPT-5.2] - quality judgments)
-///
-/// # Example
-///
-/// ```toml
-/// [agent]
-/// exploration_model = "claude-haiku-4.5"  # Context gathering + low-risk tools
-/// decision_model = "claude-sonnet-4.5"    # Planning + high-risk tool decisions
-/// review_models = ["claude-sonnet-4.5", "gpt-5.2-codex"]
-/// ```
-#[deprecated(
-    since = "0.8.0",
-    note = "Use SessionMode + ModelConfig + AgentPolicy + ExecutionParams instead"
-)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    // ==================== Role-based Model Configuration ====================
-    /// Model for exploration: context gathering + low-risk tool execution
-    /// (default: Haiku - info collection and read-only ops are cheap)
-    pub exploration_model: Model,
-    /// Model for decisions: planning + high-risk tool execution
-    /// (default: Sonnet - needs strong reasoning for plans and write operations)
-    pub decision_model: Model,
-    /// Models for review phases: plan review, action review, final review
-    /// (default: [Sonnet, GPT-5.2] - quality judgments require high performance)
-    pub review_models: Vec<Model>,
-
-    // ==================== Consensus & Orchestration Configuration ====================
-    /// Consensus level: Solo or Ensemble (the single user-facing mode axis)
-    /// (default: Solo - single model driven)
-    pub consensus_level: ConsensusLevel,
-    /// Phase scope: Full, Fast, or PlanOnly (orthogonal to consensus level)
-    /// (default: Full - all phases included)
-    pub phase_scope: PhaseScope,
-    /// Orchestration strategy: Quorum or Debate (how multi-model discussion is conducted)
-    /// (default: Quorum - equal discussion → review → synthesis)
-    pub orchestration_strategy: OrchestrationStrategy,
-
-    // ==================== Behavior Configuration ====================
-    /// Whether to require plan review (always true by design)
-    pub require_plan_review: bool,
-    /// Whether to require final review
-    pub require_final_review: bool,
-    /// Maximum number of execution iterations
-    pub max_iterations: usize,
-    /// Working directory for tool execution
-    pub working_dir: Option<String>,
-    /// Maximum number of retries for tool validation errors
-    pub max_tool_retries: usize,
-    /// Maximum number of plan revisions before human intervention
-    pub max_plan_revisions: usize,
-    /// Human-in-the-loop mode for handling revision limits
-    pub hil_mode: HilMode,
-    /// Maximum number of tool use turns in a single Native Tool Use loop.
-    ///
-    /// Each turn consists of: LLM response with tool calls → execute tools → send results.
-    /// The loop stops when the LLM finishes (stop_reason != ToolUse) or this limit is reached.
-    /// Only used in the Native Tool Use path; ignored for prompt-based execution.
-    pub max_tool_turns: usize,
-    /// Timeout for each ensemble session's plan generation.
-    ///
-    /// When a model exceeds this timeout during ensemble planning, it is recorded
-    /// as timed out and retried once after a backoff period. This works around
-    /// Copilot CLI's internal serialization of concurrent `session.send` requests.
-    ///
-    /// Default: 180 seconds. Set to `None` to disable the timeout.
-    pub ensemble_session_timeout: Option<Duration>,
-}
-
-#[allow(deprecated)]
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            // Role-based defaults (cost-optimized)
-            exploration_model: Model::ClaudeHaiku45, // Cheap: info collection + low-risk tools
-            decision_model: Model::ClaudeSonnet45, // High performance: planning + high-risk decisions
-            review_models: vec![Model::ClaudeSonnet45, Model::Gpt52Codex], // High performance: safety
-
-            // Consensus & orchestration defaults
-            consensus_level: ConsensusLevel::Solo,
-            phase_scope: PhaseScope::Full,
-            orchestration_strategy: OrchestrationStrategy::default(),
-
-            // Behavior defaults
-            require_plan_review: true, // Always required
-            require_final_review: false,
-            max_iterations: 50,
-            working_dir: None,
-            max_tool_retries: 2,
-            max_plan_revisions: 3,
-            hil_mode: HilMode::Interactive,
-            max_tool_turns: 10,
-            ensemble_session_timeout: Some(Duration::from_secs(180)),
-        }
-    }
-}
-
-#[allow(deprecated)]
-impl AgentConfig {
-    /// Create a new AgentConfig with a specific decision model
-    ///
-    /// Other role models will use defaults. Use builder methods to customize.
-    pub fn new(decision_model: Model) -> Self {
-        Self {
-            decision_model,
-            ..Default::default()
-        }
-    }
-
-    // ==================== Role-based Model Builders ====================
-
-    /// Set the model for exploration phase (context gathering + low-risk tools)
-    pub fn with_exploration_model(mut self, model: Model) -> Self {
-        self.exploration_model = model;
-        self
-    }
-
-    /// Set the model for decision phase (planning + high-risk tool decisions)
-    pub fn with_decision_model(mut self, model: Model) -> Self {
-        self.decision_model = model;
-        self
-    }
-
-    /// Set the models for review phases (plan review, action review, final review)
-    pub fn with_review_models(mut self, models: Vec<Model>) -> Self {
-        self.review_models = models;
-        self
-    }
-
-    // ==================== Consensus & Orchestration Builders ====================
-
-    /// Set the consensus level (Solo or Ensemble)
-    pub fn with_consensus_level(mut self, level: ConsensusLevel) -> Self {
-        self.consensus_level = level;
-        self
-    }
-
-    /// Set the phase scope (Full, Fast, or PlanOnly)
-    pub fn with_phase_scope(mut self, scope: PhaseScope) -> Self {
-        self.phase_scope = scope;
-        self
-    }
-
-    /// Set the orchestration strategy (Quorum or Debate)
-    pub fn with_orchestration_strategy(mut self, strategy: OrchestrationStrategy) -> Self {
-        self.orchestration_strategy = strategy;
-        self
-    }
-
-    /// Enable ensemble mode
-    ///
-    /// Shorthand for `with_consensus_level(ConsensusLevel::Ensemble)`
-    pub fn with_ensemble(self) -> Self {
-        self.with_consensus_level(ConsensusLevel::Ensemble)
-    }
-
-    /// Get the planning approach derived from the consensus level
-    pub fn planning_approach(&self) -> crate::orchestration::mode::PlanningApproach {
-        self.consensus_level.planning_approach()
-    }
-
-    // ==================== Legacy Compatibility ====================
-
-    /// Get the primary model (for backward compatibility)
-    ///
-    /// Returns the decision model, which was previously used as the primary model.
-    #[deprecated(since = "0.6.0", note = "Use decision_model directly")]
-    pub fn primary_model(&self) -> &Model {
-        &self.decision_model
-    }
-
-    /// Get the quorum models (for backward compatibility)
-    ///
-    /// Returns the review models, which are used for quorum voting.
-    #[deprecated(since = "0.6.0", note = "Use review_models directly")]
-    pub fn quorum_models(&self) -> &[Model] {
-        &self.review_models
-    }
-
-    // ==================== Bridge Methods (migration to split types) ====================
-
-    /// Convert mode-related fields to a [`SessionMode`].
-    pub fn session_mode(&self) -> super::super::orchestration::session_mode::SessionMode {
-        super::super::orchestration::session_mode::SessionMode {
-            consensus_level: self.consensus_level.clone(),
-            phase_scope: self.phase_scope.clone(),
-            strategy: self.orchestration_strategy.clone(),
-        }
-    }
-
-    /// Convert model-related fields to a [`ModelConfig`].
-    pub fn model_config(&self) -> super::model_config::ModelConfig {
-        super::model_config::ModelConfig {
-            exploration: self.exploration_model.clone(),
-            decision: self.decision_model.clone(),
-            review: self.review_models.clone(),
-        }
-    }
-
-    /// Convert policy-related fields to an [`AgentPolicy`].
-    pub fn agent_policy(&self) -> super::agent_policy::AgentPolicy {
-        super::agent_policy::AgentPolicy {
-            hil_mode: self.hil_mode,
-            require_plan_review: self.require_plan_review,
-            require_final_review: self.require_final_review,
-            max_plan_revisions: self.max_plan_revisions,
-        }
-    }
-
-    // ==================== Behavior Builders ====================
-
-    pub fn with_final_review(mut self) -> Self {
-        self.require_final_review = true;
-        self
-    }
-
-    pub fn with_max_iterations(mut self, max: usize) -> Self {
-        self.max_iterations = max;
-        self
-    }
-
-    pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
-        self.working_dir = Some(dir.into());
-        self
-    }
-
-    /// Skip plan review (for CI/scripting use cases)
-    pub fn with_skip_plan_review(mut self) -> Self {
-        self.require_plan_review = false;
-        self
-    }
-
-    /// Set maximum tool retries for validation errors
-    pub fn with_max_tool_retries(mut self, max: usize) -> Self {
-        self.max_tool_retries = max;
-        self
-    }
-
-    /// Set maximum plan revisions before human intervention
-    pub fn with_max_plan_revisions(mut self, max: usize) -> Self {
-        self.max_plan_revisions = max;
-        self
-    }
-
-    /// Set human-in-the-loop mode
-    pub fn with_hil_mode(mut self, mode: HilMode) -> Self {
-        self.hil_mode = mode;
-        self
-    }
-
-    /// Set maximum tool use turns for Native Tool Use loop
-    pub fn with_max_tool_turns(mut self, max: usize) -> Self {
-        self.max_tool_turns = max;
-        self
-    }
-
-    /// Set the timeout for ensemble session plan generation
-    pub fn with_ensemble_session_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.ensemble_session_timeout = timeout;
-        self
-    }
-}
-
 /// State of an agent execution (Entity).
 ///
 /// Tracks the complete state of an autonomous agent run, including:
@@ -1031,8 +755,7 @@ impl AgentConfig {
 ///
 /// # Config Split
 ///
-/// Instead of holding a monolithic `AgentConfig`, AgentState holds the
-/// domain-layer subsets directly:
+/// AgentState holds the domain-layer config subsets directly:
 ///
 /// | Field | Source Type | Purpose |
 /// |-------|-----------|---------|
@@ -1096,26 +819,6 @@ impl AgentState {
             plan_revision_count: 0,
             error: None,
         }
-    }
-
-    /// Creates a new agent state from a legacy `AgentConfig`.
-    ///
-    /// Bridge constructor for migration — converts `AgentConfig` into split types.
-    #[deprecated(since = "0.8.0", note = "Use AgentState::new() with split types")]
-    #[allow(deprecated)]
-    pub fn from_config(
-        id: impl Into<AgentId>,
-        request: impl Into<String>,
-        config: &AgentConfig,
-    ) -> Self {
-        Self::new(
-            id,
-            request,
-            config.session_mode(),
-            config.model_config(),
-            config.agent_policy(),
-            config.max_iterations,
-        )
     }
 
     /// Records a reasoning step in the agent's thought history.
@@ -1326,20 +1029,20 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_config_hil_defaults() {
-        let config = AgentConfig::default();
-        assert_eq!(config.max_plan_revisions, 3);
-        assert_eq!(config.hil_mode, HilMode::Interactive);
+    fn test_agent_policy_defaults() {
+        let policy = AgentPolicy::default();
+        assert_eq!(policy.max_plan_revisions, 3);
+        assert_eq!(policy.hil_mode, HilMode::Interactive);
     }
 
     #[test]
-    fn test_agent_config_hil_builders() {
-        let config = AgentConfig::default()
+    fn test_agent_policy_builders() {
+        let policy = AgentPolicy::default()
             .with_max_plan_revisions(5)
             .with_hil_mode(HilMode::AutoReject);
 
-        assert_eq!(config.max_plan_revisions, 5);
-        assert_eq!(config.hil_mode, HilMode::AutoReject);
+        assert_eq!(policy.max_plan_revisions, 5);
+        assert_eq!(policy.hil_mode, HilMode::AutoReject);
     }
 
     #[test]
@@ -1450,86 +1153,101 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_config_role_based_defaults() {
-        let config = AgentConfig::default();
+    fn test_model_config_defaults() {
+        use crate::core::model::Model;
+
+        let config = ModelConfig::default();
 
         // Exploration uses cheap model (context gathering + low-risk tools)
-        assert_eq!(config.exploration_model, Model::ClaudeHaiku45);
+        assert_eq!(config.exploration, Model::ClaudeHaiku45);
         // Decision uses high-performance model (planning + high-risk decisions)
-        assert_eq!(config.decision_model, Model::ClaudeSonnet45);
+        assert_eq!(config.decision, Model::ClaudeSonnet45);
         // Reviews use multiple high-performance models
-        assert_eq!(config.review_models.len(), 2);
-        assert!(config.review_models.contains(&Model::ClaudeSonnet45));
-        assert!(config.review_models.contains(&Model::Gpt52Codex));
+        assert_eq!(config.review.len(), 2);
+        assert!(config.review.contains(&Model::ClaudeSonnet45));
+        assert!(config.review.contains(&Model::Gpt52Codex));
     }
 
     #[test]
-    fn test_agent_config_role_based_builders() {
-        let config = AgentConfig::default()
-            .with_exploration_model(Model::ClaudeSonnet45)
-            .with_decision_model(Model::ClaudeOpus45)
-            .with_review_models(vec![Model::ClaudeOpus45, Model::Gemini3Pro]);
+    fn test_model_config_builders() {
+        use crate::core::model::Model;
 
-        assert_eq!(config.exploration_model, Model::ClaudeSonnet45);
-        assert_eq!(config.decision_model, Model::ClaudeOpus45);
-        assert_eq!(config.review_models.len(), 2);
-        assert!(config.review_models.contains(&Model::ClaudeOpus45));
-        assert!(config.review_models.contains(&Model::Gemini3Pro));
+        let config = ModelConfig::default()
+            .with_exploration(Model::ClaudeSonnet45)
+            .with_decision(Model::ClaudeOpus45)
+            .with_review(vec![Model::ClaudeOpus45, Model::Gemini3Pro]);
+
+        assert_eq!(config.exploration, Model::ClaudeSonnet45);
+        assert_eq!(config.decision, Model::ClaudeOpus45);
+        assert_eq!(config.review.len(), 2);
+        assert!(config.review.contains(&Model::ClaudeOpus45));
+        assert!(config.review.contains(&Model::Gemini3Pro));
     }
 
     #[test]
-    fn test_agent_config_new_sets_decision_model() {
-        let config = AgentConfig::new(Model::ClaudeOpus45);
+    fn test_model_config_with_decision() {
+        use crate::core::model::Model;
 
-        // new() sets the decision model, others use defaults
-        assert_eq!(config.decision_model, Model::ClaudeOpus45);
-        assert_eq!(config.exploration_model, Model::ClaudeHaiku45);
+        let config = ModelConfig::default().with_decision(Model::ClaudeOpus45);
+
+        // with_decision() sets the decision model, others keep defaults
+        assert_eq!(config.decision, Model::ClaudeOpus45);
+        assert_eq!(config.exploration, Model::ClaudeHaiku45);
+    }
+
+    // ==================== SessionMode Tests ====================
+
+    #[test]
+    fn test_session_mode_default() {
+        use crate::orchestration::mode::ConsensusLevel;
+        use crate::orchestration::scope::PhaseScope;
+
+        let mode = SessionMode::default();
+        assert_eq!(mode.consensus_level, ConsensusLevel::Solo);
+        assert_eq!(mode.phase_scope, PhaseScope::Full);
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_agent_config_legacy_compatibility() {
-        let config = AgentConfig::default()
-            .with_decision_model(Model::ClaudeOpus45)
-            .with_review_models(vec![Model::Gpt52Codex]);
+    fn test_session_mode_ensemble() {
+        use crate::orchestration::mode::ConsensusLevel;
 
-        // Legacy accessors should work
-        assert_eq!(config.primary_model(), &Model::ClaudeOpus45);
-        assert_eq!(config.quorum_models(), &[Model::Gpt52Codex]);
-    }
-
-    // ==================== Ensemble Planning Tests ====================
-
-    #[test]
-    fn test_consensus_level_default() {
-        let config = AgentConfig::default();
-        assert_eq!(config.consensus_level, ConsensusLevel::Solo);
-        assert_eq!(config.phase_scope, PhaseScope::Full);
+        let mode = SessionMode {
+            consensus_level: ConsensusLevel::Ensemble,
+            ..Default::default()
+        };
+        assert_eq!(mode.consensus_level, ConsensusLevel::Ensemble);
+        assert!(mode.planning_approach().is_ensemble());
     }
 
     #[test]
-    fn test_consensus_level_ensemble() {
-        let config = AgentConfig::default().with_ensemble();
-        assert_eq!(config.consensus_level, ConsensusLevel::Ensemble);
-        assert!(config.planning_approach().is_ensemble());
+    fn test_session_mode_phase_scope() {
+        use crate::orchestration::scope::PhaseScope;
+
+        let fast = SessionMode {
+            phase_scope: PhaseScope::Fast,
+            ..Default::default()
+        };
+        assert_eq!(fast.phase_scope, PhaseScope::Fast);
+
+        let plan_only = SessionMode {
+            phase_scope: PhaseScope::PlanOnly,
+            ..Default::default()
+        };
+        assert_eq!(plan_only.phase_scope, PhaseScope::PlanOnly);
     }
 
     #[test]
-    fn test_agent_config_phase_scope() {
-        let config = AgentConfig::default().with_phase_scope(PhaseScope::Fast);
-        assert_eq!(config.phase_scope, PhaseScope::Fast);
+    fn test_session_mode_planning_approach() {
+        use crate::orchestration::mode::ConsensusLevel;
 
-        let config = AgentConfig::default().with_phase_scope(PhaseScope::PlanOnly);
-        assert_eq!(config.phase_scope, PhaseScope::PlanOnly);
-    }
+        let solo = SessionMode::default();
+        assert!(!solo.planning_approach().is_ensemble());
 
-    #[test]
-    fn test_agent_config_planning_approach() {
-        let solo_config = AgentConfig::default();
-        assert!(!solo_config.planning_approach().is_ensemble());
-
-        let ensemble_config = AgentConfig::default().with_consensus_level(ConsensusLevel::Ensemble);
-        assert!(ensemble_config.planning_approach().is_ensemble());
+        let ensemble = SessionMode {
+            consensus_level: ConsensusLevel::Ensemble,
+            ..Default::default()
+        };
+        assert!(ensemble.planning_approach().is_ensemble());
     }
 
     #[test]

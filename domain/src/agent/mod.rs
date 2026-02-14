@@ -45,7 +45,9 @@
 //! # Key Types
 //!
 //! - [`AgentState`]: Tracks the complete state of an agent execution
-//! - [`AgentConfig`]: Configuration including consensus level and orchestration
+//! - [`SessionMode`](crate::orchestration::session_mode::SessionMode): Runtime-mutable orchestration settings
+//! - [`ModelConfig`]: Role-based model selection
+//! - [`AgentPolicy`]: Domain behavioral constraints
 //! - [`Plan`]: A plan consisting of [`Task`]s to execute
 //! - [`EnsemblePlanResult`]: Result of ensemble planning with selected plan
 //!
@@ -54,21 +56,23 @@
 //! ## Solo Mode (Default)
 //!
 //! ```
-//! use quorum_domain::agent::AgentConfig;
+//! use quorum_domain::SessionMode;
 //! use quorum_domain::ConsensusLevel;
 //!
-//! let config = AgentConfig::default();
-//! assert_eq!(config.consensus_level, ConsensusLevel::Solo);
+//! let mode = SessionMode::default();
+//! assert_eq!(mode.consensus_level, ConsensusLevel::Solo);
 //! ```
 //!
 //! ## Ensemble Mode
 //!
 //! ```
-//! use quorum_domain::agent::AgentConfig;
-//! use quorum_domain::ConsensusLevel;
+//! use quorum_domain::{SessionMode, ConsensusLevel};
 //!
-//! let config = AgentConfig::default().with_ensemble();
-//! assert_eq!(config.consensus_level, ConsensusLevel::Ensemble);
+//! let mode = SessionMode {
+//!     consensus_level: ConsensusLevel::Ensemble,
+//!     ..Default::default()
+//! };
+//! assert_eq!(mode.consensus_level, ConsensusLevel::Ensemble);
 //! ```
 
 pub mod agent_policy;
@@ -80,8 +84,6 @@ pub mod validation;
 pub mod value_objects;
 
 pub use agent_policy::{AgentPolicy, HilAction};
-#[allow(deprecated)]
-pub use entities::AgentConfig;
 pub use entities::{
     AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote,
     Plan, PlanCandidate, ReviewRound, Task, TaskStatus,

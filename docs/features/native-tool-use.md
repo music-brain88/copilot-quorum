@@ -317,8 +317,10 @@ max_tool_turns = 10    # Native ループの最大ターン数（デフォルト
 
 ```rust
 // プログラム的に設定
-let config = AgentConfig::default()
-    .with_max_tool_turns(15);
+let execution = ExecutionParams {
+    max_tool_turns: 15,
+    ..Default::default()
+};
 ```
 
 ---
@@ -333,7 +335,7 @@ let config = AgentConfig::default()
 | `domain/src/session/stream.rs` | `StreamEvent`（`ToolCallDelta`, `CompletedResponse` バリアント） |
 | `domain/src/tool/entities.rs` | `ToolCall::native_id`, `ToolDefinition::to_json_schema()`, `ToolSpec::to_api_tools()` |
 | `domain/src/prompt/agent.rs` | `agent_system()` — エージェントシステムプロンプト生成 |
-| `domain/src/agent/entities.rs` | `AgentConfig::max_tool_turns` |
+| `application/src/config/execution_params.rs` | `ExecutionParams::max_tool_turns` |
 | `application/src/ports/llm_gateway.rs` | `ToolResultMessage`, `LlmSession` trait |
 | `application/src/use_cases/run_agent.rs` | `execute_task_native()`, `send_with_tools_cancellable()` |
 

@@ -86,7 +86,7 @@ pub(super) enum EnsemblePlanningOutcome {
 ///
 /// # Config Split
 ///
-/// Instead of a monolithic `AgentConfig`, input groups configuration by concern:
+/// Input groups configuration by concern:
 ///
 /// | Field | Type | Purpose |
 /// |-------|------|---------|
@@ -125,30 +125,6 @@ impl RunAgentInput {
         }
     }
 
-    /// Bridge constructor from legacy `AgentConfig`.
-    ///
-    /// Converts the monolithic config into the split types for backward
-    /// compatibility during migration.
-    #[deprecated(since = "0.8.0", note = "Use RunAgentInput::new() with split types")]
-    #[allow(deprecated)]
-    pub fn from_config(
-        request: impl Into<String>,
-        config: &quorum_domain::AgentConfig,
-    ) -> Self {
-        Self {
-            request: request.into(),
-            mode: config.session_mode(),
-            models: config.model_config(),
-            policy: config.agent_policy(),
-            execution: ExecutionParams {
-                max_iterations: config.max_iterations,
-                max_tool_turns: config.max_tool_turns,
-                max_tool_retries: config.max_tool_retries,
-                working_dir: config.working_dir.clone(),
-                ensemble_session_timeout: config.ensemble_session_timeout,
-            },
-        }
-    }
 }
 
 /// Output from the RunAgent use case
