@@ -28,6 +28,12 @@ use serde::{Deserialize, Serialize};
 /// This enum unifies the previously separate agent-level and buffer-level
 /// context modes into a single, independent concept.
 ///
+/// # No `Default` implementation
+///
+/// `Default` is intentionally **not** implemented. The appropriate default varies
+/// by buffer type (Agent → `Full`, Ask → `Fresh`), so the canonical policy source
+/// is [`BufferType::default_context_mode()`](crate::buffer::BufferType::default_context_mode).
+///
 /// # Variants
 ///
 /// | Mode | Context Passed | Use Case |
@@ -65,12 +71,6 @@ impl ContextMode {
             ContextMode::Projected => "projected",
             ContextMode::Fresh => "fresh",
         }
-    }
-}
-
-impl Default for ContextMode {
-    fn default() -> Self {
-        ContextMode::Fresh
     }
 }
 
@@ -141,11 +141,6 @@ mod tests {
         assert_eq!("none".parse::<ContextMode>().unwrap(), ContextMode::Fresh);
         // "shared" → Full (was buffer::ContextMode::Shared)
         assert_eq!("shared".parse::<ContextMode>().unwrap(), ContextMode::Full);
-    }
-
-    #[test]
-    fn test_default() {
-        assert_eq!(ContextMode::default(), ContextMode::Fresh);
     }
 
     #[test]

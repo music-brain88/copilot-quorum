@@ -64,6 +64,29 @@ impl BufferType {
         }
     }
 
+    /// Whether this buffer type uses [`SessionMode`](crate::orchestration::SessionMode).
+    ///
+    /// Agent and Discuss need runtime-mutable consensus_level / phase_scope;
+    /// Ask is Solo-fixed.
+    pub fn uses_session_mode(&self) -> bool {
+        matches!(self, BufferType::Agent | BufferType::Discuss)
+    }
+
+    /// Whether this buffer type uses [`AgentPolicy`](crate::agent::AgentPolicy).
+    ///
+    /// Only Agent has a plan/review lifecycle that AgentPolicy controls.
+    pub fn uses_agent_policy(&self) -> bool {
+        matches!(self, BufferType::Agent)
+    }
+
+    /// Whether this buffer type uses [`ExecutionParams`].
+    ///
+    /// Agent and Ask execute work (tools / LLM calls) bounded by execution limits;
+    /// Discuss is a pure discussion with no execution loop.
+    pub fn uses_execution_params(&self) -> bool {
+        matches!(self, BufferType::Agent | BufferType::Ask)
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             BufferType::Agent => "agent",
@@ -136,6 +159,27 @@ mod tests {
         );
         assert_eq!("AGENT".parse::<BufferType>().unwrap(), BufferType::Agent);
         assert!("invalid".parse::<BufferType>().is_err());
+    }
+
+    #[test]
+    fn test_uses_session_mode() {
+        assert!(BufferType::Agent.uses_session_mode());
+        assert!(!BufferType::Ask.uses_session_mode());
+        assert!(BufferType::Discuss.uses_session_mode());
+    }
+
+    #[test]
+    fn test_uses_agent_policy() {
+        assert!(BufferType::Agent.uses_agent_policy());
+        assert!(!BufferType::Ask.uses_agent_policy());
+        assert!(!BufferType::Discuss.uses_agent_policy());
+    }
+
+    #[test]
+    fn test_uses_execution_params() {
+        assert!(BufferType::Agent.uses_execution_params());
+        assert!(BufferType::Ask.uses_execution_params());
+        assert!(!BufferType::Discuss.uses_execution_params());
     }
 
     #[test]

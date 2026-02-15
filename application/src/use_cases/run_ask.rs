@@ -46,6 +46,10 @@ pub struct RunAskInput {
     pub models: ModelConfig,
     /// Execution parameters (working_dir, limits)
     pub execution: ExecutionParams,
+    /// Optional system prompt override (default: built-in assistant prompt).
+    ///
+    /// Extension point for injecting project context or custom instructions.
+    pub system_prompt: Option<String>,
 }
 
 impl RunAskInput {
@@ -58,7 +62,14 @@ impl RunAskInput {
             question: question.into(),
             models,
             execution,
+            system_prompt: None,
         }
+    }
+
+    /// Set a custom system prompt, overriding the default.
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
     }
 }
 
@@ -84,6 +95,9 @@ impl<G: LlmGateway + 'static> RunAskUseCase<G> {
         Self { gateway }
     }
 
+    const DEFAULT_SYSTEM_PROMPT: &str =
+        "You are a helpful assistant. Answer the user's question concisely and accurately.";
+
     /// Execute the Ask query.
     pub async fn execute(&self, input: RunAskInput) -> Result<RunAskOutput, RunAskError> {
         if input.question.trim().is_empty() {
@@ -93,12 +107,14 @@ impl<G: LlmGateway + 'static> RunAskUseCase<G> {
         let model = &input.models.exploration;
         info!("Ask: querying {} with question", model);
 
+        let system_prompt = input
+            .system_prompt
+            .as_deref()
+            .unwrap_or(Self::DEFAULT_SYSTEM_PROMPT);
+
         let session = self
             .gateway
-            .create_session_with_system_prompt(
-                model,
-                "You are a helpful assistant. Answer the user's question concisely and accurately.",
-            )
+            .create_session_with_system_prompt(model, system_prompt)
             .await?;
 
         let answer = session.send(&input.question).await?;

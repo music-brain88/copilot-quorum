@@ -125,6 +125,11 @@ pub enum TuiEvent {
         duration_ms: Option<u64>,
     },
 
+    // -- Ask lifecycle --
+    AskComplete {
+        answer_model: String,
+    },
+
     // -- Other --
     HistoryCleared,
     CommandError(String),

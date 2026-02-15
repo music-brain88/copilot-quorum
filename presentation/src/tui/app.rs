@@ -915,6 +915,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     }
                 }
             }
+            // Ask completion — no-op in app (flash handled by presenter)
+            TuiEvent::AskComplete { .. } => {}
             // Config/mode events handled by presenter already
             TuiEvent::Welcome { .. }
             | TuiEvent::ConfigDisplay(_)

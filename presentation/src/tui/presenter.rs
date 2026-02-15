@@ -201,10 +201,10 @@ impl TuiPresenter {
         state
             .messages
             .push(DisplayMessage::assistant(result.answer.clone()));
-        self.emit(TuiEvent::AgentResult {
-            success: true,
-            summary: format!("Ask answered by {}", result.model),
+        self.emit(TuiEvent::AskComplete {
+            answer_model: result.model.clone(),
         });
+        state.set_flash(format!("Ask answered by {}", result.model));
     }
 
     fn handle_quorum_result(&self, state: &mut TuiState, result: &QuorumResultEvent) {
