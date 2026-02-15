@@ -18,6 +18,7 @@
 //! - **Ensemble**: Multi-model driven, for complex decisions
 
 pub mod agent;
+pub mod buffer;
 pub mod config;
 pub mod context;
 pub mod core;
@@ -46,8 +47,8 @@ pub use context::{
     KnownContextFile, LoadedContextFile, ProjectContext, ResourceReference, extract_references,
 };
 pub use core::{error::DomainError, model::Model, question::Question};
+pub use buffer::{BufferType, DEFAULT_MAX_BUFFER_DEPTH};
 pub use orchestration::{
-    buffer::{BufferContextMode, BufferType, DEFAULT_MAX_BUFFER_DEPTH},
     entities::{Phase, QuorumRun},
     mode::{ConsensusLevel, PlanningApproach},
     scope::PhaseScope,
