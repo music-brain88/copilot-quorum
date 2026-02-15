@@ -18,7 +18,7 @@
 //! - `AutoApprove` - Automatically approve (use with caution!)
 
 use super::agent_policy::{AgentPolicy, HilAction};
-use super::context_mode::ContextMode;
+use crate::context::ContextMode;
 use super::model_config::ModelConfig;
 use super::tool_execution::ToolExecution;
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};

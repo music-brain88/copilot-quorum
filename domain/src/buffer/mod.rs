@@ -9,7 +9,7 @@
 //! # Key Types
 //!
 //! - [`BufferType`] — classifies the buffer (Agent, Ask, Discuss)
-//! - [`ContextMode`] — controls conversation history inheritance (Shared, Fresh)
+//! - [`ContextMode`](crate::context::ContextMode) — controls context inheritance (Full, Projected, Fresh)
 //!
 //! # Design (Issue #127)
 //!
@@ -21,16 +21,16 @@
 //! | Ask | No (Solo fixed) | Yes | No | Yes |
 //! | Discuss | Yes | Yes | No | No |
 
-pub mod context_mode;
-
-pub use context_mode::ContextMode;
-
+use crate::context::ContextMode;
 use serde::{Deserialize, Serialize};
 
 /// Classifies an execution context (buffer).
 ///
 /// Each variant carries different config requirements and execution semantics.
 /// See module-level docs for the full config necessity matrix.
+///
+/// Acts as the "filetype" trigger (à la Vim) that determines the default
+/// [`ContextMode`] and behavioral profile for the buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BufferType {
@@ -48,14 +48,17 @@ pub enum BufferType {
 impl BufferType {
     /// Default [`ContextMode`] for this buffer type.
     ///
-    /// | BufferType | Default | Rationale |
-    /// |------------|---------|-----------|
-    /// | Agent | Shared | Work context continuity is assumed |
-    /// | Ask | Fresh | Avoid polluting main context |
-    /// | Discuss | Fresh | Topic-specific, independent discussion space |
+    /// Like Vim's `ftplugin/` mechanism, the buffer type determines default
+    /// context behavior:
+    ///
+    /// | BufferType | Default | Vim equivalent | Rationale |
+    /// |------------|---------|---------------|-----------|
+    /// | Agent | Full | `:split` | Work context continuity |
+    /// | Ask | Fresh | `:enew` | Independent question space |
+    /// | Discuss | Fresh | `:enew` | Topic-specific discussion |
     pub fn default_context_mode(&self) -> ContextMode {
         match self {
-            BufferType::Agent => ContextMode::Shared,
+            BufferType::Agent => ContextMode::Full,
             BufferType::Ask => ContextMode::Fresh,
             BufferType::Discuss => ContextMode::Fresh,
         }
@@ -100,7 +103,7 @@ mod tests {
     fn test_default_context_mode() {
         assert_eq!(
             BufferType::Agent.default_context_mode(),
-            ContextMode::Shared
+            ContextMode::Full
         );
         assert_eq!(BufferType::Ask.default_context_mode(), ContextMode::Fresh);
         assert_eq!(
