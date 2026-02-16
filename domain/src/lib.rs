@@ -21,6 +21,7 @@ pub mod agent;
 pub mod config;
 pub mod context;
 pub mod core;
+pub mod interaction;
 pub mod orchestration;
 pub mod prompt;
 pub mod quorum;
@@ -31,7 +32,6 @@ pub mod util;
 // Re-export commonly used types
 pub use agent::{
     agent_policy::{AgentPolicy, HilAction},
-    context_mode::ContextMode,
     entities::{
         AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote, Plan,
         PlanCandidate, ReviewRound, Task, TaskStatus,
@@ -43,7 +43,11 @@ pub use agent::{
 };
 pub use config::OutputFormat;
 pub use context::{
-    KnownContextFile, LoadedContextFile, ProjectContext, ResourceReference, extract_references,
+    ContextMode, KnownContextFile, LoadedContextFile, ProjectContext, ResourceReference,
+    extract_references,
+};
+pub use interaction::{
+    DEFAULT_MAX_NESTING_DEPTH, Interaction, InteractionForm, InteractionId, InteractionResult,
 };
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
