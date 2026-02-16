@@ -7,8 +7,8 @@
 //! All types referenced ([`Plan`], [`Task`], [`LlmResponse`], [`ContentBlock`])
 //! are domain types, making this pure domain logic.
 
-use crate::context::ContextMode;
 use crate::agent::entities::{Plan, Task};
+use crate::context::ContextMode;
 use crate::session::response::{ContentBlock, LlmResponse};
 
 /// Extract a plan from a structured [`LlmResponse`].

@@ -178,11 +178,7 @@ impl Interaction {
     /// Create a child interaction spawned from a parent.
     ///
     /// Context mode is set to the form's default, and depth is parent + 1.
-    pub fn child(
-        id: InteractionId,
-        form: InteractionForm,
-        parent: &Interaction,
-    ) -> Self {
+    pub fn child(id: InteractionId, form: InteractionForm, parent: &Interaction) -> Self {
         Self {
             id,
             context_mode: form.default_context_mode(),
@@ -417,8 +413,7 @@ mod tests {
         // Build a chain up to max depth
         let mut current = root;
         for i in 1..=DEFAULT_MAX_NESTING_DEPTH {
-            let child =
-                Interaction::child(InteractionId(i + 1), InteractionForm::Ask, &current);
+            let child = Interaction::child(InteractionId(i + 1), InteractionForm::Ask, &current);
             if i < DEFAULT_MAX_NESTING_DEPTH {
                 assert!(child.can_spawn(), "depth {} should allow spawning", i);
             } else {

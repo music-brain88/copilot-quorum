@@ -46,10 +46,10 @@ pub use context::{
     ContextMode, KnownContextFile, LoadedContextFile, ProjectContext, ResourceReference,
     extract_references,
 };
+pub use core::{error::DomainError, model::Model, question::Question};
 pub use interaction::{
     DEFAULT_MAX_NESTING_DEPTH, Interaction, InteractionForm, InteractionId, InteractionResult,
 };
-pub use core::{error::DomainError, model::Model, question::Question};
 pub use orchestration::{
     entities::{Phase, QuorumRun},
     mode::{ConsensusLevel, PlanningApproach},

@@ -1,7 +1,7 @@
 //! Prompt templates for the Agent system
 
-use crate::context::ContextMode;
 use crate::agent::{AgentContext, Plan, Task};
+use crate::context::ContextMode;
 use serde_json::json;
 
 /// Templates for generating agent prompts

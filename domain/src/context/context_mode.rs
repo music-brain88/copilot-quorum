@@ -115,10 +115,7 @@ mod tests {
             "projected".parse::<ContextMode>().unwrap(),
             ContextMode::Projected
         );
-        assert_eq!(
-            "fresh".parse::<ContextMode>().unwrap(),
-            ContextMode::Fresh
-        );
+        assert_eq!("fresh".parse::<ContextMode>().unwrap(), ContextMode::Fresh);
         // Case insensitive
         assert_eq!("FULL".parse::<ContextMode>().unwrap(), ContextMode::Full);
         assert_eq!(
@@ -132,24 +129,19 @@ mod tests {
     #[test]
     fn test_from_str_backward_compat() {
         // "none" → Fresh (backward compatibility)
-        assert_eq!(
-            "none".parse::<ContextMode>().unwrap(),
-            ContextMode::Fresh
-        );
-        assert_eq!(
-            "None".parse::<ContextMode>().unwrap(),
-            ContextMode::Fresh
-        );
+        assert_eq!("none".parse::<ContextMode>().unwrap(), ContextMode::Fresh);
+        assert_eq!("None".parse::<ContextMode>().unwrap(), ContextMode::Fresh);
         // "shared" → Full (alias)
-        assert_eq!(
-            "shared".parse::<ContextMode>().unwrap(),
-            ContextMode::Full
-        );
+        assert_eq!("shared".parse::<ContextMode>().unwrap(), ContextMode::Full);
     }
 
     #[test]
     fn test_serde_roundtrip() {
-        for mode in [ContextMode::Full, ContextMode::Projected, ContextMode::Fresh] {
+        for mode in [
+            ContextMode::Full,
+            ContextMode::Projected,
+            ContextMode::Fresh,
+        ] {
             let json = serde_json::to_string(&mode).unwrap();
             let deserialized: ContextMode = serde_json::from_str(&json).unwrap();
             assert_eq!(mode, deserialized);
