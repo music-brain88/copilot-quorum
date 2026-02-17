@@ -670,7 +670,9 @@ mod tests {
             spec = spec.register(tool);
         }
 
-        let api_tools = spec.to_api_tools();
+        let converter = crate::tools::JsonSchemaToolConverter;
+        use quorum_application::ports::tool_schema::ToolSchemaPort;
+        let api_tools = converter.all_tools_schema(&spec);
         assert_eq!(api_tools.len(), 1);
         assert_eq!(api_tools[0]["name"], "my_custom_tool");
         assert_eq!(api_tools[0]["description"], "My custom tool");

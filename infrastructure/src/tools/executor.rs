@@ -125,7 +125,7 @@ impl LocalToolExecutor {
     /// Register custom tools from config.
     ///
     /// Custom tool definitions are added to the tool spec so they appear
-    /// in `to_api_tools()` and `available_tools()`. Execution is delegated
+    /// in `ToolSchemaPort::all_tools_schema()` and `available_tools()`. Execution is delegated
     /// to the embedded [`CustomToolProvider`].
     pub fn with_custom_tools(
         mut self,
@@ -141,7 +141,7 @@ impl LocalToolExecutor {
         }
 
         // Register custom tool definitions in the tool spec so they appear
-        // in to_api_tools() and available_tools()
+        // in ToolSchemaPort::all_tools_schema() and available_tools()
         for (name, config) in configs {
             let risk_level = match config.risk_level.to_lowercase().as_str() {
                 "low" => quorum_domain::tool::entities::RiskLevel::Low,

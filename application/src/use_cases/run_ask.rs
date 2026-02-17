@@ -10,6 +10,7 @@ use crate::config::ExecutionParams;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
+use crate::ports::tool_schema::ToolSchemaPort;
 use quorum_domain::agent::model_config::ModelConfig;
 use quorum_domain::interaction::InteractionResult;
 use quorum_domain::util::truncate_str;
@@ -61,13 +62,19 @@ impl RunAskInput {
 pub struct RunAskUseCase<G: LlmGateway, T: ToolExecutorPort> {
     gateway: Arc<G>,
     tool_executor: Arc<T>,
+    tool_schema: Arc<dyn ToolSchemaPort>,
 }
 
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T> {
-    pub fn new(gateway: Arc<G>, tool_executor: Arc<T>) -> Self {
+    pub fn new(
+        gateway: Arc<G>,
+        tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
+    ) -> Self {
         Self {
             gateway,
             tool_executor,
+            tool_schema,
         }
     }
 
@@ -89,7 +96,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
             .await?;
 
         // Build low-risk tools only
-        let tools = self.tool_executor.tool_spec().to_low_risk_api_tools();
+        let tools = self
+            .tool_schema
+            .low_risk_tools_schema(self.tool_executor.tool_spec());
 
         debug!(
             "Ask: using model {}, {} low-risk tools available",
@@ -210,6 +219,7 @@ mod tests {
     use crate::ports::agent_progress::NoAgentProgress;
     use crate::ports::llm_gateway::LlmSession;
     use crate::ports::tool_executor::ToolExecutorPort;
+    use crate::ports::tool_schema::ToolSchemaPort;
     use async_trait::async_trait;
     use quorum_domain::Model;
     use quorum_domain::ToolResult;
@@ -334,6 +344,35 @@ mod tests {
         }
     }
 
+    /// Minimal ToolSchemaPort that reproduces the JSON Schema conversion for tests.
+    struct MockToolSchema;
+
+    impl ToolSchemaPort for MockToolSchema {
+        fn tool_to_schema(&self, tool: &ToolDefinition) -> serde_json::Value {
+            serde_json::json!({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": { "type": "object", "properties": {}, "required": [] }
+            })
+        }
+
+        fn all_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            let mut tools: Vec<_> = spec.all().collect();
+            tools.sort_by_key(|t| &t.name);
+            tools.into_iter().map(|t| self.tool_to_schema(t)).collect()
+        }
+
+        fn low_risk_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            let mut tools: Vec<_> = spec.low_risk_tools().collect();
+            tools.sort_by_key(|t| &t.name);
+            tools.into_iter().map(|t| self.tool_to_schema(t)).collect()
+        }
+    }
+
+    fn mock_tool_schema() -> Arc<dyn ToolSchemaPort> {
+        Arc::new(MockToolSchema)
+    }
+
     #[async_trait]
     impl ToolExecutorPort for MockToolExecutor {
         async fn execute(&self, call: &ToolCall) -> ToolResult {
@@ -376,7 +415,7 @@ mod tests {
         let session = MockSession::new(vec![text_response("The answer is 42.")]);
         let gateway = Arc::new(MockGateway::new(session));
         let executor = Arc::new(MockToolExecutor::new());
-        let use_case = RunAskUseCase::new(gateway, executor);
+        let use_case = RunAskUseCase::new(gateway, executor, mock_tool_schema());
 
         let input = RunAskInput::new(
             "What is the meaning of life?",
@@ -403,7 +442,7 @@ mod tests {
         ]);
         let gateway = Arc::new(MockGateway::new(session));
         let executor = Arc::new(MockToolExecutor::new());
-        let use_case = RunAskUseCase::new(gateway, executor);
+        let use_case = RunAskUseCase::new(gateway, executor, mock_tool_schema());
 
         let input = RunAskInput::new(
             "What's in main.rs?",
@@ -458,7 +497,7 @@ mod tests {
         let session = MockSession::new(responses);
         let gateway = Arc::new(MockGateway::new(session));
         let executor = Arc::new(MockToolExecutor::new());
-        let use_case = RunAskUseCase::new(gateway, executor);
+        let use_case = RunAskUseCase::new(gateway, executor, mock_tool_schema());
 
         let execution = ExecutionParams::default().with_max_tool_turns(3);
         let input = RunAskInput::new("Complex question", ModelConfig::default(), execution);
@@ -484,7 +523,7 @@ mod tests {
         }]);
         let gateway = Arc::new(MockGateway::new(session));
         let executor = Arc::new(MockToolExecutor::new());
-        let use_case = RunAskUseCase::new(gateway, executor);
+        let use_case = RunAskUseCase::new(gateway, executor, mock_tool_schema());
 
         let input = RunAskInput::new("Hello?", ModelConfig::default(), ExecutionParams::default());
 
@@ -495,9 +534,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_ask_only_uses_low_risk_tools() {
-        // Verify that to_low_risk_api_tools() filters correctly
+        // Verify that low_risk_tools_schema() filters correctly
         let executor = MockToolExecutor::new();
-        let low_risk_tools = executor.tool_spec().to_low_risk_api_tools();
+        let schema = mock_tool_schema();
+        let low_risk_tools = schema.low_risk_tools_schema(executor.tool_spec());
 
         // Should only have read_file, not write_file
         assert_eq!(low_risk_tools.len(), 1);

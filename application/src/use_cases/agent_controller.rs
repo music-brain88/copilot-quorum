@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::reference_resolver::ReferenceResolverPort;
+use crate::ports::tool_schema::ToolSchemaPort;
 
 /// Entry in conversation history
 #[derive(Debug, Clone)]
@@ -76,6 +77,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub fn new(
         gateway: Arc<G>,
         tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
         context_loader: Arc<C>,
         config: QuorumConfig,
         human_intervention: Arc<dyn HumanInterventionPort>,
@@ -86,6 +88,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             use_case: RunAgentUseCase::with_context_loader(
                 gateway,
                 tool_executor,
+                tool_schema,
                 context_loader.clone(),
             )
             .with_human_intervention(human_intervention),
@@ -590,9 +593,11 @@ mod tests {
     use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
     use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
     use crate::ports::tool_executor::ToolExecutorPort;
+    use crate::ports::tool_schema::ToolSchemaPort;
     use async_trait::async_trait;
     use quorum_domain::{
-        HumanDecision, LoadedContextFile, Model, Plan, ReviewRound, ToolCall, ToolResult, ToolSpec,
+        HumanDecision, LoadedContextFile, Model, Plan, ReviewRound, ToolCall, ToolDefinition,
+        ToolResult, ToolSpec,
     };
     use std::path::Path;
 
@@ -692,6 +697,30 @@ mod tests {
         }
     }
 
+    struct MockToolSchema;
+
+    impl ToolSchemaPort for MockToolSchema {
+        fn tool_to_schema(&self, tool: &ToolDefinition) -> serde_json::Value {
+            serde_json::json!({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": { "type": "object", "properties": {}, "required": [] }
+            })
+        }
+
+        fn all_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            let mut tools: Vec<_> = spec.all().collect();
+            tools.sort_by_key(|t| &t.name);
+            tools.into_iter().map(|t| self.tool_to_schema(t)).collect()
+        }
+
+        fn low_risk_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            let mut tools: Vec<_> = spec.low_risk_tools().collect();
+            tools.sort_by_key(|t| &t.name);
+            tools.into_iter().map(|t| self.tool_to_schema(t)).collect()
+        }
+    }
+
     fn create_test_controller() -> (
         AgentController<MockGateway, MockToolExecutor, MockContextLoader>,
         mpsc::UnboundedReceiver<UiEvent>,
@@ -699,6 +728,7 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
         let gateway = Arc::new(MockGateway);
         let tool_executor = Arc::new(MockToolExecutor::new());
+        let tool_schema: Arc<dyn ToolSchemaPort> = Arc::new(MockToolSchema);
         let context_loader = Arc::new(MockContextLoader);
         let human_intervention = Arc::new(MockHumanIntervention);
         let config = QuorumConfig::default();
@@ -706,6 +736,7 @@ mod tests {
         let controller = AgentController::new(
             gateway,
             tool_executor,
+            tool_schema,
             context_loader,
             config,
             human_intervention,
