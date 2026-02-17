@@ -8,7 +8,7 @@ use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
-use crate::ports::progress::NoProgress;
+use crate::ports::progress::QuorumProgressAdapter;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
     AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
@@ -282,7 +282,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         message: "Usage: /discuss <question>".to_string(),
                     });
                 } else {
-                    self.run_discuss(args).await;
+                    self.run_discuss(args, progress).await;
                 }
                 CommandAction::Continue
             }
@@ -481,7 +481,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Run Quorum Discussion with conversation context
-    pub async fn run_discuss(&self, question: &str) {
+    pub async fn run_discuss(&self, question: &str, progress: &dyn AgentProgressNotifier) {
         let _ = self.tx.send(UiEvent::QuorumStarting);
 
         // Build the question with context
@@ -495,9 +495,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Create quorum input using factory method
         let input = self.config.to_quorum_input(full_question);
 
-        // Run quorum
+        // Run quorum with progress adapter
         let use_case = RunQuorumUseCase::new(self.gateway.clone());
-        let result = use_case.execute_with_progress(input, &NoProgress).await;
+        let adapter = QuorumProgressAdapter::new(progress);
+        let result = use_case.execute_with_progress(input, &adapter).await;
 
         match result {
             Ok(output) => {
