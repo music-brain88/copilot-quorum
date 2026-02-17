@@ -392,9 +392,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("  s      Switch to Solo mode"),
             Line::from("  e      Switch to Ensemble mode"),
             Line::from("  f      Toggle Fast scope"),
-            Line::from("  a      Switch to Ask mode"),
-            Line::from("  d      Switch to Discuss mode"),
-            Line::from("  c      Start Council (ad-hoc discussion)"),
+            Line::from("  a      Ask (prefill :ask )"),
+            Line::from("  d      Discuss (prefill :discuss )"),
             Line::from("  j/k    Scroll down/up"),
             Line::from("  g/G    Scroll to top/bottom"),
             Line::from("  ?      Toggle this help"),
@@ -413,9 +412,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("  :solo    Switch to Solo mode"),
             Line::from("  :ens     Switch to Ensemble mode"),
             Line::from("  :fast    Toggle fast mode"),
-            Line::from("  :ask     Switch to Ask mode"),
-            Line::from("  :discuss Switch to Discuss mode"),
-            Line::from("  :council <question>  Ad-hoc discussion"),
+            Line::from("  :ask <question>   Ask (lightweight Q&A)"),
+            Line::from("  :discuss <question> Discuss (quorum discussion)"),
             Line::from("  :config  Show configuration"),
             Line::from("  :clear   Clear history"),
             Line::from(""),
@@ -571,17 +569,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 let _ = self.cmd_tx.send(TuiCommand::HandleCommand("fast".into()));
             }
             KeyAction::SwitchAsk => {
-                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("ask".into()));
+                // Enter command mode with "ask " pre-filled
+                state.mode = InputMode::Command;
+                state.command_input = "ask ".into();
+                state.command_cursor = state.command_input.len();
             }
             KeyAction::SwitchDiscuss => {
-                let _ = self
-                    .cmd_tx
-                    .send(TuiCommand::HandleCommand("discuss".into()));
-            }
-            KeyAction::StartCouncil => {
-                // Enter command mode with "council " pre-filled
+                // Enter command mode with "discuss " pre-filled
                 state.mode = InputMode::Command;
-                state.command_input = "council ".into();
+                state.command_input = "discuss ".into();
                 state.command_cursor = state.command_input.len();
             }
 

@@ -6,8 +6,8 @@
 use super::event::TuiEvent;
 use super::state::{DisplayMessage, TuiState};
 use quorum_application::{
-    AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
-    UiEvent, WelcomeInfo,
+    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
+    QuorumResultEvent, UiEvent, WelcomeInfo,
 };
 use tokio::sync::mpsc;
 
@@ -67,6 +67,18 @@ impl TuiPresenter {
             }
             UiEvent::AgentResult(result) => self.handle_agent_result(state, result),
             UiEvent::AgentError(error) => self.handle_agent_error(state, error),
+            UiEvent::AskStarting => {
+                state
+                    .messages
+                    .push(DisplayMessage::system("Ask starting..."));
+            }
+            UiEvent::AskResult(result) => self.handle_ask_result(state, result),
+            UiEvent::AskError { error } => {
+                state
+                    .messages
+                    .push(DisplayMessage::system(format!("Ask error: {}", error)));
+                self.emit(TuiEvent::AgentError(error.clone()));
+            }
             UiEvent::QuorumStarting => {
                 state
                     .messages
@@ -184,6 +196,16 @@ impl TuiPresenter {
         };
         state.messages.push(DisplayMessage::system(msg.clone()));
         self.emit(TuiEvent::AgentError(msg));
+    }
+
+    fn handle_ask_result(&self, state: &mut TuiState, result: &AskResultEvent) {
+        state
+            .messages
+            .push(DisplayMessage::assistant(result.answer.clone()));
+        self.emit(TuiEvent::AgentResult {
+            success: true,
+            summary: "Ask completed".into(),
+        });
     }
 
     fn handle_quorum_result(&self, state: &mut TuiState, result: &QuorumResultEvent) {

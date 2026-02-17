@@ -6,17 +6,20 @@
 
 use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
+use crate::ports::agent_progress::NoAgentProgress;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::NoProgress;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
-    AgentErrorEvent, AgentResultEvent, ConfigSnapshot, ContextInitResultEvent, QuorumResultEvent,
-    UiEvent, WelcomeInfo,
+    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
+    QuorumResultEvent, UiEvent, WelcomeInfo,
 };
 use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::RunAgentUseCase;
+use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
+use quorum_domain::interaction::InteractionResult;
 use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
@@ -56,6 +59,8 @@ pub struct AgentController<
     C: ContextLoaderPort + 'static,
 > {
     gateway: Arc<G>,
+    tool_executor: Arc<T>,
+    tool_schema: Arc<dyn ToolSchemaPort>,
     use_case: RunAgentUseCase<G, T, C>,
     context_loader: Arc<C>,
     config: QuorumConfig,
@@ -85,6 +90,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     ) -> Self {
         Self {
             gateway: gateway.clone(),
+            tool_executor: tool_executor.clone(),
+            tool_schema: tool_schema.clone(),
             use_case: RunAgentUseCase::with_context_loader(
                 gateway,
                 tool_executor,
@@ -256,31 +263,22 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 CommandAction::Continue
             }
             "/ask" => {
-                let _ = self.tx.send(UiEvent::CommandError {
-                    message: "/ask is being redesigned as Buffer/Tab actions (Issue #119). Use the main input for now.".to_string(),
-                });
+                if args.is_empty() {
+                    let _ = self.tx.send(UiEvent::CommandError {
+                        message: "Usage: /ask <question>".to_string(),
+                    });
+                } else {
+                    self.run_ask(args).await;
+                }
                 CommandAction::Continue
             }
             "/discuss" => {
                 if args.is_empty() {
                     let _ = self.tx.send(UiEvent::CommandError {
-                        message: "/discuss is being redesigned as Buffer/Tab actions (Issue #119). Use /council <question> for ad-hoc discussions.".to_string(),
+                        message: "Usage: /discuss <question>".to_string(),
                     });
                 } else {
-                    // Legacy hint: suggest /council
-                    let _ = self.tx.send(UiEvent::CommandError {
-                        message: format!("Use /council {} to run an ad-hoc discussion.", args),
-                    });
-                }
-                CommandAction::Continue
-            }
-            "/council" => {
-                if args.is_empty() {
-                    let _ = self.tx.send(UiEvent::CommandError {
-                        message: "Usage: /council <your question>\nExample: /council What's the best approach for this design?".to_string(),
-                    });
-                } else {
-                    self.run_council(args).await;
+                    self.run_discuss(args).await;
                 }
                 CommandAction::Continue
             }
@@ -436,8 +434,50 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         context
     }
 
+    /// Run Ask interaction — lightweight Q&A with read-only tool access
+    pub async fn run_ask(&mut self, question: &str) {
+        let _ = self.tx.send(UiEvent::AskStarting);
+
+        // Build the question with context
+        let context = self.build_context_from_history();
+        let full_question = if context.is_empty() {
+            question.to_string()
+        } else {
+            format!("{}\n\n## Current Question\n\n{}", context, question)
+        };
+
+        let input = self.config.to_ask_input(full_question);
+        let use_case = RunAskUseCase::new(
+            self.gateway.clone(),
+            self.tool_executor.clone(),
+            self.tool_schema.clone(),
+        );
+
+        match use_case.execute(input, &NoAgentProgress).await {
+            Ok(InteractionResult::AskResult { answer }) => {
+                // Add to conversation history
+                self.conversation_history.push(HistoryEntry {
+                    request: question.to_string(),
+                    summary: answer.clone(),
+                });
+
+                let _ = self.tx.send(UiEvent::AskResult(AskResultEvent { answer }));
+            }
+            Ok(_) => {
+                let _ = self.tx.send(UiEvent::AskError {
+                    error: "Unexpected interaction result type".to_string(),
+                });
+            }
+            Err(e) => {
+                let _ = self.tx.send(UiEvent::AskError {
+                    error: e.to_string(),
+                });
+            }
+        }
+    }
+
     /// Run Quorum Discussion with conversation context
-    pub async fn run_council(&self, question: &str) {
+    pub async fn run_discuss(&self, question: &str) {
         let _ = self.tx.send(UiEvent::QuorumStarting);
 
         // Build the question with context
@@ -902,56 +942,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_discuss_without_args_shows_redesign_message() {
+    async fn test_discuss_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/discuss").await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
-                assert!(message.contains("redesigned"));
-                assert!(message.contains("#119"));
+                assert!(message.contains("Usage"));
             }
             other => panic!("Expected CommandError, got {:?}", other),
         }
     }
 
     #[tokio::test]
-    async fn test_discuss_with_args_shows_council_hint() {
-        let (mut controller, mut rx) = create_test_controller();
-
-        controller.handle_command("/discuss some question").await;
-        let event = rx.try_recv().unwrap();
-        match event {
-            UiEvent::CommandError { message } => {
-                assert!(message.contains("/council"));
-            }
-            other => panic!("Expected CommandError, got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_ask_command_shows_redesign_message() {
+    async fn test_ask_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/ask").await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
-                assert!(message.contains("redesigned"));
-                assert!(message.contains("#119"));
+                assert!(message.contains("Usage"));
             }
             other => panic!("Expected CommandError, got {:?}", other),
         }
     }
 
     #[tokio::test]
-    async fn test_council_without_question() {
+    async fn test_ask_with_question_sends_ask_starting() {
+        let (mut controller, mut rx) = create_test_controller();
+
+        controller.handle_command("/ask What is Rust?").await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, UiEvent::AskStarting));
+    }
+
+    #[tokio::test]
+    async fn test_council_is_unknown_command() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/council").await;
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, UiEvent::CommandError { .. }));
+        assert!(matches!(event, UiEvent::UnknownCommand { .. }));
     }
 
     #[tokio::test]
