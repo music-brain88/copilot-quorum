@@ -239,13 +239,17 @@ impl SessionChannel {
                         trace!("Stream: {}", event_type);
                     }
                     "tool.execution_complete" => {
-                        debug!(
+                        let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
+                        debug!("Stream: tool.execution_complete ({} bytes)", size);
+                        trace!(
                             "Stream: tool.execution_complete: {}",
                             serde_json::to_string(&event).unwrap_or_default()
                         );
                     }
                     other => {
-                        debug!(
+                        let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
+                        debug!("Stream: unhandled event '{}' ({} bytes)", other, size);
+                        trace!(
                             "Stream: unhandled event '{}': {}",
                             other,
                             serde_json::to_string(&event).unwrap_or_default()
@@ -295,7 +299,9 @@ impl SessionChannel {
                             full_content.push_str(content);
                             turn_delta_bytes += content.len();
                         } else {
-                            debug!(
+                            let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
+                            debug!("Tool stream: delta with unexpected format ({} bytes)", size);
+                            trace!(
                                 "Tool stream: delta with unexpected format: {}",
                                 serde_json::to_string(&event).unwrap_or_default()
                             );
@@ -336,7 +342,9 @@ impl SessionChannel {
                         );
                     }
                     "tool.execution_complete" => {
-                        debug!(
+                        let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
+                        debug!("Tool stream: tool.execution_complete ({} bytes)", size);
+                        trace!(
                             "Tool stream: tool.execution_complete: {}",
                             serde_json::to_string(&event).unwrap_or_default()
                         );
@@ -371,7 +379,9 @@ impl SessionChannel {
                         trace!("Tool stream: {}", event_type);
                     }
                     other => {
-                        debug!(
+                        let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
+                        debug!("Tool stream: unhandled event '{}' ({} bytes)", other, size);
+                        trace!(
                             "Tool stream: unhandled event '{}': {}",
                             other,
                             serde_json::to_string(&event).unwrap_or_default()
@@ -492,13 +502,17 @@ impl SessionChannel {
                         trace!("Stream: {}", event_type);
                     }
                     "tool.execution_complete" => {
-                        debug!(
+                        let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
+                        debug!("Stream: tool.execution_complete ({} bytes)", size);
+                        trace!(
                             "Stream: tool.execution_complete: {}",
                             serde_json::to_string(&event).unwrap_or_default()
                         );
                     }
                     other => {
-                        debug!(
+                        let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
+                        debug!("Stream: unhandled event '{}' ({} bytes)", other, size);
+                        trace!(
                             "Stream: unhandled event '{}': {}",
                             other,
                             serde_json::to_string(&event).unwrap_or_default()
@@ -951,7 +965,11 @@ impl MessageRouter {
         let _guard = self.create_lock.lock().await;
 
         let params_value = serde_json::to_value(&params)?;
-        debug!(
+        let params_size = serde_json::to_string(&params_value)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        debug!("session.create params ({} bytes)", params_size);
+        trace!(
             "session.create params: {}",
             serde_json::to_string(&params_value).unwrap_or_default()
         );
