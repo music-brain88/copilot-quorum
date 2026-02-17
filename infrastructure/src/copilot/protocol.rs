@@ -150,8 +150,8 @@ pub struct SystemMessageConfig {
 
 /// Tool definition for the Copilot CLI session (**Native Tool Use**).
 ///
-/// Converted from the domain's [`ToolSpec::to_api_tools()`](quorum_domain::tool::ToolSpec::to_api_tools)
-/// JSON Schema format via [`from_api_tool`](Self::from_api_tool).
+/// Converted from the [`ToolSchemaPort`](quorum_application::ToolSchemaPort) JSON Schema
+/// format via [`from_api_tool`](Self::from_api_tool).
 ///
 /// The official Copilot SDK uses `"parameters"` for the tool schema field,
 /// not `"inputSchema"` or `"input_schema"`.
@@ -167,9 +167,9 @@ pub struct CopilotToolDefinition {
 }
 
 impl CopilotToolDefinition {
-    /// Convert from the domain's `to_api_tools()` JSON format.
+    /// Convert from the `ToolSchemaPort` JSON format.
     ///
-    /// Reads `"input_schema"` from the domain-layer JSON and maps it to
+    /// Reads `"input_schema"` from the provider-neutral JSON and maps it to
     /// `parameters` for the Copilot CLI wire format.
     pub fn from_api_tool(value: &serde_json::Value) -> Option<Self> {
         Some(Self {

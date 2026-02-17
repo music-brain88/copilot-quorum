@@ -51,12 +51,14 @@ mod executor;
 mod registry;
 
 pub mod custom_provider;
+pub mod schema;
 
 pub use builtin::BuiltinProvider;
 pub use cli::CliToolProvider;
 pub use custom_provider::CustomToolProvider;
 pub use executor::LocalToolExecutor;
 pub use registry::{RegistryStats, ToolRegistry};
+pub use schema::JsonSchemaToolConverter;
 
 use quorum_domain::tool::entities::ToolSpec;
 

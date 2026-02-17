@@ -28,6 +28,7 @@ use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::reference_resolver::ReferenceResolverPort;
 use crate::ports::tool_executor::ToolExecutorPort;
+use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::execute_task::ExecuteTaskUseCase;
 use crate::use_cases::gather_context::GatherContextUseCase;
 use crate::use_cases::shared::check_cancelled;
@@ -49,6 +50,7 @@ pub struct RunAgentUseCase<
 > {
     pub(super) gateway: Arc<G>,
     pub(super) tool_executor: Arc<T>,
+    pub(super) tool_schema: Arc<dyn ToolSchemaPort>,
     pub(super) context_loader: Option<Arc<C>>,
     pub(super) cancellation_token: Option<CancellationToken>,
     pub(super) human_intervention: Option<Arc<dyn HumanInterventionPort>>,
@@ -65,6 +67,7 @@ where
         Self {
             gateway: self.gateway.clone(),
             tool_executor: self.tool_executor.clone(),
+            tool_schema: self.tool_schema.clone(),
             context_loader: self.context_loader.clone(),
             cancellation_token: self.cancellation_token.clone(),
             human_intervention: self.human_intervention.clone(),
@@ -93,10 +96,15 @@ impl ContextLoaderPort for NoContextLoader {
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
     RunAgentUseCase<G, T, NoContextLoader>
 {
-    pub fn new(gateway: Arc<G>, tool_executor: Arc<T>) -> Self {
+    pub fn new(
+        gateway: Arc<G>,
+        tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
+    ) -> Self {
         Self {
             gateway,
             tool_executor,
+            tool_schema,
             context_loader: None,
             cancellation_token: None,
             human_intervention: None,
@@ -111,11 +119,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub fn with_context_loader(
         gateway: Arc<G>,
         tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
         context_loader: Arc<C>,
     ) -> Self {
         Self {
             gateway,
             tool_executor,
+            tool_schema,
             context_loader: Some(context_loader),
             cancellation_token: None,
             human_intervention: None,
@@ -246,6 +256,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         let mut gather_uc = GatherContextUseCase::new(
             self.tool_executor.clone(),
+            self.tool_schema.clone(),
             self.context_loader.clone(),
             self.cancellation_token.clone(),
         );
@@ -585,6 +596,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let execute_uc = ExecuteTaskUseCase::new(
             self.gateway.clone(),
             self.tool_executor.clone(),
+            self.tool_schema.clone(),
             self.cancellation_token.clone(),
             Arc::new(reviewer),
         );
@@ -689,6 +701,7 @@ mod tests {
     use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
     use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
     use crate::ports::tool_executor::ToolExecutorPort;
+    use crate::ports::tool_schema::ToolSchemaPort;
     use async_trait::async_trait;
     use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
     use quorum_domain::tool::entities::{ToolCall, ToolDefinition, ToolSpec};
@@ -696,6 +709,35 @@ mod tests {
     use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, PhaseScope, SessionMode};
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
+
+    /// Minimal ToolSchemaPort for tests — produces stub JSON Schema.
+    struct MockToolSchema;
+
+    impl ToolSchemaPort for MockToolSchema {
+        fn tool_to_schema(&self, tool: &ToolDefinition) -> serde_json::Value {
+            serde_json::json!({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": { "type": "object", "properties": {}, "required": [] }
+            })
+        }
+
+        fn all_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            let mut tools: Vec<_> = spec.all().collect();
+            tools.sort_by_key(|t| &t.name);
+            tools.into_iter().map(|t| self.tool_to_schema(t)).collect()
+        }
+
+        fn low_risk_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            let mut tools: Vec<_> = spec.low_risk_tools().collect();
+            tools.sort_by_key(|t| &t.name);
+            tools.into_iter().map(|t| self.tool_to_schema(t)).collect()
+        }
+    }
+
+    fn mock_tool_schema() -> Arc<dyn ToolSchemaPort> {
+        Arc::new(MockToolSchema)
+    }
 
     /// A scripted response for the mock session
     #[derive(Debug, Clone)]
@@ -1252,7 +1294,7 @@ mod tests {
             let gateway = Arc::new(self.gateway);
             let executor = Arc::new(self.tool_executor);
 
-            let mut use_case = RunAgentUseCase::new(gateway, executor);
+            let mut use_case = RunAgentUseCase::new(gateway, executor, mock_tool_schema());
 
             if let Some(intervention) = self.human_intervention {
                 use_case = use_case.with_human_intervention(intervention);

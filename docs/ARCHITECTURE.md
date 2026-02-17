@@ -342,6 +342,7 @@ presentation/
 | `Question` にバリデーションを内包 | 不正な状態を作れないようにする（空の質問を防ぐ） |
 | ユースケースにジェネリクス使用 | 実行時DI（Box<dyn>）ではなくコンパイル時DI |
 | インフラ層でプロトコル詳細を隠蔽 | JSON-RPC, LSPヘッダーなどの詳細はドメインに漏れない |
+| JSON Schema 変換を Port パターンで分離 | domain 層はツールの定義・フィルタリングのみ担当し、LLM API フォーマット（JSON Schema）への変換は `ToolSchemaPort` 経由で infrastructure 層が実装 |
 
 ### TUI Design Philosophy / TUI 設計思想
 
@@ -632,6 +633,7 @@ Quorum（合意形成）に関する型を定義します。
 | `ToolExecutorPort` | ツール実行の抽象化 |
 | `ContextLoaderPort` | コンテキストファイル読み込みの抽象化 |
 | `AgentProgressNotifier` | エージェント進捗通知コールバック |
+| `ToolSchemaPort` | ツール定義 → JSON Schema 変換の抽象化 |
 
 ### Use Cases / ユースケース
 
@@ -668,6 +670,7 @@ Quorum（合意形成）に関する型を定義します。
 | `ToolRegistry` | `ToolExecutorPort` | プロバイダーを集約、優先度でルーティング |
 | `BuiltinProvider` | `ToolProvider` | 最小限の組み込みツール（priority: -100） |
 | `CliToolProvider` | `ToolProvider` | システムCLIツールのラッパー（priority: 50） |
+| `JsonSchemaToolConverter` | `ToolSchemaPort` | ツール定義 → JSON Schema 変換（Port パターン） |
 
 #### 利用可能なツール
 

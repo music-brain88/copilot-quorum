@@ -7,6 +7,7 @@ use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::llm_gateway::{LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
+use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use quorum_domain::agent::model_config::ModelConfig;
@@ -24,6 +25,7 @@ use tracing::{debug, info, warn};
 pub struct ExecuteTaskUseCase<G: LlmGateway, T: ToolExecutorPort> {
     gateway: Arc<G>,
     tool_executor: Arc<T>,
+    tool_schema: Arc<dyn ToolSchemaPort>,
     cancellation_token: Option<CancellationToken>,
     action_reviewer: Arc<dyn ActionReviewer>,
 }
@@ -32,12 +34,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
     pub fn new(
         gateway: Arc<G>,
         tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
         cancellation_token: Option<CancellationToken>,
         action_reviewer: Arc<dyn ActionReviewer>,
     ) -> Self {
         Self {
             gateway,
             tool_executor,
+            tool_schema,
             cancellation_token,
             action_reviewer,
         }
@@ -258,7 +262,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
     ) -> Result<(String, Vec<ToolExecution>), RunAgentError> {
         let task_id_str = task.id.as_str();
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
-        let tools = self.tool_executor.tool_spec().to_api_tools();
+        let tools = self
+            .tool_schema
+            .all_tools_schema(self.tool_executor.tool_spec());
         let max_turns = input.execution.max_tool_turns;
         let mut turn_count = 0;
         let mut all_outputs = Vec::new();

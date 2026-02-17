@@ -13,6 +13,7 @@ use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::{LlmSession, ToolResultMessage};
 use crate::ports::reference_resolver::{ReferenceResolverPort, ResolvedReference};
 use crate::ports::tool_executor::ToolExecutorPort;
+use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::run_agent::RunAgentError;
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use quorum_domain::core::string::truncate;
@@ -30,6 +31,7 @@ use tracing::{info, warn};
 /// 3. Proceed with minimal context
 pub struct GatherContextUseCase<T: ToolExecutorPort, C: ContextLoaderPort> {
     tool_executor: Arc<T>,
+    tool_schema: Arc<dyn ToolSchemaPort>,
     context_loader: Option<Arc<C>>,
     cancellation_token: Option<CancellationToken>,
     reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
@@ -38,11 +40,13 @@ pub struct GatherContextUseCase<T: ToolExecutorPort, C: ContextLoaderPort> {
 impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContextUseCase<T, C> {
     pub fn new(
         tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
         context_loader: Option<Arc<C>>,
         cancellation_token: Option<CancellationToken>,
     ) -> Self {
         Self {
             tool_executor,
+            tool_schema,
             context_loader,
             cancellation_token,
             reference_resolver: None,
@@ -198,7 +202,9 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
         // Ask the model to gather context using tools (Native multi-turn loop)
         let prompt =
             AgentPromptTemplate::context_gathering(request, execution.working_dir.as_deref());
-        let tools = self.tool_executor.tool_spec().to_api_tools();
+        let tools = self
+            .tool_schema
+            .all_tools_schema(self.tool_executor.tool_spec());
         let max_turns = execution.max_tool_turns;
         let mut turn_count = 0;
         let mut results = Vec::new();
