@@ -66,6 +66,14 @@ pub enum UiEvent {
     /// Context file already exists
     ContextAlreadyExists,
 
+    // === Ask Interaction ===
+    /// Ask interaction starting
+    AskStarting,
+    /// Ask interaction completed
+    AskResult(AskResultEvent),
+    /// Ask interaction failed
+    AskError { error: String },
+
     // === Errors & Control ===
     /// Command usage/validation error
     CommandError { message: String },
@@ -135,4 +143,10 @@ pub struct ContextInitResultEvent {
     pub path: String,
     pub content: String,
     pub contributing_models: Vec<String>,
+}
+
+/// Ask interaction result for display
+#[derive(Debug, Clone)]
+pub struct AskResultEvent {
+    pub answer: String,
 }

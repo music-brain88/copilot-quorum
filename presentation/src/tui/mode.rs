@@ -74,7 +74,6 @@ pub enum KeyAction {
     ToggleFast,
     SwitchAsk,
     SwitchDiscuss,
-    StartCouncil,
 
     // -- Editor --
     LaunchEditor,
@@ -116,7 +115,6 @@ fn handle_normal(key: KeyEvent) -> KeyAction {
         // Interaction type
         KeyCode::Char('a') => KeyAction::SwitchAsk,
         KeyCode::Char('d') => KeyAction::SwitchDiscuss,
-        KeyCode::Char('c') => KeyAction::StartCouncil,
 
         // Scrolling
         KeyCode::Char('j') | KeyCode::Down => KeyAction::ScrollDown,
@@ -302,7 +300,6 @@ mod tests {
             ('f', KeyAction::ToggleFast),
             ('a', KeyAction::SwitchAsk),
             ('d', KeyAction::SwitchDiscuss),
-            ('c', KeyAction::StartCouncil),
         ];
         for (ch, expected) in cases {
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
