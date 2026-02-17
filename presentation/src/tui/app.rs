@@ -558,6 +558,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             KeyAction::SubmitInput => {
                 let input = state.take_input();
                 if !input.is_empty() {
+                    state.tabs.active_pane_mut().set_title_if_empty(&input);
                     state.push_message(DisplayMessage::user(&input));
                     let _ = self.cmd_tx.send(TuiCommand::ProcessRequest(input));
                 }
@@ -571,6 +572,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     } else if let Some(flash) = self.handle_tab_command(state, &cmd) {
                         state.set_flash(flash);
                     } else {
+                        Self::set_title_from_command(state, &cmd);
                         let _ = self.cmd_tx.send(TuiCommand::HandleCommand(cmd));
                     }
                 }
@@ -1029,6 +1031,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     fn send_hil_response(&self, decision: HumanDecision) {
         if let Some(tx) = self.pending_hil_tx.lock().unwrap().take() {
             let _ = tx.send(decision);
+        }
+    }
+
+    /// Set tab title from `:ask` / `:discuss` commands.
+    fn set_title_from_command(state: &mut TuiState, cmd: &str) {
+        let trimmed = cmd.trim();
+        let question = trimmed
+            .strip_prefix("ask ")
+            .or_else(|| trimmed.strip_prefix("discuss "));
+        if let Some(q) = question {
+            let q = q.trim();
+            if !q.is_empty() {
+                state.tabs.active_pane_mut().set_title_if_empty(q);
+            }
         }
     }
 

@@ -31,7 +31,7 @@ impl<'a> Widget for TabBarWidget<'a> {
         let mut spans: Vec<Span> = Vec::new();
 
         for (i, tab) in self.tabs.tabs().iter().enumerate() {
-            let label = format!(" {} {} ", i + 1, tab.pane.kind.label());
+            let label = format!(" {} {} ", i + 1, tab.pane.display_title());
             if i == active_idx {
                 spans.push(Span::styled(
                     label,

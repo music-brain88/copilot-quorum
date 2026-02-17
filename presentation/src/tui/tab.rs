@@ -8,6 +8,7 @@
 //! Phase 1: each Tab contains exactly one Pane (no splits).
 
 use super::state::{DisplayMessage, ProgressState};
+use quorum_domain::core::string::truncate;
 use quorum_domain::interaction::InteractionForm;
 
 /// Unique identifier for a tab.
@@ -41,6 +42,9 @@ pub struct Pane {
     pub id: PaneId,
     pub kind: PaneKind,
 
+    // -- Tab title (auto-generated from first user message) --
+    pub title: Option<String>,
+
     // -- Conversation --
     pub messages: Vec<DisplayMessage>,
     pub streaming_text: String,
@@ -60,6 +64,7 @@ impl Pane {
         Self {
             id,
             kind,
+            title: None,
             messages: Vec::new(),
             streaming_text: String::new(),
             scroll_offset: 0,
@@ -67,6 +72,21 @@ impl Pane {
             input: String::new(),
             cursor_pos: 0,
             progress: ProgressState::default(),
+        }
+    }
+
+    /// Display title: custom title if set, otherwise the PaneKind label.
+    pub fn display_title(&self) -> &str {
+        self.title.as_deref().unwrap_or(self.kind.label())
+    }
+
+    /// Auto-set title from the first user message (idempotent: no-op after first call).
+    pub fn set_title_if_empty(&mut self, message: &str) {
+        if self.title.is_none() {
+            let first_line = message.lines().next().unwrap_or(message).trim();
+            if !first_line.is_empty() {
+                self.title = Some(truncate(first_line, 30));
+            }
         }
     }
 }
@@ -190,7 +210,7 @@ impl TabManager {
             .enumerate()
             .map(|(i, tab)| {
                 let marker = if i == self.active_index { ">" } else { " " };
-                format!("{} {}: [{}]", marker, i + 1, tab.pane.kind.label())
+                format!("{} {}: [{}]", marker, i + 1, tab.pane.display_title())
             })
             .collect()
     }
@@ -319,5 +339,62 @@ mod tests {
             PaneKind::Interaction(InteractionForm::Discuss).label(),
             "Discuss"
         );
+    }
+
+    #[test]
+    fn test_pane_display_title_default() {
+        let pane = Pane::new(PaneId(0), PaneKind::Interaction(InteractionForm::Agent));
+        assert_eq!(pane.display_title(), "Agent");
+    }
+
+    #[test]
+    fn test_pane_set_title_from_message() {
+        let mut pane = Pane::new(PaneId(0), PaneKind::Interaction(InteractionForm::Agent));
+        pane.set_title_if_empty("Fix the auth bug");
+        assert_eq!(pane.display_title(), "Fix the auth bug");
+    }
+
+    #[test]
+    fn test_pane_title_only_set_once() {
+        let mut pane = Pane::new(PaneId(0), PaneKind::Interaction(InteractionForm::Agent));
+        pane.set_title_if_empty("First message");
+        pane.set_title_if_empty("Second message");
+        assert_eq!(pane.display_title(), "First message");
+    }
+
+    #[test]
+    fn test_pane_title_multiline_uses_first_line() {
+        let mut pane = Pane::new(PaneId(0), PaneKind::Interaction(InteractionForm::Agent));
+        pane.set_title_if_empty("First line\nSecond line\nThird line");
+        assert_eq!(pane.display_title(), "First line");
+    }
+
+    #[test]
+    fn test_pane_title_empty_ignored() {
+        let mut pane = Pane::new(PaneId(0), PaneKind::Interaction(InteractionForm::Agent));
+        pane.set_title_if_empty("");
+        assert_eq!(pane.display_title(), "Agent");
+        assert!(pane.title.is_none());
+    }
+
+    #[test]
+    fn test_pane_title_whitespace_ignored() {
+        let mut pane = Pane::new(PaneId(0), PaneKind::Interaction(InteractionForm::Agent));
+        pane.set_title_if_empty("   \n  \n  ");
+        assert_eq!(pane.display_title(), "Agent");
+        assert!(pane.title.is_none());
+    }
+
+    #[test]
+    fn test_tab_list_summary_with_title() {
+        let mut mgr = TabManager::new();
+        mgr.active_pane_mut().set_title_if_empty("Fix the auth bug");
+        mgr.create_tab(PaneKind::Interaction(InteractionForm::Ask));
+
+        let summary = mgr.tab_list_summary();
+        assert_eq!(summary.len(), 2);
+        assert!(summary[0].contains("Fix the auth bug"));
+        assert!(!summary[0].contains("Agent"));
+        assert!(summary[1].contains("Ask"));
     }
 }
