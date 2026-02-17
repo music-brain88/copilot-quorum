@@ -68,6 +68,13 @@ pub enum KeyAction {
     ScrollToTop,
     ScrollToBottom,
 
+    // -- Tabs (Normal mode, via g prefix) --
+    NextTab,
+    PrevTab,
+
+    // -- Pending key (prefix key awaiting next input) --
+    PendingKey(char),
+
     // -- Quick commands (Normal mode) --
     SwitchSolo,
     SwitchEnsemble,
@@ -84,21 +91,33 @@ pub enum KeyAction {
     ToggleConsensus,
 }
 
-/// Map a key event + current mode to a semantic action
-pub fn handle_key_event(mode: InputMode, key: KeyEvent) -> KeyAction {
+/// Map a key event + current mode to a semantic action.
+///
+/// `pending_key` carries the prefix key from a previous keystroke (e.g. `g`).
+pub fn handle_key_event(mode: InputMode, key: KeyEvent, pending_key: Option<char>) -> KeyAction {
     // Global: Ctrl+C always quits
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return KeyAction::Quit;
     }
 
     match mode {
-        InputMode::Normal => handle_normal(key),
+        InputMode::Normal => handle_normal(key, pending_key),
         InputMode::Insert => handle_insert(key),
         InputMode::Command => handle_command(key),
     }
 }
 
-fn handle_normal(key: KeyEvent) -> KeyAction {
+fn handle_normal(key: KeyEvent, pending_key: Option<char>) -> KeyAction {
+    // Handle pending `g` prefix
+    if pending_key == Some('g') {
+        return match key.code {
+            KeyCode::Char('g') => KeyAction::ScrollToTop, // gg
+            KeyCode::Char('t') => KeyAction::NextTab,     // gt
+            KeyCode::Char('T') => KeyAction::PrevTab,     // gT
+            _ => KeyAction::None,                         // unknown g-combo, discard
+        };
+    }
+
     match key.code {
         // Mode transitions
         KeyCode::Char('i') => KeyAction::EnterInsert,
@@ -119,7 +138,7 @@ fn handle_normal(key: KeyEvent) -> KeyAction {
         // Scrolling
         KeyCode::Char('j') | KeyCode::Down => KeyAction::ScrollDown,
         KeyCode::Char('k') | KeyCode::Up => KeyAction::ScrollUp,
-        KeyCode::Char('g') => KeyAction::ScrollToTop,
+        KeyCode::Char('g') => KeyAction::PendingKey('g'), // g prefix
         KeyCode::Char('G') => KeyAction::ScrollToBottom,
 
         // Help
@@ -178,7 +197,7 @@ mod tests {
     fn test_ctrl_c_always_quits() {
         for mode in [InputMode::Normal, InputMode::Insert, InputMode::Command] {
             let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-            assert_eq!(handle_key_event(mode, key), KeyAction::Quit);
+            assert_eq!(handle_key_event(mode, key, None), KeyAction::Quit);
         }
     }
 
@@ -186,20 +205,20 @@ mod tests {
     fn test_normal_mode_transitions() {
         let key_i = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Normal, key_i),
+            handle_key_event(InputMode::Normal, key_i, None),
             KeyAction::EnterInsert
         );
 
         // `a` is now SwitchAsk, not EnterInsert
         let key_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Normal, key_a),
+            handle_key_event(InputMode::Normal, key_a, None),
             KeyAction::SwitchAsk
         );
 
         let key_colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Normal, key_colon),
+            handle_key_event(InputMode::Normal, key_colon, None),
             KeyAction::EnterCommand
         );
     }
@@ -208,13 +227,13 @@ mod tests {
     fn test_normal_scrolling() {
         let key_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Normal, key_j),
+            handle_key_event(InputMode::Normal, key_j, None),
             KeyAction::ScrollDown
         );
 
         let key_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Normal, key_k),
+            handle_key_event(InputMode::Normal, key_k, None),
             KeyAction::ScrollUp
         );
     }
@@ -223,7 +242,7 @@ mod tests {
     fn test_insert_mode_typing() {
         let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Insert, key),
+            handle_key_event(InputMode::Insert, key, None),
             KeyAction::InsertChar('x')
         );
     }
@@ -232,7 +251,7 @@ mod tests {
     fn test_insert_esc_exits() {
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Insert, key),
+            handle_key_event(InputMode::Insert, key, None),
             KeyAction::ExitToNormal
         );
     }
@@ -241,7 +260,7 @@ mod tests {
     fn test_insert_enter_submits() {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Insert, key),
+            handle_key_event(InputMode::Insert, key, None),
             KeyAction::SubmitInput
         );
     }
@@ -250,7 +269,7 @@ mod tests {
     fn test_insert_shift_enter_newline() {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
         assert_eq!(
-            handle_key_event(InputMode::Insert, key),
+            handle_key_event(InputMode::Insert, key, None),
             KeyAction::InsertNewline
         );
     }
@@ -260,7 +279,7 @@ mod tests {
         // Alt+Enter is kept as fallback for terminals without kitty protocol
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
         assert_eq!(
-            handle_key_event(InputMode::Insert, key),
+            handle_key_event(InputMode::Insert, key, None),
             KeyAction::InsertNewline
         );
     }
@@ -269,7 +288,7 @@ mod tests {
     fn test_normal_shift_i_launches_editor() {
         let key = KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT);
         assert_eq!(
-            handle_key_event(InputMode::Normal, key),
+            handle_key_event(InputMode::Normal, key, None),
             KeyAction::LaunchEditor
         );
     }
@@ -278,7 +297,7 @@ mod tests {
     fn test_command_enter_submits() {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Command, key),
+            handle_key_event(InputMode::Command, key, None),
             KeyAction::SubmitCommand
         );
     }
@@ -287,7 +306,7 @@ mod tests {
     fn test_command_esc_exits() {
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         assert_eq!(
-            handle_key_event(InputMode::Command, key),
+            handle_key_event(InputMode::Command, key, None),
             KeyAction::ExitToNormal
         );
     }
@@ -304,12 +323,64 @@ mod tests {
         for (ch, expected) in cases {
             let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
             assert_eq!(
-                handle_key_event(InputMode::Normal, key),
+                handle_key_event(InputMode::Normal, key, None),
                 expected,
                 "Normal mode '{}' should map to {:?}",
                 ch,
                 expected,
             );
         }
+    }
+
+    #[test]
+    fn test_g_prefix_gg_scroll_to_top() {
+        // First `g` press → PendingKey
+        let key_g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_g, None),
+            KeyAction::PendingKey('g')
+        );
+        // Second `g` with pending → ScrollToTop
+        let key_g2 = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_g2, Some('g')),
+            KeyAction::ScrollToTop
+        );
+    }
+
+    #[test]
+    fn test_g_prefix_gt_next_tab() {
+        let key_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_t, Some('g')),
+            KeyAction::NextTab
+        );
+    }
+
+    #[test]
+    fn test_g_prefix_g_shift_t_prev_tab() {
+        let key_shift_t = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_shift_t, Some('g')),
+            KeyAction::PrevTab
+        );
+    }
+
+    #[test]
+    fn test_g_prefix_unknown_discards() {
+        let key_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_x, Some('g')),
+            KeyAction::None
+        );
+    }
+
+    #[test]
+    fn test_big_g_scroll_to_bottom() {
+        let key_big_g = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_big_g, None),
+            KeyAction::ScrollToBottom
+        );
     }
 }

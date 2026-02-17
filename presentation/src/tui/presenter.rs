@@ -29,7 +29,7 @@ impl TuiPresenter {
             UiEvent::ConfigDisplay(snapshot) => self.handle_config(state, snapshot),
             UiEvent::ModeChanged { level, description } => {
                 state.consensus_level = *level;
-                state.messages.push(DisplayMessage::system(format!(
+                state.push_message(DisplayMessage::system(format!(
                     "Mode changed: {} ({})",
                     level, description
                 )));
@@ -52,8 +52,9 @@ impl TuiPresenter {
                 state.set_flash(format!("Strategy: {}", strategy));
             }
             UiEvent::HistoryCleared => {
-                state.messages.clear();
-                state.streaming_text.clear();
+                let pane = state.tabs.active_pane_mut();
+                pane.messages.clear();
+                pane.streaming_text.clear();
                 self.emit(TuiEvent::HistoryCleared);
                 state.set_flash("History cleared");
             }
@@ -61,38 +62,30 @@ impl TuiPresenter {
                 state.set_flash(format!("Verbose: {}", if *enabled { "ON" } else { "OFF" }));
             }
             UiEvent::AgentStarting { mode } => {
-                state.progress.is_running = true;
+                state.tabs.active_pane_mut().progress.is_running = true;
                 state.consensus_level = *mode;
                 self.emit(TuiEvent::AgentStarting);
             }
             UiEvent::AgentResult(result) => self.handle_agent_result(state, result),
             UiEvent::AgentError(error) => self.handle_agent_error(state, error),
             UiEvent::AskStarting => {
-                state
-                    .messages
-                    .push(DisplayMessage::system("Ask starting..."));
+                state.push_message(DisplayMessage::system("Ask starting..."));
             }
             UiEvent::AskResult(result) => self.handle_ask_result(state, result),
             UiEvent::AskError { error } => {
-                state
-                    .messages
-                    .push(DisplayMessage::system(format!("Ask error: {}", error)));
+                state.push_message(DisplayMessage::system(format!("Ask error: {}", error)));
                 self.emit(TuiEvent::AgentError(error.clone()));
             }
             UiEvent::QuorumStarting => {
-                state
-                    .messages
-                    .push(DisplayMessage::system("Quorum Discussion starting..."));
+                state.push_message(DisplayMessage::system("Quorum Discussion starting..."));
             }
             UiEvent::QuorumResult(result) => self.handle_quorum_result(state, result),
             UiEvent::QuorumError { error } => {
-                state
-                    .messages
-                    .push(DisplayMessage::system(format!("Quorum error: {}", error)));
+                state.push_message(DisplayMessage::system(format!("Quorum error: {}", error)));
                 self.emit(TuiEvent::AgentError(error.clone()));
             }
             UiEvent::ContextInitStarting { model_count } => {
-                state.messages.push(DisplayMessage::system(format!(
+                state.push_message(DisplayMessage::system(format!(
                     "Initializing context with {} models...",
                     model_count
                 )));
@@ -101,7 +94,7 @@ impl TuiPresenter {
                 self.handle_context_init_result(state, result);
             }
             UiEvent::ContextInitError { error } => {
-                state.messages.push(DisplayMessage::system(format!(
+                state.push_message(DisplayMessage::system(format!(
                     "Context init failed: {}",
                     error
                 )));
@@ -126,7 +119,7 @@ impl TuiPresenter {
     fn handle_welcome(&self, state: &mut TuiState, info: &WelcomeInfo) {
         state.model_name = info.decision_model.to_string();
         state.consensus_level = info.consensus_level;
-        state.messages.push(DisplayMessage::system(format!(
+        state.push_message(DisplayMessage::system(format!(
             "Welcome! Model: {}",
             info.decision_model
         )));
@@ -154,28 +147,27 @@ impl TuiPresenter {
             snapshot.hil_mode,
         );
         self.emit(TuiEvent::ConfigDisplay(config_text.clone()));
-        state.messages.push(DisplayMessage::system(config_text));
+        state.push_message(DisplayMessage::system(config_text));
     }
 
     fn handle_agent_result(&self, state: &mut TuiState, result: &AgentResultEvent) {
         state.finalize_stream();
-        state.progress.is_running = false;
-        state.progress.current_phase = None;
-        state.progress.current_tool = None;
+        {
+            let progress = &mut state.tabs.active_pane_mut().progress;
+            progress.is_running = false;
+            progress.current_phase = None;
+            progress.current_tool = None;
+        }
 
         let status = if result.success {
             "completed"
         } else {
             "failed"
         };
-        state
-            .messages
-            .push(DisplayMessage::system(format!("Agent {}", status)));
+        state.push_message(DisplayMessage::system(format!("Agent {}", status)));
 
         if !result.summary.is_empty() {
-            state
-                .messages
-                .push(DisplayMessage::assistant(result.summary.clone()));
+            state.push_message(DisplayMessage::assistant(result.summary.clone()));
         }
 
         self.emit(TuiEvent::AgentResult {
@@ -186,22 +178,23 @@ impl TuiPresenter {
 
     fn handle_agent_error(&self, state: &mut TuiState, error: &AgentErrorEvent) {
         state.finalize_stream();
-        state.progress.is_running = false;
-        state.progress.current_phase = None;
+        {
+            let progress = &mut state.tabs.active_pane_mut().progress;
+            progress.is_running = false;
+            progress.current_phase = None;
+        }
 
         let msg = if error.cancelled {
             "Operation cancelled".to_string()
         } else {
             format!("Error: {}", error.error)
         };
-        state.messages.push(DisplayMessage::system(msg.clone()));
+        state.push_message(DisplayMessage::system(msg.clone()));
         self.emit(TuiEvent::AgentError(msg));
     }
 
     fn handle_ask_result(&self, state: &mut TuiState, result: &AskResultEvent) {
-        state
-            .messages
-            .push(DisplayMessage::assistant(result.answer.clone()));
+        state.push_message(DisplayMessage::assistant(result.answer.clone()));
         self.emit(TuiEvent::AgentResult {
             success: true,
             summary: "Ask completed".into(),
@@ -209,9 +202,7 @@ impl TuiPresenter {
     }
 
     fn handle_quorum_result(&self, state: &mut TuiState, result: &QuorumResultEvent) {
-        state
-            .messages
-            .push(DisplayMessage::assistant(result.formatted_output.clone()));
+        state.push_message(DisplayMessage::assistant(result.formatted_output.clone()));
         self.emit(TuiEvent::AgentResult {
             success: true,
             summary: "Quorum discussion complete".into(),
@@ -219,7 +210,7 @@ impl TuiPresenter {
     }
 
     fn handle_context_init_result(&self, state: &mut TuiState, result: &ContextInitResultEvent) {
-        state.messages.push(DisplayMessage::system(format!(
+        state.push_message(DisplayMessage::system(format!(
             "Context saved to: {}",
             result.path
         )));
@@ -257,7 +248,7 @@ mod tests {
         presenter.apply(&mut state, &UiEvent::Welcome(info));
         assert_eq!(state.consensus_level, ConsensusLevel::Solo);
         assert!(!state.model_name.is_empty());
-        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.tabs.active_pane().messages.len(), 1);
     }
 
     #[test]
@@ -272,19 +263,27 @@ mod tests {
         );
         assert_eq!(state.consensus_level, ConsensusLevel::Ensemble);
         assert!(state.flash_message.is_some());
-        assert_eq!(state.messages.len(), 1);
-        assert!(state.messages[0].content.contains("ensemble"));
+        assert_eq!(state.tabs.active_pane().messages.len(), 1);
+        assert!(
+            state.tabs.active_pane().messages[0]
+                .content
+                .contains("ensemble")
+        );
     }
 
     #[test]
     fn test_history_cleared() {
         let (presenter, _rx, mut state) = setup();
-        state.messages.push(DisplayMessage::user("test"));
-        state.streaming_text = "streaming".into();
+        state
+            .tabs
+            .active_pane_mut()
+            .messages
+            .push(DisplayMessage::user("test"));
+        state.tabs.active_pane_mut().streaming_text = "streaming".into();
 
         presenter.apply(&mut state, &UiEvent::HistoryCleared);
-        assert!(state.messages.is_empty());
-        assert!(state.streaming_text.is_empty());
+        assert!(state.tabs.active_pane().messages.is_empty());
+        assert!(state.tabs.active_pane().streaming_text.is_empty());
     }
 
     #[test]
@@ -297,8 +296,8 @@ mod tests {
     #[test]
     fn test_agent_error_finalizes_stream() {
         let (presenter, _rx, mut state) = setup();
-        state.streaming_text = "partial".into();
-        state.progress.is_running = true;
+        state.tabs.active_pane_mut().streaming_text = "partial".into();
+        state.tabs.active_pane_mut().progress.is_running = true;
 
         presenter.apply(
             &mut state,
@@ -308,8 +307,8 @@ mod tests {
             }),
         );
 
-        assert!(!state.progress.is_running);
+        assert!(!state.tabs.active_pane().progress.is_running);
         // streaming text finalized + error message
-        assert!(state.messages.len() >= 2);
+        assert!(state.tabs.active_pane().messages.len() >= 2);
     }
 }

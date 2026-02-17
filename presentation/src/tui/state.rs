@@ -4,6 +4,7 @@
 //! Updated by TuiPresenter (UiEvent → state) and TuiProgressBridge (progress → state).
 
 use super::mode::InputMode;
+use super::tab::TabManager;
 use quorum_domain::{AgentPhase, ConsensusLevel, PhaseScope};
 
 /// Central TUI state — owned by the TuiApp select! loop
@@ -11,22 +12,15 @@ pub struct TuiState {
     // -- Mode --
     pub mode: InputMode,
 
-    // -- Input buffer --
-    pub input: String,
-    pub cursor_pos: usize,
-
-    // -- Command buffer (for : mode) --
+    // -- Command buffer (for : mode) — global, not per-tab --
     pub command_input: String,
     pub command_cursor: usize,
 
-    // -- Conversation --
-    pub messages: Vec<DisplayMessage>,
-    pub streaming_text: String,
-    pub scroll_offset: usize,
-    pub auto_scroll: bool,
+    // -- Tabs (own per-pane input, messages, streaming, scroll, progress) --
+    pub tabs: TabManager,
 
-    // -- Progress --
-    pub progress: ProgressState,
+    // -- Pending key (for g prefix in Normal mode) --
+    pub pending_key: Option<char>,
 
     // -- Config display --
     pub consensus_level: ConsensusLevel,
@@ -51,15 +45,10 @@ impl Default for TuiState {
     fn default() -> Self {
         Self {
             mode: InputMode::default(),
-            input: String::new(),
-            cursor_pos: 0,
             command_input: String::new(),
             command_cursor: 0,
-            messages: Vec::new(),
-            streaming_text: String::new(),
-            scroll_offset: 0,
-            auto_scroll: true,
-            progress: ProgressState::default(),
+            tabs: TabManager::new(),
+            pending_key: None,
             consensus_level: ConsensusLevel::Solo,
             phase_scope: PhaseScope::Full,
             model_name: String::new(),
@@ -114,8 +103,9 @@ impl TuiState {
 
     pub fn cursor_right(&mut self) {
         let cursor = self.active_cursor();
-        let input = self.active_input();
-        if cursor < input.len() {
+        let len = self.active_input().len();
+        if cursor < len {
+            let input = self.active_input();
             let next_char_len = input[cursor..]
                 .chars()
                 .next()
@@ -145,15 +135,16 @@ impl TuiState {
     pub fn input_line_count(&self) -> usize {
         let input = match self.mode {
             InputMode::Command => &self.command_input,
-            _ => &self.input,
+            _ => &self.tabs.active_pane().input,
         };
         input.lines().count().max(1) + if input.ends_with('\n') { 1 } else { 0 }
     }
 
     /// Take the current input buffer contents and clear it
     pub fn take_input(&mut self) -> String {
-        self.cursor_pos = 0;
-        std::mem::take(&mut self.input)
+        let pane = self.tabs.active_pane_mut();
+        pane.cursor_pos = 0;
+        std::mem::take(&mut pane.input)
     }
 
     /// Take the command buffer contents and clear it
@@ -167,71 +158,82 @@ impl TuiState {
     fn active_input(&self) -> &str {
         match self.mode {
             InputMode::Command => &self.command_input,
-            _ => &self.input,
+            _ => &self.tabs.active_pane().input,
         }
     }
 
     fn active_input_mut(&mut self) -> &mut String {
         match self.mode {
             InputMode::Command => &mut self.command_input,
-            _ => &mut self.input,
+            _ => &mut self.tabs.active_pane_mut().input,
         }
     }
 
     fn active_cursor(&self) -> usize {
         match self.mode {
             InputMode::Command => self.command_cursor,
-            _ => self.cursor_pos,
+            _ => self.tabs.active_pane().cursor_pos,
         }
     }
 
     fn active_cursor_mut(&mut self) -> &mut usize {
         match self.mode {
             InputMode::Command => &mut self.command_cursor,
-            _ => &mut self.cursor_pos,
+            _ => &mut self.tabs.active_pane_mut().cursor_pos,
         }
     }
 
     // -- Messages --
 
     pub fn push_message(&mut self, msg: DisplayMessage) {
-        self.messages.push(msg);
-        if self.auto_scroll {
-            self.scroll_to_bottom();
+        let pane = self.tabs.active_pane_mut();
+        pane.messages.push(msg);
+        if pane.auto_scroll {
+            pane.scroll_offset = 0;
+            // auto_scroll stays true
         }
     }
 
     /// Finalize streaming text into a message
     pub fn finalize_stream(&mut self) {
-        if !self.streaming_text.is_empty() {
-            let text = std::mem::take(&mut self.streaming_text);
-            self.push_message(DisplayMessage::assistant(text));
+        let pane = self.tabs.active_pane_mut();
+        if !pane.streaming_text.is_empty() {
+            let text = std::mem::take(&mut pane.streaming_text);
+            let msg = DisplayMessage::assistant(text);
+            pane.messages.push(msg);
+            if pane.auto_scroll {
+                pane.scroll_offset = 0;
+            }
         }
     }
 
     // -- Scrolling --
 
     pub fn scroll_up(&mut self) {
-        self.auto_scroll = false;
-        self.scroll_offset = self.scroll_offset.saturating_add(1);
+        let pane = self.tabs.active_pane_mut();
+        pane.auto_scroll = false;
+        pane.scroll_offset = pane.scroll_offset.saturating_add(1);
     }
 
     pub fn scroll_down(&mut self) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        let pane = self.tabs.active_pane_mut();
+        if pane.scroll_offset > 0 {
+            pane.scroll_offset = pane.scroll_offset.saturating_sub(1);
         } else {
-            self.auto_scroll = true;
+            pane.auto_scroll = true;
         }
     }
 
     pub fn scroll_to_top(&mut self) {
-        self.auto_scroll = false;
-        self.scroll_offset = usize::MAX; // Will be clamped during render
+        let pane = self.tabs.active_pane_mut();
+        pane.auto_scroll = false;
+        pane.scroll_offset = usize::MAX; // Will be clamped during render
     }
 
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = 0;
-        self.auto_scroll = true;
+        let pane = self.tabs.active_pane_mut();
+        pane.scroll_offset = 0;
+        pane.auto_scroll = true;
     }
 
     // -- Flash messages --
@@ -428,12 +430,12 @@ mod tests {
 
         state.insert_char('h');
         state.insert_char('i');
-        assert_eq!(state.input, "hi");
-        assert_eq!(state.cursor_pos, 2);
+        assert_eq!(state.tabs.active_pane().input, "hi");
+        assert_eq!(state.tabs.active_pane().cursor_pos, 2);
 
         state.delete_char();
-        assert_eq!(state.input, "h");
-        assert_eq!(state.cursor_pos, 1);
+        assert_eq!(state.tabs.active_pane().input, "h");
+        assert_eq!(state.tabs.active_pane().cursor_pos, 1);
     }
 
     #[test]
@@ -443,51 +445,54 @@ mod tests {
         // Type in insert mode
         state.mode = InputMode::Insert;
         state.insert_char('a');
-        assert_eq!(state.input, "a");
+        assert_eq!(state.tabs.active_pane().input, "a");
 
         // Switch to command mode - separate buffer
         state.mode = InputMode::Command;
         state.insert_char('q');
         assert_eq!(state.command_input, "q");
-        assert_eq!(state.input, "a"); // Unchanged
+        assert_eq!(state.tabs.active_pane().input, "a"); // Unchanged
     }
 
     #[test]
     fn test_take_input_clears() {
         let mut state = TuiState::new();
-        state.input = "hello".into();
-        state.cursor_pos = 5;
+        state.tabs.active_pane_mut().input = "hello".into();
+        state.tabs.active_pane_mut().cursor_pos = 5;
 
         let taken = state.take_input();
         assert_eq!(taken, "hello");
-        assert!(state.input.is_empty());
-        assert_eq!(state.cursor_pos, 0);
+        assert!(state.tabs.active_pane().input.is_empty());
+        assert_eq!(state.tabs.active_pane().cursor_pos, 0);
     }
 
     #[test]
     fn test_scroll_behavior() {
         let mut state = TuiState::new();
-        assert!(state.auto_scroll);
+        assert!(state.tabs.active_pane().auto_scroll);
 
         state.scroll_up();
-        assert!(!state.auto_scroll);
-        assert_eq!(state.scroll_offset, 1);
+        assert!(!state.tabs.active_pane().auto_scroll);
+        assert_eq!(state.tabs.active_pane().scroll_offset, 1);
 
         state.scroll_to_bottom();
-        assert!(state.auto_scroll);
-        assert_eq!(state.scroll_offset, 0);
+        assert!(state.tabs.active_pane().auto_scroll);
+        assert_eq!(state.tabs.active_pane().scroll_offset, 0);
     }
 
     #[test]
     fn test_finalize_stream() {
         let mut state = TuiState::new();
-        state.streaming_text = "Hello world".into();
+        state.tabs.active_pane_mut().streaming_text = "Hello world".into();
 
         state.finalize_stream();
-        assert!(state.streaming_text.is_empty());
-        assert_eq!(state.messages.len(), 1);
-        assert_eq!(state.messages[0].content, "Hello world");
-        assert_eq!(state.messages[0].role, MessageRole::Assistant);
+        assert!(state.tabs.active_pane().streaming_text.is_empty());
+        assert_eq!(state.tabs.active_pane().messages.len(), 1);
+        assert_eq!(state.tabs.active_pane().messages[0].content, "Hello world");
+        assert_eq!(
+            state.tabs.active_pane().messages[0].role,
+            MessageRole::Assistant
+        );
     }
 
     #[test]
@@ -522,19 +527,19 @@ mod tests {
         state.insert_char('b');
         state.insert_newline();
         state.insert_char('c');
-        assert_eq!(state.input, "ab\nc");
-        assert_eq!(state.cursor_pos, 4);
+        assert_eq!(state.tabs.active_pane().input, "ab\nc");
+        assert_eq!(state.tabs.active_pane().cursor_pos, 4);
     }
 
     #[test]
     fn test_insert_newline_mid_text() {
         let mut state = TuiState::new();
         state.mode = InputMode::Insert;
-        state.input = "hello world".into();
-        state.cursor_pos = 5;
+        state.tabs.active_pane_mut().input = "hello world".into();
+        state.tabs.active_pane_mut().cursor_pos = 5;
         state.insert_newline();
-        assert_eq!(state.input, "hello\n world");
-        assert_eq!(state.cursor_pos, 6);
+        assert_eq!(state.tabs.active_pane().input, "hello\n world");
+        assert_eq!(state.tabs.active_pane().cursor_pos, 6);
     }
 
     #[test]
@@ -545,17 +550,17 @@ mod tests {
         // Empty input → 1 line
         assert_eq!(state.input_line_count(), 1);
 
-        state.input = "hello".into();
+        state.tabs.active_pane_mut().input = "hello".into();
         assert_eq!(state.input_line_count(), 1);
 
-        state.input = "hello\nworld".into();
+        state.tabs.active_pane_mut().input = "hello\nworld".into();
         assert_eq!(state.input_line_count(), 2);
 
-        state.input = "a\nb\nc".into();
+        state.tabs.active_pane_mut().input = "a\nb\nc".into();
         assert_eq!(state.input_line_count(), 3);
 
         // Trailing newline = extra empty line
-        state.input = "hello\n".into();
+        state.tabs.active_pane_mut().input = "hello\n".into();
         assert_eq!(state.input_line_count(), 2);
     }
 
@@ -563,32 +568,32 @@ mod tests {
     fn test_delete_char_across_newline() {
         let mut state = TuiState::new();
         state.mode = InputMode::Insert;
-        state.input = "ab\nc".into();
-        state.cursor_pos = 3; // at '\n' + 1 = 'c' position... wait, let's be precise
+        state.tabs.active_pane_mut().input = "ab\nc".into();
+        state.tabs.active_pane_mut().cursor_pos = 3; // at '\n' + 1 = before 'c'
         // "ab\nc" → bytes: a(0) b(1) \n(2) c(3)
         // cursor_pos = 3 means cursor is before 'c'
         state.delete_char(); // should delete '\n'
-        assert_eq!(state.input, "abc");
-        assert_eq!(state.cursor_pos, 2);
+        assert_eq!(state.tabs.active_pane().input, "abc");
+        assert_eq!(state.tabs.active_pane().cursor_pos, 2);
     }
 
     #[test]
     fn test_cursor_movement() {
         let mut state = TuiState::new();
         state.mode = InputMode::Insert;
-        state.input = "abc".into();
-        state.cursor_pos = 3;
+        state.tabs.active_pane_mut().input = "abc".into();
+        state.tabs.active_pane_mut().cursor_pos = 3;
 
         state.cursor_left();
-        assert_eq!(state.cursor_pos, 2);
+        assert_eq!(state.tabs.active_pane().cursor_pos, 2);
 
         state.cursor_home();
-        assert_eq!(state.cursor_pos, 0);
+        assert_eq!(state.tabs.active_pane().cursor_pos, 0);
 
         state.cursor_end();
-        assert_eq!(state.cursor_pos, 3);
+        assert_eq!(state.tabs.active_pane().cursor_pos, 3);
 
         state.cursor_right(); // Already at end
-        assert_eq!(state.cursor_pos, 3);
+        assert_eq!(state.tabs.active_pane().cursor_pos, 3);
     }
 }
