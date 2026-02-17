@@ -6,9 +6,9 @@
 
 use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
+use crate::ports::agent_progress::NoAgentProgress;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
-use crate::ports::agent_progress::NoAgentProgress;
 use crate::ports::progress::NoProgress;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
@@ -461,9 +461,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     summary: answer.clone(),
                 });
 
-                let _ = self
-                    .tx
-                    .send(UiEvent::AskResult(AskResultEvent { answer }));
+                let _ = self.tx.send(UiEvent::AskResult(AskResultEvent { answer }));
             }
             Ok(_) => {
                 let _ = self.tx.send(UiEvent::AskError {

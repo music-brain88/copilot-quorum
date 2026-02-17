@@ -58,11 +58,7 @@ impl ReplPresenter {
             UiEvent::AgentError(error) => self.render_agent_error(error),
             UiEvent::AskStarting => {
                 println!();
-                println!(
-                    "{} {}",
-                    "━".repeat(50).dimmed(),
-                    "Ask".bold().cyan()
-                );
+                println!("{} {}", "━".repeat(50).dimmed(), "Ask".bold().cyan());
                 println!();
             }
             UiEvent::AskResult(result) => {
@@ -180,10 +176,7 @@ impl ReplPresenter {
             "/ens".cyan()
         );
         println!("  {}     - Ask (lightweight Q&A)", "/ask".cyan());
-        println!(
-            "  {} - Discuss (quorum discussion)",
-            "/discuss".cyan()
-        );
+        println!("  {} - Discuss (quorum discussion)", "/discuss".cyan());
         println!("  {}    - Toggle fast mode (skip reviews)", "/fast".cyan());
         println!(
             "  {}   - Change phase scope (full, fast, plan)",
