@@ -10,7 +10,7 @@ use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, FileConfig, GitHubReferenceResolver, JsonSchemaToolConverter,
-    LocalContextLoader, LocalToolExecutor,
+    JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
 };
 use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
@@ -53,17 +53,28 @@ fn resolve_log_dir(override_path: Option<&Path>) -> PathBuf {
     PathBuf::from(".copilot-quorum").join("logs")
 }
 
-/// Generate a timestamped log filename for this session.
-fn generate_log_filename() -> String {
+/// Generate a timestamped session prefix for log files.
+///
+/// Returns a prefix like `session-2026-02-17T14-30-00-12345` that is shared
+/// between the operation log (`.log`) and conversation transcript (`.conversation.jsonl`).
+fn generate_session_prefix() -> String {
     let now = chrono::Local::now();
     let pid = std::process::id();
-    format!("session-{}-{}.log", now.format("%Y-%m-%dT%H-%M-%S"), pid)
+    format!("session-{}-{}", now.format("%Y-%m-%dT%H-%M-%S"), pid)
+}
+
+/// Logging initialization result.
+struct LoggingOutput {
+    /// Guard that must be held to ensure file log flushing.
+    _guard: Option<WorkerGuard>,
+    /// Path to the conversation JSONL log (if file logging is enabled).
+    conversation_log_path: Option<PathBuf>,
 }
 
 /// Initialize multi-layer logging (console + optional file).
 ///
-/// Returns an `Option<WorkerGuard>` that must be held until program exit
-/// to ensure all buffered log entries are flushed to disk.
+/// Returns a [`LoggingOutput`] containing the worker guard and the path
+/// to the conversation JSONL log file.
 ///
 /// When `tui_mode` is true, the console (stderr) layer is disabled to avoid
 /// corrupting ratatui's alternate screen. Logs are still written to the file layer.
@@ -72,7 +83,7 @@ fn init_logging(
     log_dir_override: Option<&Path>,
     no_log_file: bool,
     tui_mode: bool,
-) -> Option<WorkerGuard> {
+) -> LoggingOutput {
     // Console layer: stderr — disabled in TUI mode to prevent alternate screen corruption.
     // `Option<Layer>` with `None` acts as a no-op layer in tracing_subscriber.
     let console_layer = if tui_mode {
@@ -95,7 +106,10 @@ fn init_logging(
 
     if no_log_file {
         tracing_subscriber::registry().with(console_layer).init();
-        return None;
+        return LoggingOutput {
+            _guard: None,
+            conversation_log_path: None,
+        };
     }
 
     // File layer: debug by default, trace at -vvv
@@ -108,10 +122,16 @@ fn init_logging(
             e
         );
         tracing_subscriber::registry().with(console_layer).init();
-        return None;
+        return LoggingOutput {
+            _guard: None,
+            conversation_log_path: None,
+        };
     }
 
-    let log_filename = generate_log_filename();
+    let session_prefix = generate_session_prefix();
+    let log_filename = format!("{}.log", session_prefix);
+    let conversation_filename = format!("{}.conversation.jsonl", session_prefix);
+
     let file_appender = tracing_appender::rolling::never(&log_dir, &log_filename);
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
@@ -133,7 +153,15 @@ fn init_logging(
         .init();
 
     info!("Log file: {}", log_dir.join(&log_filename).display());
-    Some(guard)
+    info!(
+        "Conversation log: {}",
+        log_dir.join(&conversation_filename).display()
+    );
+
+    LoggingOutput {
+        _guard: Some(guard),
+        conversation_log_path: Some(log_dir.join(conversation_filename)),
+    }
 }
 
 /// Convert FileConfig + CLI args to layer-specific configs
@@ -185,9 +213,20 @@ async fn main() -> Result<()> {
     // Determine TUI mode before initializing logging so we can suppress console output
     let is_tui = cli.question.is_none();
 
-    // Initialize logging (console + file)
+    // Initialize logging (console + file + conversation JSONL)
     // In TUI mode, console layer is disabled to avoid corrupting the alternate screen
-    let _log_guard = init_logging(cli.verbose, cli.log_dir.as_deref(), cli.no_log_file, is_tui);
+    let logging = init_logging(cli.verbose, cli.log_dir.as_deref(), cli.no_log_file, is_tui);
+
+    // Create conversation logger (JSONL file alongside the operation log)
+    let conversation_logger: Arc<dyn quorum_application::ConversationLogger> =
+        if let Some(ref path) = logging.conversation_log_path {
+            match JsonlConversationLogger::new(path) {
+                Some(logger) => Arc::new(logger),
+                None => Arc::new(quorum_application::NoConversationLogger),
+            }
+        } else {
+            Arc::new(quorum_application::NoConversationLogger)
+        };
 
     info!("Starting Copilot Quorum");
 
@@ -325,12 +364,13 @@ async fn main() -> Result<()> {
         // Create reference resolver (graceful: None if gh CLI not available)
         let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
-        let mut tui_app = TuiApp::new(
+        let mut tui_app = TuiApp::new_with_logger(
             gateway.clone(),
             tool_executor.clone(),
             tool_schema.clone(),
             context_loader.clone(),
             quorum_config,
+            conversation_logger.clone(),
         )
         .with_tui_config(tui_input_config);
         if let Some(resolver) = reference_resolver {
@@ -389,7 +429,8 @@ async fn main() -> Result<()> {
     let mut use_case =
         RunAgentUseCase::with_context_loader(gateway, tool_executor, tool_schema, context_loader)
             .with_cancellation(cancellation_token.clone())
-            .with_human_intervention(human_intervention);
+            .with_human_intervention(human_intervention)
+            .with_conversation_logger(conversation_logger);
     if let Some(resolver) = reference_resolver {
         use_case = use_case.with_reference_resolver(Arc::new(resolver));
     }

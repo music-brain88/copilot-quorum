@@ -8,6 +8,9 @@
 
 use crate::config::ExecutionParams;
 use crate::ports::agent_progress::AgentProgressNotifier;
+use crate::ports::conversation_logger::{
+    ConversationEvent, ConversationLogger, NoConversationLogger,
+};
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
@@ -63,6 +66,7 @@ pub struct RunAskUseCase<G: LlmGateway, T: ToolExecutorPort> {
     gateway: Arc<G>,
     tool_executor: Arc<T>,
     tool_schema: Arc<dyn ToolSchemaPort>,
+    conversation_logger: Arc<dyn ConversationLogger>,
 }
 
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T> {
@@ -75,7 +79,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
             gateway,
             tool_executor,
             tool_schema,
+            conversation_logger: Arc::new(NoConversationLogger),
         }
+    }
+
+    /// Create with a conversation logger.
+    pub fn with_conversation_logger(mut self, logger: Arc<dyn ConversationLogger>) -> Self {
+        self.conversation_logger = logger;
+        self
     }
 
     /// Execute the Ask interaction with progress callbacks.
@@ -209,6 +220,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
         }
 
         info!("Ask completed in {} tool turns", turn_count);
+
+        self.conversation_logger.log(ConversationEvent::new(
+            "ask_response",
+            serde_json::json!({
+                "model": input.models.exploration.to_string(),
+                "bytes": answer.len(),
+                "text": answer,
+            }),
+        ));
 
         Ok(InteractionResult::AskResult { answer })
     }

@@ -5,6 +5,7 @@
 pub mod action_reviewer;
 pub mod agent_progress;
 pub mod context_loader;
+pub mod conversation_logger;
 pub mod human_intervention;
 pub mod llm_gateway;
 pub mod progress;

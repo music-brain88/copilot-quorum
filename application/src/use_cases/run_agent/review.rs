@@ -8,6 +8,7 @@ use super::types::{QuorumReviewResult, RunAgentError, RunAgentInput};
 use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
+use crate::ports::conversation_logger::ConversationEvent;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway};
 use crate::ports::tool_executor::ToolExecutorPort;
 use async_trait::async_trait;
@@ -284,6 +285,22 @@ where
         }
 
         let result = QuorumReviewResult::from_votes(votes);
+
+        self.conversation_logger.log(ConversationEvent::new(
+            "quorum_result",
+            serde_json::json!({
+                "topic": "plan_review",
+                "approved": result.approved,
+                "votes": result.votes.iter().map(|(model, approved, feedback)| {
+                    serde_json::json!({
+                        "model": model,
+                        "approved": approved,
+                        "feedback": feedback,
+                    })
+                }).collect::<Vec<_>>(),
+            }),
+        ));
+
         // Note: UI notification is handled by the caller (execute_with_progress)
         // to maintain separation between business logic and presentation
 
