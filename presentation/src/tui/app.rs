@@ -20,9 +20,10 @@ use super::state::{
     DisplayMessage, EnsembleProgress, HilPrompt, QuorumStatus, TaskProgress, TaskSummary,
     ToolExecutionDisplay, ToolExecutionDisplayStatus, ToolLogEntry, TuiInputConfig, TuiState,
 };
+use super::tab::PaneKind;
 use super::widgets::{
     MainLayout, conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
-    progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget,
+    progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget, tab_bar::TabBarWidget,
 };
 
 /// Side-effect that requires main loop intervention (e.g. terminal suspend)
@@ -286,7 +287,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         state: &mut TuiState,
         keyboard_enhanced: bool,
     ) -> io::Result<()> {
-        let initial_text = state.input.clone();
+        let initial_text = state.tabs.active_pane().input.clone();
 
         let context = EditorContext {
             consensus_level: format!("{}", state.consensus_level),
@@ -331,8 +332,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Apply result
         match result {
             EditorResult::Saved(text) => {
-                state.input = text;
-                state.cursor_pos = state.input.len();
+                let pane = state.tabs.active_pane_mut();
+                pane.input = text;
+                pane.cursor_pos = pane.input.len();
                 state.mode = InputMode::Insert;
                 state.set_flash("Editor: content loaded into input buffer");
             }
@@ -346,13 +348,18 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Render all widgets
     fn render(&self, frame: &mut ratatui::Frame, state: &TuiState) {
+        let show_tab_bar = state.tabs.len() > 1;
         let layout = MainLayout::compute_with_input_config(
             frame.area(),
             state.input_line_count() as u16,
             state.tui_config.max_input_height,
+            show_tab_bar,
         );
 
         frame.render_widget(HeaderWidget::new(state), layout.header);
+        if let Some(tab_bar_area) = layout.tab_bar {
+            frame.render_widget(TabBarWidget::new(&state.tabs), tab_bar_area);
+        }
         frame.render_widget(ConversationWidget::new(state), layout.conversation);
         frame.render_widget(ProgressPanelWidget::new(state), layout.progress);
         frame.render_widget(InputWidget::new(state), layout.input);
@@ -395,7 +402,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("  a      Ask (prefill :ask )"),
             Line::from("  d      Discuss (prefill :discuss )"),
             Line::from("  j/k    Scroll down/up"),
-            Line::from("  g/G    Scroll to top/bottom"),
+            Line::from("  gg/G   Scroll to top/bottom"),
+            Line::from("  gt/gT  Next/prev tab"),
             Line::from("  ?      Toggle this help"),
             Line::from("  Ctrl+C Quit"),
             Line::from(""),
@@ -416,6 +424,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             Line::from("  :discuss <question> Discuss (quorum discussion)"),
             Line::from("  :config  Show configuration"),
             Line::from("  :clear   Clear history"),
+            Line::from("  :tabnew [form]  New tab (agent/ask/discuss)"),
+            Line::from("  :tabclose       Close tab"),
+            Line::from("  :tabs           List tabs"),
             Line::from(""),
             Line::from(Span::styled(
                 "Press ? or Esc to close",
@@ -506,7 +517,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     }
                 }
 
-                let action = mode::handle_key_event(state.mode, key);
+                let action = mode::handle_key_event(state.mode, key, state.pending_key);
+                if let KeyAction::PendingKey(c) = action {
+                    state.pending_key = Some(c);
+                    return None;
+                }
+                state.pending_key = None;
                 self.handle_action(state, action)
             }
             crossterm::event::Event::Resize(_, _) => None,
@@ -542,6 +558,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             KeyAction::SubmitInput => {
                 let input = state.take_input();
                 if !input.is_empty() {
+                    state.tabs.active_pane_mut().set_title_if_empty(&input);
                     state.push_message(DisplayMessage::user(&input));
                     let _ = self.cmd_tx.send(TuiCommand::ProcessRequest(input));
                 }
@@ -552,7 +569,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 if !cmd.is_empty() {
                     if cmd == "q" || cmd == "quit" || cmd == "exit" {
                         state.should_quit = true;
+                    } else if let Some(flash) = self.handle_tab_command(state, &cmd) {
+                        state.set_flash(flash);
                     } else {
+                        Self::set_title_from_command(state, &cmd);
                         let _ = self.cmd_tx.send(TuiCommand::HandleCommand(cmd));
                     }
                 }
@@ -587,6 +607,27 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             KeyAction::ScrollToTop => state.scroll_to_top(),
             KeyAction::ScrollToBottom => state.scroll_to_bottom(),
 
+            // Tabs
+            KeyAction::NextTab => {
+                state.tabs.next_tab();
+                state.set_flash(format!(
+                    "Tab {}/{}",
+                    state.tabs.active_index() + 1,
+                    state.tabs.len()
+                ));
+            }
+            KeyAction::PrevTab => {
+                state.tabs.prev_tab();
+                state.set_flash(format!(
+                    "Tab {}/{}",
+                    state.tabs.active_index() + 1,
+                    state.tabs.len()
+                ));
+            }
+
+            // PendingKey is handled in handle_terminal_event before reaching here
+            KeyAction::PendingKey(_) => {}
+
             // Editor — requires terminal suspend, handled by main loop
             KeyAction::LaunchEditor => {
                 return Some(SideEffect::LaunchEditor);
@@ -609,18 +650,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     fn apply_tui_event(&self, state: &mut TuiState, event: TuiEvent) {
         match event {
             TuiEvent::StreamChunk(chunk) => {
-                state.streaming_text.push_str(&chunk);
-                if state.auto_scroll {
-                    state.scroll_to_bottom();
+                let pane = state.tabs.active_pane_mut();
+                pane.streaming_text.push_str(&chunk);
+                if pane.auto_scroll {
+                    pane.scroll_offset = 0;
                 }
             }
             TuiEvent::StreamEnd => {
                 state.finalize_stream();
             }
             TuiEvent::PhaseChange { phase, name } => {
-                state.progress.current_phase = Some(phase);
-                state.progress.phase_name = name;
-                state.progress.current_tool = None;
+                let progress = &mut state.tabs.active_pane_mut().progress;
+                progress.current_phase = Some(phase);
+                progress.phase_name = name;
+                progress.current_tool = None;
             }
             TuiEvent::TaskStart {
                 description,
@@ -628,12 +671,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 total,
             } => {
                 // Update progress pane
-                state.progress.task_progress = Some(TaskProgress {
+                let progress = &mut state.tabs.active_pane_mut().progress;
+                progress.task_progress = Some(TaskProgress {
                     current_index: index,
                     total,
                     description: description.clone(),
-                    completed_tasks: state
-                        .progress
+                    completed_tasks: progress
                         .task_progress
                         .as_ref()
                         .map(|tp| tp.completed_tasks.clone())
@@ -654,13 +697,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 output,
             } => {
                 // Update progress pane — move active tool executions into the completed summary
+                let progress = &mut state.tabs.active_pane_mut().progress;
                 let (active_execs, active_duration) =
-                    if let Some(ref mut tp) = state.progress.task_progress {
+                    if let Some(ref mut tp) = progress.task_progress {
                         (std::mem::take(&mut tp.active_tool_executions), None)
                     } else {
                         (Vec::new(), None)
                     };
-                if let Some(ref mut tp) = state.progress.task_progress {
+                if let Some(ref mut tp) = progress.task_progress {
                     tp.completed_tasks.push(TaskSummary {
                         index,
                         description: description.clone(),
@@ -671,42 +715,43 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     });
                 }
                 // Build tool execution summary lines for conversation message
-                let tool_exec_lines: String = if let Some(ref tp) = state.progress.task_progress {
-                    tp.completed_tasks
-                        .last()
-                        .map(|summary| {
-                            summary
-                                .tool_executions
-                                .iter()
-                                .map(|exec| {
-                                    let (icon, dur) = match &exec.state {
-                                        ToolExecutionDisplayStatus::Completed { .. } => {
-                                            let d = exec
-                                                .duration_ms
-                                                .map(|ms| {
-                                                    if ms < 1000 {
-                                                        format!("{}ms", ms)
-                                                    } else {
-                                                        format!("{:.1}s", ms as f64 / 1000.0)
-                                                    }
-                                                })
-                                                .unwrap_or_default();
-                                            ("✓", d)
-                                        }
-                                        ToolExecutionDisplayStatus::Error { message } => {
-                                            ("✗", truncate(message, 40))
-                                        }
-                                        _ => ("…", String::new()),
-                                    };
-                                    format!("  {} {} ({})", icon, exec.tool_name, dur)
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
+                let tool_exec_lines: String =
+                    if let Some(ref tp) = state.tabs.active_pane().progress.task_progress {
+                        tp.completed_tasks
+                            .last()
+                            .map(|summary| {
+                                summary
+                                    .tool_executions
+                                    .iter()
+                                    .map(|exec| {
+                                        let (icon, dur) = match &exec.state {
+                                            ToolExecutionDisplayStatus::Completed { .. } => {
+                                                let d = exec
+                                                    .duration_ms
+                                                    .map(|ms| {
+                                                        if ms < 1000 {
+                                                            format!("{}ms", ms)
+                                                        } else {
+                                                            format!("{:.1}s", ms as f64 / 1000.0)
+                                                        }
+                                                    })
+                                                    .unwrap_or_default();
+                                                ("✓", d)
+                                            }
+                                            ToolExecutionDisplayStatus::Error { message } => {
+                                                ("✗", truncate(message, 40))
+                                            }
+                                            _ => ("…", String::new()),
+                                        };
+                                        format!("  {} {} ({})", icon, exec.tool_name, dur)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
 
                 // Add conversation message with extracted output
                 let status = if success { "✓" } else { "✗" };
@@ -730,17 +775,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 state.push_message(DisplayMessage::system(msg));
             }
             TuiEvent::ToolCall { tool_name, args: _ } => {
-                state.progress.current_tool = Some(tool_name.clone());
-                state.progress.tool_log.push(ToolLogEntry {
+                let progress = &mut state.tabs.active_pane_mut().progress;
+                progress.current_tool = Some(tool_name.clone());
+                progress.tool_log.push(ToolLogEntry {
                     tool_name,
                     success: None,
                 });
             }
             TuiEvent::ToolResult { tool_name, success } => {
-                state.progress.current_tool = None;
-                // Update the last matching tool log entry
-                if let Some(entry) = state
-                    .progress
+                let progress = &mut state.tabs.active_pane_mut().progress;
+                progress.current_tool = None;
+                if let Some(entry) = progress
                     .tool_log
                     .iter_mut()
                     .rev()
@@ -750,9 +795,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             }
             TuiEvent::ToolError { tool_name, message } => {
-                state.progress.current_tool = None;
-                if let Some(entry) = state
-                    .progress
+                let progress = &mut state.tabs.active_pane_mut().progress;
+                progress.current_tool = None;
+                if let Some(entry) = progress
                     .tool_log
                     .iter_mut()
                     .rev()
@@ -763,7 +808,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 state.set_flash(format!("Tool error: {} - {}", tool_name, message));
             }
             TuiEvent::QuorumStart { phase, model_count } => {
-                state.progress.quorum_status = Some(QuorumStatus {
+                state.tabs.active_pane_mut().progress.quorum_status = Some(QuorumStatus {
                     phase,
                     total: model_count,
                     completed: 0,
@@ -771,7 +816,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 });
             }
             TuiEvent::QuorumModelVote { model: _, approved } => {
-                if let Some(ref mut qs) = state.progress.quorum_status {
+                if let Some(ref mut qs) = state.tabs.active_pane_mut().progress.quorum_status {
                     qs.completed += 1;
                     if approved {
                         qs.approved += 1;
@@ -785,16 +830,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             } => {
                 let status = if approved { "APPROVED" } else { "REJECTED" };
                 state.set_flash(format!("{}: {}", phase, status));
-                state.progress.quorum_status = None;
+                state.tabs.active_pane_mut().progress.quorum_status = None;
             }
             TuiEvent::PlanRevision { revision, feedback } => {
-                state.messages.push(DisplayMessage::system(format!(
+                state.push_message(DisplayMessage::system(format!(
                     "Plan revision #{}: {}",
                     revision, feedback
                 )));
             }
             TuiEvent::EnsembleStart(count) => {
-                state.progress.ensemble_progress = Some(EnsembleProgress {
+                state.tabs.active_pane_mut().progress.ensemble_progress = Some(EnsembleProgress {
                     total_models: count,
                     plans_generated: 0,
                     models_completed: Vec::new(),
@@ -805,19 +850,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 });
             }
             TuiEvent::EnsemblePlanGenerated(model) => {
-                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
                     ep.plans_generated += 1;
                     ep.models_completed.push(model);
                 }
             }
             TuiEvent::EnsembleVotingStart(plan_count) => {
-                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
                     ep.voting_started = true;
                     ep.plan_count = Some(plan_count);
                 }
             }
             TuiEvent::EnsembleModelFailed { model, error } => {
-                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
                     ep.models_failed.push((model, error));
                 }
             }
@@ -825,7 +870,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 selected_model,
                 score,
             } => {
-                if let Some(ref mut ep) = state.progress.ensemble_progress {
+                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
                     ep.selected = Some((selected_model.clone(), score));
                 }
                 state.push_message(DisplayMessage::system(format!(
@@ -838,22 +883,24 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     "Ensemble failed, solo fallback: {}",
                     reason
                 )));
-                state.progress.ensemble_progress = None;
+                state.tabs.active_pane_mut().progress.ensemble_progress = None;
             }
             TuiEvent::AgentStarting => {
-                state.progress.is_running = true;
-                state.progress.tool_log.clear();
-                state.progress.quorum_status = None;
-                state.progress.task_progress = None;
-                state.progress.ensemble_progress = None;
+                let progress = &mut state.tabs.active_pane_mut().progress;
+                progress.is_running = true;
+                progress.tool_log.clear();
+                progress.quorum_status = None;
+                progress.task_progress = None;
+                progress.ensemble_progress = None;
             }
             TuiEvent::AgentResult {
                 success,
                 summary: _,
             } => {
-                state.progress.is_running = false;
-                state.progress.current_phase = None;
-                state.progress.current_tool = None;
+                let progress = &mut state.tabs.active_pane_mut().progress;
+                progress.is_running = false;
+                progress.current_phase = None;
+                progress.current_tool = None;
                 // task_progress / ensemble_progress は保持 — 次の AgentStarting でクリア
                 if success {
                     state.set_flash("Agent completed successfully");
@@ -862,7 +909,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             }
             TuiEvent::AgentError(msg) => {
-                state.progress.is_running = false;
+                state.tabs.active_pane_mut().progress.is_running = false;
                 state.set_flash(msg);
             }
             TuiEvent::Flash(msg) => {
@@ -883,7 +930,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             } => {
                 use super::event::ToolExecutionDisplayState;
 
-                if let Some(ref mut tp) = state.progress.task_progress {
+                if let Some(ref mut tp) = state.tabs.active_pane_mut().progress.task_progress {
                     // Convert event state to display status
                     let display_status = match exec_state {
                         ToolExecutionDisplayState::Pending => ToolExecutionDisplayStatus::Pending,
@@ -986,6 +1033,58 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             let _ = tx.send(decision);
         }
     }
+
+    /// Set tab title from `:ask` / `:discuss` commands.
+    fn set_title_from_command(state: &mut TuiState, cmd: &str) {
+        let trimmed = cmd.trim();
+        let question = trimmed
+            .strip_prefix("ask ")
+            .or_else(|| trimmed.strip_prefix("discuss "));
+        if let Some(q) = question {
+            let q = q.trim();
+            if !q.is_empty() {
+                state.tabs.active_pane_mut().set_title_if_empty(q);
+            }
+        }
+    }
+
+    /// Handle tab-related commands locally (no controller round-trip).
+    /// Returns Some(flash_message) if a tab command was handled, None otherwise.
+    fn handle_tab_command(&self, state: &mut TuiState, cmd: &str) -> Option<String> {
+        let trimmed = cmd.trim();
+        if trimmed == "tabs" {
+            // List all tabs
+            let summary = state.tabs.tab_list_summary();
+            state.push_message(DisplayMessage::system(summary.join("\n")));
+            return Some(format!("{} tab(s) open", state.tabs.len()));
+        }
+
+        if trimmed == "tabclose" {
+            if state.tabs.close_active() {
+                return Some(format!("Tab closed ({} remaining)", state.tabs.len()));
+            } else {
+                return Some("Cannot close last tab".into());
+            }
+        }
+
+        if trimmed == "tabnew" || trimmed.starts_with("tabnew ") {
+            let arg = trimmed.strip_prefix("tabnew").unwrap().trim();
+            let kind = if arg.is_empty() {
+                PaneKind::Interaction(quorum_domain::interaction::InteractionForm::Agent)
+            } else {
+                match arg.parse::<quorum_domain::interaction::InteractionForm>() {
+                    Ok(form) => PaneKind::Interaction(form),
+                    Err(_) => {
+                        return Some(format!("Unknown form: {}. Use agent/ask/discuss", arg));
+                    }
+                }
+            };
+            state.tabs.create_tab(kind);
+            return Some(format!("New tab: {}", kind.label()));
+        }
+
+        None
+    }
 }
 
 /// Background controller task (Actor)
@@ -1020,7 +1119,8 @@ async fn controller_task<
                 }
                 // Prefix with / for the controller's command parser
                 let cmd_str = format!("/{}", command);
-                match controller.handle_command(&cmd_str).await {
+                let progress = TuiProgressBridge::new(progress_tx.clone());
+                match controller.handle_command(&cmd_str, &progress).await {
                     CommandAction::Exit => {
                         break;
                     }

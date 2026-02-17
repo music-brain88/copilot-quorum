@@ -79,6 +79,11 @@ impl InteractionForm {
     ///
     /// All forms use `SessionMode` (at minimum for model selection), but
     /// Agent and Discuss use it for consensus level and strategy too.
+    ///
+    /// Note: Ask always behaves as Solo regardless of `consensus_level` —
+    /// it only reads `ModelConfig::exploration` from the session mode.
+    /// If form-specific consensus gating is needed in the future,
+    /// consider a `uses_consensus_level()` method instead of changing this.
     pub fn uses_session_mode(&self) -> bool {
         true
     }
@@ -147,7 +152,7 @@ impl std::fmt::Display for InteractionId {
 
 /// A single interaction instance — a unit of dialogue with form, context mode,
 /// and optional parent for nesting.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Interaction {
     /// Unique identifier.
     pub id: InteractionId,

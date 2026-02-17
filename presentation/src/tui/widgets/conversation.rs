@@ -21,7 +21,8 @@ impl<'a> ConversationWidget<'a> {
     fn format_messages(&self) -> Text<'_> {
         let mut lines: Vec<Line> = Vec::new();
 
-        for msg in &self.state.messages {
+        let pane = self.state.tabs.active_pane();
+        for msg in &pane.messages {
             let role_style = Style::default()
                 .fg(msg.role.color())
                 .add_modifier(Modifier::BOLD);
@@ -38,14 +39,14 @@ impl<'a> ConversationWidget<'a> {
         }
 
         // Append streaming text if present
-        if !self.state.streaming_text.is_empty() {
+        if !pane.streaming_text.is_empty() {
             lines.push(Line::from(Span::styled(
                 "Agent: ",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             )));
-            for content_line in self.state.streaming_text.lines() {
+            for content_line in pane.streaming_text.lines() {
                 lines.push(Line::from(format!("  {}", content_line)));
             }
             lines.push(Line::from(Span::styled(
@@ -66,9 +67,10 @@ impl<'a> Widget for ConversationWidget<'a> {
         let total_lines = count_wrapped_lines(&text, content_width);
 
         // Calculate scroll: scroll_offset=0 means "show bottom"
+        let pane = self.state.tabs.active_pane();
         let scroll = if total_lines > visible_height {
             let max_scroll = total_lines - visible_height;
-            let offset = (self.state.scroll_offset as u16).min(max_scroll);
+            let offset = (pane.scroll_offset as u16).min(max_scroll);
             max_scroll - offset
         } else {
             0

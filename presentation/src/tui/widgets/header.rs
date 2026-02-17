@@ -32,8 +32,9 @@ impl<'a> Widget for HeaderWidget<'a> {
             Color::Cyan
         };
 
-        let phase_text = if self.state.progress.is_running {
-            self.state.progress.phase_name.as_str()
+        let progress = &self.state.tabs.active_pane().progress;
+        let phase_text = if progress.is_running {
+            progress.phase_name.as_str()
         } else {
             "Ready"
         };

@@ -35,7 +35,7 @@ impl<'a> ProgressPanelWidget<'a> {
 
 impl<'a> Widget for ProgressPanelWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let progress = &self.state.progress;
+        let progress = &self.state.tabs.active_pane().progress;
         let mut lines: Vec<Line> = Vec::new();
 
         // Phase

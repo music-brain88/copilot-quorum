@@ -33,11 +33,12 @@ impl<'a> Widget for InputWidget<'a> {
         };
         let mode_prompt = format!("{}> ", level_short);
 
+        let pane = self.state.tabs.active_pane();
         let (prompt, text, cursor_pos, color, active) = match self.state.mode {
             InputMode::Insert => (
                 mode_prompt.as_str(),
-                &self.state.input,
-                self.state.cursor_pos,
+                &pane.input,
+                pane.cursor_pos,
                 Color::Green,
                 true,
             ),
@@ -50,8 +51,8 @@ impl<'a> Widget for InputWidget<'a> {
             ),
             InputMode::Normal => (
                 mode_prompt.as_str(),
-                &self.state.input,
-                self.state.cursor_pos,
+                &pane.input,
+                pane.cursor_pos,
                 Color::DarkGray,
                 false,
             ),
