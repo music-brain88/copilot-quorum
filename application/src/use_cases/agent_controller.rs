@@ -8,6 +8,7 @@ use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
+use crate::ports::agent_progress::NoAgentProgress;
 use crate::ports::progress::NoProgress;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
@@ -452,7 +453,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             self.tool_schema.clone(),
         );
 
-        match use_case.execute(input, &NoProgress).await {
+        match use_case.execute(input, &NoAgentProgress).await {
             Ok(InteractionResult::AskResult { answer }) => {
                 // Add to conversation history
                 self.conversation_history.push(HistoryEntry {
@@ -943,56 +944,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_discuss_without_args_shows_redesign_message() {
+    async fn test_discuss_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/discuss").await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
-                assert!(message.contains("redesigned"));
-                assert!(message.contains("#119"));
+                assert!(message.contains("Usage"));
             }
             other => panic!("Expected CommandError, got {:?}", other),
         }
     }
 
     #[tokio::test]
-    async fn test_discuss_with_args_shows_council_hint() {
-        let (mut controller, mut rx) = create_test_controller();
-
-        controller.handle_command("/discuss some question").await;
-        let event = rx.try_recv().unwrap();
-        match event {
-            UiEvent::CommandError { message } => {
-                assert!(message.contains("/council"));
-            }
-            other => panic!("Expected CommandError, got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_ask_command_shows_redesign_message() {
+    async fn test_ask_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/ask").await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
-                assert!(message.contains("redesigned"));
-                assert!(message.contains("#119"));
+                assert!(message.contains("Usage"));
             }
             other => panic!("Expected CommandError, got {:?}", other),
         }
     }
 
     #[tokio::test]
-    async fn test_council_without_question() {
+    async fn test_ask_with_question_sends_ask_starting() {
+        let (mut controller, mut rx) = create_test_controller();
+
+        controller.handle_command("/ask What is Rust?").await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, UiEvent::AskStarting));
+    }
+
+    #[tokio::test]
+    async fn test_council_is_unknown_command() {
         let (mut controller, mut rx) = create_test_controller();
 
         controller.handle_command("/council").await;
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, UiEvent::CommandError { .. }));
+        assert!(matches!(event, UiEvent::UnknownCommand { .. }));
     }
 
     #[tokio::test]
