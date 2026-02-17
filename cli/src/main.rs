@@ -9,8 +9,8 @@ use quorum_application::ExecutionParams;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
-    ConfigLoader, CopilotLlmGateway, FileConfig, GitHubReferenceResolver, LocalContextLoader,
-    LocalToolExecutor,
+    ConfigLoader, CopilotLlmGateway, FileConfig, GitHubReferenceResolver, JsonSchemaToolConverter,
+    LocalContextLoader, LocalToolExecutor,
 };
 use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
@@ -240,6 +240,10 @@ async fn main() -> Result<()> {
     }
     let tool_executor = Arc::new(tool_executor);
 
+    // Create tool schema converter
+    let tool_schema: Arc<dyn quorum_application::ToolSchemaPort> =
+        Arc::new(JsonSchemaToolConverter);
+
     // Create context loader
     let context_loader = Arc::new(LocalContextLoader::new());
 
@@ -324,6 +328,7 @@ async fn main() -> Result<()> {
         let mut tui_app = TuiApp::new(
             gateway.clone(),
             tool_executor.clone(),
+            tool_schema.clone(),
             context_loader.clone(),
             quorum_config,
         )
@@ -381,9 +386,10 @@ async fn main() -> Result<()> {
     let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
     // Create and run agent with cancellation support
-    let mut use_case = RunAgentUseCase::with_context_loader(gateway, tool_executor, context_loader)
-        .with_cancellation(cancellation_token.clone())
-        .with_human_intervention(human_intervention);
+    let mut use_case =
+        RunAgentUseCase::with_context_loader(gateway, tool_executor, tool_schema, context_loader)
+            .with_cancellation(cancellation_token.clone())
+            .with_human_intervention(human_intervention);
     if let Some(resolver) = reference_resolver {
         use_case = use_case.with_reference_resolver(Arc::new(resolver));
     }

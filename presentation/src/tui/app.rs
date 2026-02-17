@@ -40,7 +40,8 @@ use crossterm::{
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
 use quorum_application::{
-    AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort, UiEvent,
+    AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort,
+    ToolSchemaPort, UiEvent,
 };
 use quorum_domain::core::string::truncate;
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
@@ -88,6 +89,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub fn new(
         gateway: Arc<G>,
         tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
         context_loader: Arc<C>,
         config: QuorumConfig,
     ) -> Self {
@@ -110,6 +112,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let controller = AgentController::new(
             gateway,
             tool_executor,
+            tool_schema,
             context_loader,
             config,
             human_intervention,

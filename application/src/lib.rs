@@ -21,6 +21,7 @@ pub use ports::{
     progress::ProgressNotifier,
     reference_resolver::{ReferenceError, ReferenceResolverPort, ResolvedReference},
     tool_executor::ToolExecutorPort,
+    tool_schema::ToolSchemaPort,
 };
 pub use use_cases::init_context::{
     InitContextError, InitContextInput, InitContextOutput, InitContextProgressNotifier,

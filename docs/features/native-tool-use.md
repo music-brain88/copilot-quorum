@@ -221,19 +221,24 @@ pub struct ToolCall {
 `send_tool_results()` 時に `ToolResultMessage::tool_use_id` として使用し、
 リクエストと結果の対応付けを行います。
 
-#### `ToolDefinition::to_json_schema()` — JSON Schema 変換
+#### `ToolSchemaPort` — JSON Schema 変換 (Port パターン)
+
+JSON Schema 変換は `ToolSchemaPort` trait として application 層に定義され、
+infrastructure 層の `JsonSchemaToolConverter` が実装します。
+domain 層はツールのフィルタリング（`low_risk_tools()`, `high_risk_tools()`）のみを担当し、
+API フォーマットの関心事から分離されています。
 
 ```rust
-impl ToolDefinition {
-    pub fn to_json_schema(&self) -> serde_json::Value;
-    // → {"name", "description", "input_schema": {"type": "object", ...}}
-    // Note: CopilotToolDefinition maps "input_schema" → "parameters" for the Copilot CLI wire format
+// application/src/ports/tool_schema.rs
+pub trait ToolSchemaPort: Send + Sync {
+    fn tool_to_schema(&self, tool: &ToolDefinition) -> serde_json::Value;
+    fn all_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value>;
+    fn low_risk_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value>;
 }
 
-impl ToolSpec {
-    pub fn to_api_tools(&self) -> Vec<serde_json::Value>;
-    // → 全ツールの JSON Schema 配列
-}
+// infrastructure/src/tools/schema.rs
+pub struct JsonSchemaToolConverter;
+impl ToolSchemaPort for JsonSchemaToolConverter { ... }
 ```
 
 `param_type` → JSON Schema 変換:
@@ -333,7 +338,9 @@ let execution = ExecutionParams {
 |------|-------------|
 | `domain/src/session/response.rs` | `LlmResponse`, `ContentBlock`, `StopReason` |
 | `domain/src/session/stream.rs` | `StreamEvent`（`ToolCallDelta`, `CompletedResponse` バリアント） |
-| `domain/src/tool/entities.rs` | `ToolCall::native_id`, `ToolDefinition::to_json_schema()`, `ToolSpec::to_api_tools()` |
+| `domain/src/tool/entities.rs` | `ToolCall::native_id`, `ToolSpec::low_risk_tools()`, `ToolSpec::all()` |
+| `application/src/ports/tool_schema.rs` | `ToolSchemaPort` trait — JSON Schema 変換ポート |
+| `infrastructure/src/tools/schema.rs` | `JsonSchemaToolConverter` — JSON Schema 変換実装 |
 | `domain/src/prompt/agent.rs` | `agent_system()` — エージェントシステムプロンプト生成 |
 | `application/src/config/execution_params.rs` | `ExecutionParams::max_tool_turns` |
 | `application/src/ports/llm_gateway.rs` | `ToolResultMessage`, `LlmSession` trait |
@@ -347,7 +354,7 @@ RunAgentUseCase::execute_single_task()
     ▼
 execute_task_native()
     │
-    ├── tool_spec.to_api_tools() → JSON Schema 配列
+    ├── tool_schema.all_tools_schema(tool_spec) → JSON Schema 配列
     │
     ├── session.send_with_tools(prompt, tools) → LlmResponse
     │

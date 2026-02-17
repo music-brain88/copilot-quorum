@@ -22,4 +22,6 @@ pub use copilot::{
     session::CopilotSession,
 };
 pub use reference::GitHubReferenceResolver;
-pub use tools::{LocalToolExecutor, default_tool_spec, read_only_tool_spec};
+pub use tools::{
+    JsonSchemaToolConverter, LocalToolExecutor, default_tool_spec, read_only_tool_spec,
+};

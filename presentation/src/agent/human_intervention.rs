@@ -65,7 +65,7 @@ use std::io::{self, Write};
 /// use std::sync::Arc;
 ///
 /// let intervention = Arc::new(InteractiveHumanIntervention::new());
-/// let use_case = RunAgentUseCase::new(gateway, executor)
+/// let use_case = RunAgentUseCase::new(gateway, executor, tool_schema)
 ///     .with_human_intervention(intervention);
 /// ```
 pub struct InteractiveHumanIntervention;

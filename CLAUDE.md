@@ -183,7 +183,7 @@ The agent system extends quorum to autonomous task execution with safety through
 - `infrastructure/tools/`: LocalToolExecutor implements ToolExecutorPort
 
 **Native Tool Use**: LLM の構造化 Tool Use API を使用してツールを呼び出す（唯一のツール実行パス）。
-- ツール定義は `ToolSpec::to_api_tools()` で JSON Schema に変換
+- ツール定義は `ToolSchemaPort::all_tools_schema()` で JSON Schema に変換（Port パターン）
 - Multi-turn loop: `send_with_tools()` → ToolUse stop → execute → `send_tool_results()` → repeat
 - Low-risk ツールは `futures::join_all()` で並列実行、High-risk は順次 + Quorum Review
 
