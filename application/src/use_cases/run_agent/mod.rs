@@ -24,6 +24,9 @@ use types::{EnsemblePlanningOutcome, PlanningResult};
 
 use crate::ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 use crate::ports::context_loader::ContextLoaderPort;
+use crate::ports::conversation_logger::{
+    ConversationEvent, ConversationLogger, NoConversationLogger,
+};
 use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::reference_resolver::ReferenceResolverPort;
@@ -55,6 +58,7 @@ pub struct RunAgentUseCase<
     pub(super) cancellation_token: Option<CancellationToken>,
     pub(super) human_intervention: Option<Arc<dyn HumanInterventionPort>>,
     pub(super) reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
+    pub(super) conversation_logger: Arc<dyn ConversationLogger>,
 }
 
 impl<G, T, C> Clone for RunAgentUseCase<G, T, C>
@@ -72,6 +76,7 @@ where
             cancellation_token: self.cancellation_token.clone(),
             human_intervention: self.human_intervention.clone(),
             reference_resolver: self.reference_resolver.clone(),
+            conversation_logger: self.conversation_logger.clone(),
         }
     }
 }
@@ -109,6 +114,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
             cancellation_token: None,
             human_intervention: None,
             reference_resolver: None,
+            conversation_logger: Arc::new(NoConversationLogger),
         }
     }
 }
@@ -130,6 +136,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             cancellation_token: None,
             human_intervention: None,
             reference_resolver: None,
+            conversation_logger: Arc::new(NoConversationLogger),
         }
     }
 
@@ -148,6 +155,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     /// Set a reference resolver for automatic reference resolution during context gathering.
     pub fn with_reference_resolver(mut self, resolver: Arc<dyn ReferenceResolverPort>) -> Self {
         self.reference_resolver = Some(resolver);
+        self
+    }
+
+    /// Set a conversation logger for structured event logging.
+    pub fn with_conversation_logger(mut self, logger: Arc<dyn ConversationLogger>) -> Self {
+        self.conversation_logger = logger;
         self
     }
 
@@ -236,6 +249,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         check_cancelled(&self.cancellation_token)?;
 
         info!("Starting agent for request: {}", input.request);
+
+        self.conversation_logger.log(ConversationEvent::new(
+            "agent_start",
+            serde_json::json!({
+                "request": input.request,
+                "consensus_level": format!("{}", input.mode.consensus_level),
+                "phase_scope": format!("{}", input.mode.phase_scope),
+            }),
+        ));
 
         // Initialize agent state
         let agent_id = format!("agent-{}", chrono_lite_timestamp());
@@ -599,6 +621,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             self.tool_schema.clone(),
             self.cancellation_token.clone(),
             Arc::new(reviewer),
+            self.conversation_logger.clone(),
         );
 
         let execution_result = execute_uc
@@ -645,6 +668,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
 
         state.complete();
+
+        let (completed, total) = state.plan.as_ref().map(|p| p.progress()).unwrap_or((0, 0));
+        self.conversation_logger.log(ConversationEvent::new(
+            "agent_complete",
+            serde_json::json!({
+                "total_tasks": total,
+                "completed": completed,
+                "failed": total - completed,
+            }),
+        ));
+
         Ok(RunAgentOutput {
             summary,
             success: true,

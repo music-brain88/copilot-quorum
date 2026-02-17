@@ -7,6 +7,7 @@
 use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
+use crate::ports::conversation_logger::{ConversationLogger, NoConversationLogger};
 use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::QuorumProgressAdapter;
 use crate::ports::tool_executor::ToolExecutorPort;
@@ -73,6 +74,8 @@ pub struct AgentController<
     cancellation_token: Option<CancellationToken>,
     /// Channel sender for UI events
     tx: mpsc::UnboundedSender<UiEvent>,
+    /// Conversation logger for structured event logging
+    conversation_logger: Arc<dyn ConversationLogger>,
 }
 
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
@@ -88,6 +91,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         human_intervention: Arc<dyn HumanInterventionPort>,
         tx: mpsc::UnboundedSender<UiEvent>,
     ) -> Self {
+        let conversation_logger: Arc<dyn ConversationLogger> = Arc::new(NoConversationLogger);
         Self {
             gateway: gateway.clone(),
             tool_executor: tool_executor.clone(),
@@ -106,7 +110,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             conversation_history: Vec::new(),
             cancellation_token: None,
             tx,
+            conversation_logger,
         }
+    }
+
+    /// Set a conversation logger for structured event logging.
+    pub fn with_conversation_logger(mut self, logger: Arc<dyn ConversationLogger>) -> Self {
+        self.conversation_logger = logger.clone();
+        self.use_case = self.use_case.with_conversation_logger(logger);
+        self
     }
 
     /// Set moderator model for synthesis
@@ -455,7 +467,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             self.gateway.clone(),
             self.tool_executor.clone(),
             self.tool_schema.clone(),
-        );
+        )
+        .with_conversation_logger(self.conversation_logger.clone());
 
         match use_case.execute(input, progress).await {
             Ok(InteractionResult::AskResult { answer }) => {

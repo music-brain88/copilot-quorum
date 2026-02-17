@@ -41,8 +41,8 @@ use crossterm::{
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
 use quorum_application::{
-    AgentController, CommandAction, ContextLoaderPort, LlmGateway, ToolExecutorPort,
-    ToolSchemaPort, UiEvent,
+    AgentController, CommandAction, ContextLoaderPort, ConversationLogger, LlmGateway,
+    NoConversationLogger, ToolExecutorPort, ToolSchemaPort, UiEvent,
 };
 use quorum_domain::core::string::truncate;
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
@@ -94,6 +94,25 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         context_loader: Arc<C>,
         config: QuorumConfig,
     ) -> Self {
+        Self::new_with_logger(
+            gateway,
+            tool_executor,
+            tool_schema,
+            context_loader,
+            config,
+            Arc::new(NoConversationLogger),
+        )
+    }
+
+    /// Create a new TUI application with a conversation logger.
+    pub fn new_with_logger(
+        gateway: Arc<G>,
+        tool_executor: Arc<T>,
+        tool_schema: Arc<dyn ToolSchemaPort>,
+        context_loader: Arc<C>,
+        config: QuorumConfig,
+        conversation_logger: Arc<dyn ConversationLogger>,
+    ) -> Self {
         // Channels
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();
         let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiEvent>();
@@ -118,7 +137,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             config,
             human_intervention,
             ui_tx,
-        );
+        )
+        .with_conversation_logger(conversation_logger);
 
         let controller_handle = tokio::spawn(controller_task(controller, cmd_rx, progress_tx));
 

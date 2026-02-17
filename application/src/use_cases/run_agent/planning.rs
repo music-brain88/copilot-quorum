@@ -4,6 +4,7 @@ use super::RunAgentUseCase;
 use super::types::{EnsemblePlanningOutcome, PlanningResult, RunAgentError, RunAgentInput};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
+use crate::ports::conversation_logger::ConversationEvent;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::use_cases::shared::check_cancelled;
@@ -180,6 +181,14 @@ where
             match result {
                 Ok((model, Ok(PlanningResult::Plan(plan)))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
+                    self.conversation_logger.log(ConversationEvent::new(
+                        "plan_generated",
+                        serde_json::json!({
+                            "model": model.to_string(),
+                            "objective": plan.objective,
+                            "task_count": plan.tasks.len(),
+                        }),
+                    ));
                     progress.on_ensemble_plan_generated(&model);
                     candidates.push(PlanCandidate::new(model, plan));
                 }
@@ -366,6 +375,14 @@ where
                             "Model {} voted {}/10 for plan from {}",
                             voter, score as i32, plan_model_name
                         );
+                        self.conversation_logger.log(ConversationEvent::new(
+                            "plan_vote",
+                            serde_json::json!({
+                                "voter": voter,
+                                "plan_model": plan_model_name,
+                                "score": score as i32,
+                            }),
+                        ));
                         candidates[i].add_vote(&voter, score);
                     }
                     Ok(Err(e)) => {
@@ -387,6 +404,14 @@ where
                 selected.model,
                 selected.average_score()
             );
+            self.conversation_logger.log(ConversationEvent::new(
+                "plan_selected",
+                serde_json::json!({
+                    "model": selected.model.to_string(),
+                    "avg_score": selected.average_score(),
+                    "summary": result.summary(),
+                }),
+            ));
             progress.on_ensemble_complete(&selected.model, selected.average_score());
         }
 

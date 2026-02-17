@@ -5,6 +5,7 @@
 
 use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
+use crate::ports::conversation_logger::{ConversationEvent, ConversationLogger};
 use crate::ports::llm_gateway::{LlmGateway, LlmSession, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
@@ -28,6 +29,7 @@ pub struct ExecuteTaskUseCase<G: LlmGateway, T: ToolExecutorPort> {
     tool_schema: Arc<dyn ToolSchemaPort>,
     cancellation_token: Option<CancellationToken>,
     action_reviewer: Arc<dyn ActionReviewer>,
+    conversation_logger: Arc<dyn ConversationLogger>,
 }
 
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<G, T> {
@@ -37,6 +39,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
         tool_schema: Arc<dyn ToolSchemaPort>,
         cancellation_token: Option<CancellationToken>,
         action_reviewer: Arc<dyn ActionReviewer>,
+        conversation_logger: Arc<dyn ConversationLogger>,
     ) -> Self {
         Self {
             gateway,
@@ -44,6 +47,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             tool_schema,
             cancellation_token,
             action_reviewer,
+            conversation_logger,
         }
     }
 
@@ -262,6 +266,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
     ) -> Result<(String, Vec<ToolExecution>), RunAgentError> {
         let task_id_str = task.id.as_str();
         let prompt = AgentPromptTemplate::task_execution(task, &state.context, previous_results);
+
+        self.conversation_logger.log(ConversationEvent::new(
+            "llm_prompt",
+            serde_json::json!({
+                "task_id": task_id_str,
+                "bytes": prompt.len(),
+                "text": prompt,
+            }),
+        ));
+
         let tools = self
             .tool_schema
             .all_tools_schema(self.tool_executor.tool_spec());
@@ -295,6 +309,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     task.id,
                     truncate_str(&text, 300)
                 );
+                self.conversation_logger.log(ConversationEvent::new(
+                    "llm_response",
+                    serde_json::json!({
+                        "task_id": task.id.as_str(),
+                        "model": session.model().to_string(),
+                        "bytes": text.len(),
+                        "text": text,
+                    }),
+                ));
                 all_outputs.push(text);
             }
 
@@ -396,6 +419,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     exec_indices.push(all_executions.len() - 1);
 
                     progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+                    self.conversation_logger.log(ConversationEvent::new(
+                        "tool_call",
+                        serde_json::json!({
+                            "task_id": task_id_str,
+                            "tool": call.tool_name,
+                            "args": call.arguments,
+                            "risk": "low",
+                        }),
+                    ));
                     futures.push(self.tool_executor.execute(call));
                 }
 
@@ -413,6 +445,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     } else {
                         result.output().unwrap_or("").to_string()
                     };
+
+                    self.conversation_logger.log(ConversationEvent::new(
+                        "tool_result",
+                        serde_json::json!({
+                            "task_id": task_id_str,
+                            "tool": call.tool_name,
+                            "success": !is_error,
+                            "bytes": output.len(),
+                            "duration_ms": result.metadata.duration_ms,
+                        }),
+                    ));
 
                     // Update ToolExecution state
                     let exec = &mut all_executions[exec_idx];
@@ -534,6 +577,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 progress.on_tool_execution_started(task_id_str, &exec_id, &call.tool_name);
 
                 progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+                self.conversation_logger.log(ConversationEvent::new(
+                    "tool_call",
+                    serde_json::json!({
+                        "task_id": task_id_str,
+                        "tool": call.tool_name,
+                        "args": call.arguments,
+                        "risk": "high",
+                    }),
+                ));
 
                 let result = self.tool_executor.execute(call).await;
                 let is_error = !result.is_success();
@@ -545,6 +597,17 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 } else {
                     result.output().unwrap_or("").to_string()
                 };
+
+                self.conversation_logger.log(ConversationEvent::new(
+                    "tool_result",
+                    serde_json::json!({
+                        "task_id": task_id_str,
+                        "tool": call.tool_name,
+                        "success": !is_error,
+                        "bytes": output.len(),
+                        "duration_ms": result.metadata.duration_ms,
+                    }),
+                ));
 
                 // Update ToolExecution state
                 if is_error {
