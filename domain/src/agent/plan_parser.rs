@@ -7,8 +7,8 @@
 //! All types referenced ([`Plan`], [`Task`], [`LlmResponse`], [`ContentBlock`])
 //! are domain types, making this pure domain logic.
 
-use crate::agent::context_mode::ContextMode;
 use crate::agent::entities::{Plan, Task};
+use crate::context::ContextMode;
 use crate::session::response::{ContentBlock, LlmResponse};
 
 /// Extract a plan from a structured [`LlmResponse`].
@@ -405,7 +405,7 @@ Here's my plan:
 
     #[test]
     fn test_parse_plan_context_mode() {
-        use crate::agent::context_mode::ContextMode;
+        use crate::context::ContextMode;
 
         let json = serde_json::json!({
             "objective": "Review code",
@@ -414,7 +414,7 @@ Here's my plan:
                 {
                     "id": "1",
                     "description": "Read file",
-                    "context_mode": "none"
+                    "context_mode": "fresh"
                 },
                 {
                     "id": "2",
@@ -431,7 +431,7 @@ Here's my plan:
         });
         let plan = parse_plan_json(&json).unwrap();
 
-        assert_eq!(plan.tasks[0].context_mode, Some(ContextMode::None));
+        assert_eq!(plan.tasks[0].context_mode, Some(ContextMode::Fresh));
         assert_eq!(plan.tasks[0].context_brief, None);
 
         // with_context_brief auto-sets mode to Projected
