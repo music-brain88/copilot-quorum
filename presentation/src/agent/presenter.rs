@@ -56,6 +56,26 @@ impl ReplPresenter {
             UiEvent::AgentStarting { mode } => self.render_agent_starting(*mode),
             UiEvent::AgentResult(result) => self.render_agent_result(result),
             UiEvent::AgentError(error) => self.render_agent_error(error),
+            UiEvent::AskStarting => {
+                println!();
+                println!(
+                    "{} {}",
+                    "━".repeat(50).dimmed(),
+                    "Ask".bold().cyan()
+                );
+                println!();
+            }
+            UiEvent::AskResult(result) => {
+                println!();
+                println!("{}", result.answer);
+                println!();
+            }
+            UiEvent::AskError { error } => {
+                println!("{} {}", "❌".red(), "Ask failed".red().bold());
+                println!();
+                println!("{} {}", "Error:".red().bold(), error);
+                println!();
+            }
             UiEvent::QuorumStarting => self.render_quorum_starting(),
             UiEvent::QuorumResult(result) => self.render_quorum_result(result),
             UiEvent::QuorumError { error } => {
@@ -159,8 +179,9 @@ impl ReplPresenter {
             "  {}     - Shortcut: switch to Ensemble mode",
             "/ens".cyan()
         );
+        println!("  {}     - Ask (lightweight Q&A)", "/ask".cyan());
         println!(
-            "  {} - Consult quorum (Quorum Discussion)",
+            "  {} - Discuss (quorum discussion)",
             "/discuss".cyan()
         );
         println!("  {}    - Toggle fast mode (skip reviews)", "/fast".cyan());
@@ -196,9 +217,9 @@ impl ReplPresenter {
         println!("{}", "Strategy Commands:".bold().blue());
         println!("  /strategy <s>        - Change strategy (quorum, debate)");
         println!();
-        println!("{}", "Quorum Commands:".bold().magenta());
-        println!("  /discuss <question>  - Quorum Discussion (consult multiple models)");
-        println!("  /council <question>  - Alias for /discuss");
+        println!("{}", "Interaction Commands:".bold().magenta());
+        println!("  /ask <question>      - Ask (lightweight Q&A with read-only tools)");
+        println!("  /discuss <question>  - Discuss (quorum discussion, consult multiple models)");
         println!();
         println!("{}", "Other Commands:".bold());
         println!("  /init [--force]      - Initialize project context");
