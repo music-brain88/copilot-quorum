@@ -6,10 +6,9 @@
 
 use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
-use crate::ports::agent_progress::NoAgentProgress;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::llm_gateway::LlmGateway;
-use crate::ports::progress::NoProgress;
+use crate::ports::progress::QuorumProgressAdapter;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
     AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
@@ -20,6 +19,7 @@ use crate::use_cases::run_agent::RunAgentUseCase;
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
 use quorum_domain::interaction::InteractionResult;
+use quorum_domain::util::truncate_str;
 use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
@@ -203,7 +203,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Handle a slash command. Returns whether to continue or exit the REPL.
-    pub async fn handle_command(&mut self, cmd: &str) -> CommandAction {
+    pub async fn handle_command(
+        &mut self,
+        cmd: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> CommandAction {
         let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
         let command = parts.first().copied().unwrap_or("");
         let args = parts.get(1).copied().unwrap_or("").trim();
@@ -268,7 +272,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         message: "Usage: /ask <question>".to_string(),
                     });
                 } else {
-                    self.run_ask(args).await;
+                    self.run_ask(args, progress).await;
                 }
                 CommandAction::Continue
             }
@@ -278,7 +282,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         message: "Usage: /discuss <question>".to_string(),
                     });
                 } else {
-                    self.run_discuss(args).await;
+                    self.run_discuss(args, progress).await;
                 }
                 CommandAction::Continue
             }
@@ -435,7 +439,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Run Ask interaction — lightweight Q&A with read-only tool access
-    pub async fn run_ask(&mut self, question: &str) {
+    pub async fn run_ask(&mut self, question: &str, progress: &dyn AgentProgressNotifier) {
         let _ = self.tx.send(UiEvent::AskStarting);
 
         // Build the question with context
@@ -453,12 +457,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             self.tool_schema.clone(),
         );
 
-        match use_case.execute(input, &NoAgentProgress).await {
+        match use_case.execute(input, progress).await {
             Ok(InteractionResult::AskResult { answer }) => {
-                // Add to conversation history
+                // Add to conversation history (truncate summary for /discuss context)
                 self.conversation_history.push(HistoryEntry {
                     request: question.to_string(),
-                    summary: answer.clone(),
+                    summary: truncate_str(&answer, 200).to_string(),
                 });
 
                 let _ = self.tx.send(UiEvent::AskResult(AskResultEvent { answer }));
@@ -477,7 +481,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Run Quorum Discussion with conversation context
-    pub async fn run_discuss(&self, question: &str) {
+    pub async fn run_discuss(&self, question: &str, progress: &dyn AgentProgressNotifier) {
         let _ = self.tx.send(UiEvent::QuorumStarting);
 
         // Build the question with context
@@ -491,9 +495,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Create quorum input using factory method
         let input = self.config.to_quorum_input(full_question);
 
-        // Run quorum
+        // Run quorum with progress adapter
         let use_case = RunQuorumUseCase::new(self.gateway.clone());
-        let result = use_case.execute_with_progress(input, &NoProgress).await;
+        let adapter = QuorumProgressAdapter::new(progress);
+        let result = use_case.execute_with_progress(input, &adapter).await;
 
         match result {
             Ok(output) => {
@@ -629,6 +634,7 @@ fn format_quorum_output(result: &QuorumResult, format: OutputFormat) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::agent_progress::NoAgentProgress;
     use crate::ports::context_loader::ContextLoaderPort;
     use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};
     use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
@@ -788,7 +794,7 @@ mod tests {
     #[tokio::test]
     async fn test_solo_command_sends_mode_changed_event() {
         let (mut controller, mut rx) = create_test_controller();
-        let action = controller.handle_command("/solo").await;
+        let action = controller.handle_command("/solo", &NoAgentProgress).await;
 
         assert!(matches!(action, CommandAction::Continue));
         assert_eq!(controller.consensus_level(), ConsensusLevel::Solo);
@@ -806,7 +812,7 @@ mod tests {
     #[tokio::test]
     async fn test_ens_command_sends_mode_changed_event() {
         let (mut controller, mut rx) = create_test_controller();
-        let action = controller.handle_command("/ens").await;
+        let action = controller.handle_command("/ens", &NoAgentProgress).await;
 
         assert!(matches!(action, CommandAction::Continue));
         assert_eq!(controller.consensus_level(), ConsensusLevel::Ensemble);
@@ -826,7 +832,7 @@ mod tests {
         let (mut controller, mut rx) = create_test_controller();
 
         // Default is Full, toggle to Fast
-        controller.handle_command("/fast").await;
+        controller.handle_command("/fast", &NoAgentProgress).await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(
             event,
@@ -837,7 +843,7 @@ mod tests {
         ));
 
         // Toggle back to Full
-        controller.handle_command("/fast").await;
+        controller.handle_command("/fast", &NoAgentProgress).await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(
             event,
@@ -852,14 +858,18 @@ mod tests {
     async fn test_strategy_change() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/strategy debate").await;
+        controller
+            .handle_command("/strategy debate", &NoAgentProgress)
+            .await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::StrategyChanged { strategy, .. } => assert_eq!(strategy, "debate"),
             other => panic!("Expected StrategyChanged, got {:?}", other),
         }
 
-        controller.handle_command("/strategy quorum").await;
+        controller
+            .handle_command("/strategy quorum", &NoAgentProgress)
+            .await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::StrategyChanged { strategy, .. } => assert_eq!(strategy, "quorum"),
@@ -870,7 +880,7 @@ mod tests {
     #[tokio::test]
     async fn test_config_display() {
         let (mut controller, mut rx) = create_test_controller();
-        controller.handle_command("/config").await;
+        controller.handle_command("/config", &NoAgentProgress).await;
 
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::ConfigDisplay(_)));
@@ -879,7 +889,7 @@ mod tests {
     #[tokio::test]
     async fn test_clear_history() {
         let (mut controller, mut rx) = create_test_controller();
-        controller.handle_command("/clear").await;
+        controller.handle_command("/clear", &NoAgentProgress).await;
 
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::HistoryCleared));
@@ -888,7 +898,7 @@ mod tests {
     #[tokio::test]
     async fn test_quit_returns_exit() {
         let (mut controller, mut rx) = create_test_controller();
-        let action = controller.handle_command("/quit").await;
+        let action = controller.handle_command("/quit", &NoAgentProgress).await;
 
         assert!(matches!(action, CommandAction::Exit));
         let event = rx.try_recv().unwrap();
@@ -898,7 +908,7 @@ mod tests {
     #[tokio::test]
     async fn test_unknown_command() {
         let (mut controller, mut rx) = create_test_controller();
-        controller.handle_command("/foobar").await;
+        controller.handle_command("/foobar", &NoAgentProgress).await;
 
         let event = rx.try_recv().unwrap();
         match event {
@@ -910,7 +920,7 @@ mod tests {
     #[tokio::test]
     async fn test_help_command() {
         let (mut controller, mut rx) = create_test_controller();
-        controller.handle_command("/help").await;
+        controller.handle_command("/help", &NoAgentProgress).await;
 
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::Help));
@@ -920,7 +930,9 @@ mod tests {
     async fn test_mode_command_with_args() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/mode ensemble").await;
+        controller
+            .handle_command("/mode ensemble", &NoAgentProgress)
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(
             event,
@@ -936,7 +948,7 @@ mod tests {
     async fn test_mode_command_without_args() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/mode").await;
+        controller.handle_command("/mode", &NoAgentProgress).await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::CommandError { .. }));
     }
@@ -945,7 +957,9 @@ mod tests {
     async fn test_discuss_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/discuss").await;
+        controller
+            .handle_command("/discuss", &NoAgentProgress)
+            .await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
@@ -959,7 +973,7 @@ mod tests {
     async fn test_ask_without_args_shows_usage() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/ask").await;
+        controller.handle_command("/ask", &NoAgentProgress).await;
         let event = rx.try_recv().unwrap();
         match event {
             UiEvent::CommandError { message } => {
@@ -973,7 +987,9 @@ mod tests {
     async fn test_ask_with_question_sends_ask_starting() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/ask What is Rust?").await;
+        controller
+            .handle_command("/ask What is Rust?", &NoAgentProgress)
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::AskStarting));
     }
@@ -982,7 +998,9 @@ mod tests {
     async fn test_council_is_unknown_command() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/council").await;
+        controller
+            .handle_command("/council", &NoAgentProgress)
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::UnknownCommand { .. }));
     }
@@ -991,7 +1009,9 @@ mod tests {
     async fn test_scope_command() {
         let (mut controller, mut rx) = create_test_controller();
 
-        controller.handle_command("/scope fast").await;
+        controller
+            .handle_command("/scope fast", &NoAgentProgress)
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(
             event,

@@ -27,3 +27,32 @@ impl ProgressNotifier for NoProgress {
     fn on_task_complete(&self, _phase: &Phase, _model: &Model, _success: bool) {}
     fn on_phase_complete(&self, _phase: &Phase) {}
 }
+
+/// Adapter: `AgentProgressNotifier` → `ProgressNotifier`
+///
+/// Maps Quorum Discussion phase events to the existing quorum progress
+/// callbacks on `AgentProgressNotifier`, enabling TUI progress display
+/// during `:discuss` commands.
+pub struct QuorumProgressAdapter<'a> {
+    inner: &'a dyn super::agent_progress::AgentProgressNotifier,
+}
+
+impl<'a> QuorumProgressAdapter<'a> {
+    pub fn new(inner: &'a dyn super::agent_progress::AgentProgressNotifier) -> Self {
+        Self { inner }
+    }
+}
+
+impl ProgressNotifier for QuorumProgressAdapter<'_> {
+    fn on_phase_start(&self, phase: &Phase, total_tasks: usize) {
+        self.inner.on_quorum_start(phase.as_str(), total_tasks);
+    }
+
+    fn on_task_complete(&self, _phase: &Phase, model: &Model, success: bool) {
+        self.inner.on_quorum_model_complete(model, success);
+    }
+
+    fn on_phase_complete(&self, phase: &Phase) {
+        self.inner.on_quorum_complete(phase.as_str(), true, None);
+    }
+}

@@ -201,8 +201,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
             progress.on_llm_stream_end();
         }
 
-        // Build the answer from collected text
-        let answer = all_text.join("\n");
+        // Use the last text block as the answer — intermediate texts
+        // (e.g. "Let me check...") are discarded.
+        let answer = all_text.pop().unwrap_or_default();
         if answer.is_empty() {
             return Err(RunAskError::EmptyResponse);
         }
@@ -506,9 +507,10 @@ mod tests {
 
         match result {
             InteractionResult::AskResult { answer } => {
-                // Should contain text from the turns that ran (initial + 3 tool turns)
-                assert!(answer.contains("Thinking..."));
-                assert!(answer.contains("Still working (1)..."));
+                // Should contain only the last text (max_tool_turns=3, so turn 3 is the last)
+                assert!(answer.contains("Still working (3)..."));
+                // Intermediate texts should NOT be included
+                assert!(!answer.contains("Thinking..."));
             }
             _ => panic!("Expected AskResult"),
         }

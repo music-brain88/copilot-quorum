@@ -12,6 +12,7 @@ mod mode;
 mod presenter;
 mod progress;
 mod state;
+pub mod tab;
 mod widgets;
 
 pub use app::TuiApp;
@@ -21,3 +22,4 @@ pub use mode::{InputMode, KeyAction};
 pub use presenter::TuiPresenter;
 pub use progress::TuiProgressBridge;
 pub use state::{DisplayMessage, MessageRole, ProgressState, TuiInputConfig, TuiState};
+pub use tab::{Pane, PaneId, PaneKind, Tab, TabId, TabManager};
