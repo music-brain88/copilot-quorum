@@ -511,11 +511,7 @@ mod tests {
                 "Write file",
                 RiskLevel::High,
             ))
-            .register(ToolDefinition::new(
-                "grep_search",
-                "Search",
-                RiskLevel::Low,
-            ));
+            .register(ToolDefinition::new("grep_search", "Search", RiskLevel::Low));
 
         let low_risk_tools = spec.to_low_risk_api_tools();
         assert_eq!(low_risk_tools.len(), 2);

@@ -42,11 +42,7 @@ pub struct RunAskInput {
 }
 
 impl RunAskInput {
-    pub fn new(
-        query: impl Into<String>,
-        models: ModelConfig,
-        execution: ExecutionParams,
-    ) -> Self {
+    pub fn new(query: impl Into<String>, models: ModelConfig, execution: ExecutionParams) -> Self {
         Self {
             query: query.into(),
             models,
@@ -81,7 +77,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
         input: RunAskInput,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<InteractionResult, RunAskError> {
-        info!("Starting Ask interaction: {}", truncate_str(&input.query, 100));
+        info!(
+            "Starting Ask interaction: {}",
+            truncate_str(&input.query, 100)
+        );
 
         // Create session with the exploration model
         let session = self
@@ -129,10 +128,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
 
             turn_count += 1;
             if turn_count > max_turns {
-                warn!(
-                    "Ask tool loop exceeded max_tool_turns ({})",
-                    max_turns
-                );
+                warn!("Ask tool loop exceeded max_tool_turns ({})", max_turns);
                 break;
             }
 
@@ -215,10 +211,10 @@ mod tests {
     use crate::ports::llm_gateway::LlmSession;
     use crate::ports::tool_executor::ToolExecutorPort;
     use async_trait::async_trait;
-    use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
-    use quorum_domain::tool::entities::{ToolCall, ToolDefinition, RiskLevel, ToolSpec};
-    use quorum_domain::ToolResult;
     use quorum_domain::Model;
+    use quorum_domain::ToolResult;
+    use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
+    use quorum_domain::tool::entities::{RiskLevel, ToolCall, ToolDefinition, ToolSpec};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -324,8 +320,16 @@ mod tests {
         fn new() -> Self {
             Self {
                 spec: ToolSpec::new()
-                    .register(ToolDefinition::new("read_file", "Read a file", RiskLevel::Low))
-                    .register(ToolDefinition::new("write_file", "Write a file", RiskLevel::High)),
+                    .register(ToolDefinition::new(
+                        "read_file",
+                        "Read a file",
+                        RiskLevel::Low,
+                    ))
+                    .register(ToolDefinition::new(
+                        "write_file",
+                        "Write a file",
+                        RiskLevel::High,
+                    )),
             }
         }
     }
@@ -437,7 +441,11 @@ mod tests {
         // LLM keeps using tools with partial text each turn
         let mut responses = Vec::new();
         // Initial response has text + tool
-        responses.push(text_and_tool_response("Thinking...", "read_file", "toolu_0"));
+        responses.push(text_and_tool_response(
+            "Thinking...",
+            "read_file",
+            "toolu_0",
+        ));
         // Subsequent tool result responses also have text + tool
         for i in 1..15 {
             responses.push(text_and_tool_response(
@@ -478,11 +486,7 @@ mod tests {
         let executor = Arc::new(MockToolExecutor::new());
         let use_case = RunAskUseCase::new(gateway, executor);
 
-        let input = RunAskInput::new(
-            "Hello?",
-            ModelConfig::default(),
-            ExecutionParams::default(),
-        );
+        let input = RunAskInput::new("Hello?", ModelConfig::default(), ExecutionParams::default());
 
         let result = use_case.execute(input, &NoAgentProgress).await;
         assert!(result.is_err());
