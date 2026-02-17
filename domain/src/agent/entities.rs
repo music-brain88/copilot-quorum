@@ -18,10 +18,10 @@
 //! - `AutoApprove` - Automatically approve (use with caution!)
 
 use super::agent_policy::{AgentPolicy, HilAction};
-use super::context_mode::ContextMode;
 use super::model_config::ModelConfig;
 use super::tool_execution::ToolExecution;
 use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
+use crate::context::ContextMode;
 use crate::core::model::Model;
 use crate::orchestration::session_mode::SessionMode;
 use serde::{Deserialize, Serialize};
