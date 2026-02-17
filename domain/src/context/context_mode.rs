@@ -24,9 +24,6 @@
 //! assert_eq!(mode, ContextMode::Projected);
 //! assert_eq!(mode.as_str(), "projected");
 //!
-//! // Backward compatibility: "none" parses to Fresh
-//! let fresh: ContextMode = "none".parse().unwrap();
-//! assert_eq!(fresh, ContextMode::Fresh);
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -47,16 +44,12 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ContextMode {
     /// Pass all gathered project context (`:split` — shared buffer).
-    #[serde(alias = "shared")]
     Full,
     /// Pass only the task's `context_brief` — a focused summary written
     /// by the planner for this specific task (`:edit` — specific file).
     Projected,
     /// Pass no project context. Suitable for simple, self-contained tool
     /// calls or isolated interactions (`:enew` — empty buffer).
-    ///
-    /// Previously named `None` — accepts `"none"` for backward compatibility.
-    #[serde(alias = "none")]
     Fresh,
 }
 
@@ -76,9 +69,9 @@ impl std::str::FromStr for ContextMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "full" | "shared" => Ok(ContextMode::Full),
+            "full" => Ok(ContextMode::Full),
             "projected" => Ok(ContextMode::Projected),
-            "fresh" | "none" => Ok(ContextMode::Fresh),
+            "fresh" => Ok(ContextMode::Fresh),
             _ => Err(format!("Invalid ContextMode: {}", s)),
         }
     }
@@ -127,15 +120,6 @@ mod tests {
     }
 
     #[test]
-    fn test_from_str_backward_compat() {
-        // "none" → Fresh (backward compatibility)
-        assert_eq!("none".parse::<ContextMode>().unwrap(), ContextMode::Fresh);
-        assert_eq!("None".parse::<ContextMode>().unwrap(), ContextMode::Fresh);
-        // "shared" → Full (alias)
-        assert_eq!("shared".parse::<ContextMode>().unwrap(), ContextMode::Full);
-    }
-
-    #[test]
     fn test_serde_roundtrip() {
         for mode in [
             ContextMode::Full,
@@ -162,16 +146,6 @@ mod tests {
             serde_json::to_string(&ContextMode::Fresh).unwrap(),
             "\"fresh\""
         );
-    }
-
-    #[test]
-    fn test_serde_backward_compat_deserialization() {
-        // "none" should deserialize to Fresh
-        let fresh: ContextMode = serde_json::from_str("\"none\"").unwrap();
-        assert_eq!(fresh, ContextMode::Fresh);
-        // "shared" should deserialize to Full
-        let full: ContextMode = serde_json::from_str("\"shared\"").unwrap();
-        assert_eq!(full, ContextMode::Full);
     }
 
     #[test]
