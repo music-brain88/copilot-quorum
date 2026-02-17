@@ -88,19 +88,19 @@ impl ConversationLogger for JsonlConversationLogger {
             return;
         };
 
-        if let Ok(mut writer) = self.writer.lock() {
-            let _ = writeln!(writer, "{}", line);
-            // Flush periodically for crash safety — JSONL is append-only
-            let _ = writer.flush();
-        }
+        // Recover from poisoned mutex — logging is best-effort and should
+        // continue even after a panic in another thread.
+        let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = writeln!(writer, "{}", line);
+        // Flush every write for crash safety — JSONL is append-only
+        let _ = writer.flush();
     }
 }
 
 impl Drop for JsonlConversationLogger {
     fn drop(&mut self) {
-        if let Ok(mut writer) = self.writer.lock() {
-            let _ = writer.flush();
-        }
+        let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = writer.flush();
     }
 }
 

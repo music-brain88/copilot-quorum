@@ -271,6 +271,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             "llm_prompt",
             serde_json::json!({
                 "task_id": task_id_str,
+                "model": session.model().to_string(),
                 "bytes": prompt.len(),
                 "text": prompt,
             }),
@@ -446,16 +447,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                         result.output().unwrap_or("").to_string()
                     };
 
-                    self.conversation_logger.log(ConversationEvent::new(
-                        "tool_result",
-                        serde_json::json!({
-                            "task_id": task_id_str,
-                            "tool": call.tool_name,
-                            "success": !is_error,
-                            "bytes": output.len(),
-                            "duration_ms": result.metadata.duration_ms,
-                        }),
-                    ));
+                    let mut tool_result_payload = serde_json::json!({
+                        "task_id": task_id_str,
+                        "tool": call.tool_name,
+                        "success": !is_error,
+                        "bytes": output.len(),
+                        "duration_ms": result.metadata.duration_ms,
+                    });
+                    if is_error {
+                        tool_result_payload["error"] =
+                            serde_json::Value::String(output.clone());
+                    }
+                    self.conversation_logger
+                        .log(ConversationEvent::new("tool_result", tool_result_payload));
 
                     // Update ToolExecution state
                     let exec = &mut all_executions[exec_idx];
@@ -598,16 +602,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     result.output().unwrap_or("").to_string()
                 };
 
-                self.conversation_logger.log(ConversationEvent::new(
-                    "tool_result",
-                    serde_json::json!({
-                        "task_id": task_id_str,
-                        "tool": call.tool_name,
-                        "success": !is_error,
-                        "bytes": output.len(),
-                        "duration_ms": result.metadata.duration_ms,
-                    }),
-                ));
+                let mut tool_result_payload = serde_json::json!({
+                    "task_id": task_id_str,
+                    "tool": call.tool_name,
+                    "success": !is_error,
+                    "bytes": output.len(),
+                    "duration_ms": result.metadata.duration_ms,
+                });
+                if is_error {
+                    tool_result_payload["error"] =
+                        serde_json::Value::String(output.clone());
+                }
+                self.conversation_logger
+                    .log(ConversationEvent::new("tool_result", tool_result_payload));
 
                 // Update ToolExecution state
                 if is_error {
