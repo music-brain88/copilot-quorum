@@ -1103,7 +1103,8 @@ async fn controller_task<
                 }
                 // Prefix with / for the controller's command parser
                 let cmd_str = format!("/{}", command);
-                match controller.handle_command(&cmd_str).await {
+                let progress = TuiProgressBridge::new(progress_tx.clone());
+                match controller.handle_command(&cmd_str, &progress).await {
                     CommandAction::Exit => {
                         break;
                     }
