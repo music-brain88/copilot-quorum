@@ -27,6 +27,7 @@ pub use use_cases::init_context::{
     InitContextUseCase, NoInitContextProgress,
 };
 pub use use_cases::run_agent::{RunAgentError, RunAgentInput, RunAgentOutput, RunAgentUseCase};
+pub use use_cases::run_ask::{RunAskError, RunAskInput, RunAskUseCase};
 // Re-export ErrorCategory from domain (was previously in run_agent)
 pub use quorum_domain::ErrorCategory;
 pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
