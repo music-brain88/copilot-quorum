@@ -269,6 +269,15 @@ impl ToolSpec {
         tools.into_iter().map(|t| t.to_json_schema()).collect()
     }
 
+    /// Convert only low-risk tools to a provider-neutral JSON Schema array.
+    ///
+    /// Used by the Ask interaction to restrict tool access to read-only operations.
+    pub fn to_low_risk_api_tools(&self) -> Vec<serde_json::Value> {
+        let mut tools: Vec<&ToolDefinition> = self.low_risk_tools().collect();
+        tools.sort_by_key(|t| &t.name);
+        tools.into_iter().map(|t| t.to_json_schema()).collect()
+    }
+
     /// Get the number of registered tools.
     pub fn tool_count(&self) -> usize {
         self.tools.len()
@@ -488,6 +497,39 @@ mod tests {
             assert!(tool["description"].is_string());
             assert!(tool["input_schema"]["type"].as_str() == Some("object"));
         }
+    }
+
+    #[test]
+    fn test_to_low_risk_api_tools() {
+        let spec = ToolSpec::new()
+            .register(
+                ToolDefinition::new("read_file", "Read file", RiskLevel::Low)
+                    .with_parameter(ToolParameter::new("path", "File path", true)),
+            )
+            .register(ToolDefinition::new(
+                "write_file",
+                "Write file",
+                RiskLevel::High,
+            ))
+            .register(ToolDefinition::new(
+                "grep_search",
+                "Search",
+                RiskLevel::Low,
+            ));
+
+        let low_risk_tools = spec.to_low_risk_api_tools();
+        assert_eq!(low_risk_tools.len(), 2);
+
+        // Sorted by name
+        assert_eq!(low_risk_tools[0]["name"], "grep_search");
+        assert_eq!(low_risk_tools[1]["name"], "read_file");
+
+        // High-risk tool excluded
+        let names: Vec<&str> = low_risk_tools
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"write_file"));
     }
 
     #[test]
