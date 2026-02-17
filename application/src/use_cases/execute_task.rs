@@ -340,6 +340,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                          Call the tool NOW. Do not respond with text.",
                         task.tool_name.as_deref().unwrap_or("?")
                     );
+                    self.conversation_logger.log(ConversationEvent::new(
+                        "llm_prompt",
+                        serde_json::json!({
+                            "task_id": task_id_str,
+                            "model": session.model().to_string(),
+                            "bytes": nudge.len(),
+                            "text": nudge,
+                            "nudge": true,
+                        }),
+                    ));
                     response = match send_with_tools_cancellable(
                         session,
                         &nudge,
@@ -455,8 +465,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                         "duration_ms": result.metadata.duration_ms,
                     });
                     if is_error {
-                        tool_result_payload["error"] =
-                            serde_json::Value::String(output.clone());
+                        tool_result_payload["error"] = serde_json::Value::String(output.clone());
                     }
                     self.conversation_logger
                         .log(ConversationEvent::new("tool_result", tool_result_payload));
@@ -610,8 +619,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     "duration_ms": result.metadata.duration_ms,
                 });
                 if is_error {
-                    tool_result_payload["error"] =
-                        serde_json::Value::String(output.clone());
+                    tool_result_payload["error"] = serde_json::Value::String(output.clone());
                 }
                 self.conversation_logger
                     .log(ConversationEvent::new("tool_result", tool_result_payload));
