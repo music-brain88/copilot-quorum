@@ -709,7 +709,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     /// Apply a routed TuiEvent to the appropriate interaction pane
     fn apply_routed_tui_event(&self, state: &mut TuiState, routed: RoutedTuiEvent) {
         if let Some(id) = routed.interaction_id {
-            if self.apply_tui_event_to_interaction(state, id, routed.event.clone()) {
+            if state.tabs.find_tab_index_by_interaction(id).is_some() {
+                self.apply_tui_event_to_interaction(state, id, routed.event);
                 return;
             }
         }
@@ -717,16 +718,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self.apply_tui_event(state, routed.event);
     }
 
-    /// Apply event to a specific interaction pane. Returns true if handled.
+    /// Apply event to a specific interaction pane.
+    ///
+    /// Caller must verify that the tab for `id` exists before calling.
     fn apply_tui_event_to_interaction(
         &self,
         state: &mut TuiState,
         id: InteractionId,
         event: TuiEvent,
-    ) -> bool {
-        if state.tabs.find_tab_index_by_interaction(id).is_none() {
-            return false;
-        }
+    ) {
 
         match event {
             TuiEvent::StreamChunk(chunk) => {
@@ -1103,8 +1103,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             | TuiEvent::StrategyChanged(_)
             | TuiEvent::CommandError(_) => {}
         }
-        true
     }
+
     /// Apply a TuiEvent (from progress bridge or presenter) to state
     fn apply_tui_event(&self, state: &mut TuiState, event: TuiEvent) {
         match event {
@@ -1638,11 +1638,7 @@ async fn controller_task<
                             continue;
                         }
 
-                        let cmd_str = if command.starts_with("/") {
-                            command.clone()
-                        } else {
-                            format!("/{}", command)
-                        };
+                        let cmd_str = format!("/{}", command);
 
                         let iid = interaction_id.unwrap_or_else(|| controller.active_interaction_id());
                         let progress = TuiProgressBridge::new(progress_tx.clone(), Some(iid));
