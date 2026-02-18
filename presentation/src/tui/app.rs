@@ -833,11 +833,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
                 state.set_flash(format!("Tool error: {} - {}", tool_name, message));
             }
-            TuiEvent::InteractionSpawned { id, form, query } => {
-                let kind = PaneKind::Interaction(form, Some(id));
-                state.tabs.create_tab(kind);
-                state.tabs.active_pane_mut().set_title_if_empty(&query);
-            }
             TuiEvent::InteractionCompleted {
                 parent_id,
                 result_text,

@@ -67,7 +67,7 @@ where
     /// - "Multi-Agent Debate" (ICLR 2025): Debate leads to "degeneration of thought"
     /// - "Beyond Majority Voting" (NeurIPS 2024): Advanced aggregation methods
     ///
-    /// See `docs/features/ensemble-mode.md` for detailed design rationale.
+    /// See `docs/concepts/ensemble-mode.md` for detailed design rationale.
     ///
     /// # Errors
     ///

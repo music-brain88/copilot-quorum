@@ -61,11 +61,8 @@ pub enum TuiEvent {
     AgentError(String),
 
     // -- Interaction lifecycle --
-    InteractionSpawned {
-        id: InteractionId,
-        form: InteractionForm,
-        query: String,
-    },
+    // Note: InteractionSpawned is handled directly in presenter.apply() to avoid
+    // a select! loop race condition with subsequent UiEvents.
     InteractionCompleted {
         parent_id: Option<InteractionId>,
         result_text: String,
