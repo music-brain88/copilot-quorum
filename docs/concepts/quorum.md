@@ -231,15 +231,15 @@ RunQuorumUseCase
 
 非同期処理は `tokio` ランタイム上で `JoinSet` を使って並列化されています。
 
-### OrchestrationStrategy
+### StrategyExecutor
 
 Quorum Discussion の実行フローはプラグイン可能な戦略パターンで実装されています。
-`OrchestrationStrategy` trait を実装することで、新しい議論戦略を追加できます。
+`StrategyExecutor` trait を実装することで、新しい議論戦略を追加できます。
 
 ```rust
-/// Trait for orchestration strategies (domain/src/orchestration/strategy.rs)
+/// Trait for executing orchestration strategies (domain/src/orchestration/strategy.rs)
 #[async_trait]
-pub trait OrchestrationStrategy: Send + Sync {
+pub trait StrategyExecutor: Send + Sync {
     fn name(&self) -> &'static str;
     fn phases(&self) -> Vec<Phase>;
     async fn execute<G: LlmGateway>(
@@ -269,4 +269,4 @@ pub trait OrchestrationStrategy: Send + Sync {
 - [Ensemble Mode](./ensemble-mode.md) - 複数モデルの独立計画生成で Quorum の仕組みを活用
 - [CLI & Configuration](../guides/cli-and-configuration.md) - `/discuss` コマンドで Discussion を実行
 
-<!-- LLM Context: Quorum は copilot-quorum のコア概念。Discussion は 3 フェーズ（Initial Query → Peer Review → Synthesis）の議論プロセス。Consensus は Vote + QuorumRule による承認/却下メカニズム。主要ファイルは domain/src/quorum/ と application/src/use_cases/run_quorum.rs。 -->
+<!-- LLM Context: Quorum は copilot-quorum のコア概念。Discussion は 3 フェーズ（Initial Query → Peer Review → Synthesis）の議論プロセス。Consensus は Vote + QuorumRule による承認/却下メカニズム。StrategyExecutor trait（旧 OrchestrationStrategy trait）で議論戦略をプラグイン可能。OrchestrationStrategy は enum（Quorum/Debate の variant）。主要ファイルは domain/src/quorum/（vote.rs, rule.rs, consensus.rs）、domain/src/orchestration/strategy.rs（StrategyExecutor trait, OrchestrationStrategy enum）、application/src/use_cases/run_quorum.rs（RunQuorumUseCase）。 -->

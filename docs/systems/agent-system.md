@@ -41,6 +41,21 @@ copilot-quorum --chat
 
 ### Agent Lifecycle / エージェントライフサイクル
 
+エージェントの実行フローは `PhaseScope` によって制御されます。
+各フェーズの実行可否は以下の表の通りです：
+
+| Phase                  | Full | Fast  | PlanOnly    |
+|------------------------|------|-------|-------------|
+| 1. Context Gathering   | yes  | yes   | yes         |
+| 2. Planning            | yes  | yes   | yes         |
+| 3. Plan Review (Quorum)| yes  | skip  | skip        |
+| 3b. Execution Confirm  | yes  | skip  | skip        |
+| 4. Executing           | yes  | yes   | skip+return |
+|    - Action Review     | yes  | skip  | N/A         |
+| 5. Final Review        | opt  | skip  | N/A         |
+
+定義ファイル: `application/src/use_cases/run_agent/mod.rs`
+
 ```
 User Request
     │
@@ -48,22 +63,27 @@ User Request
 ┌───────────────────┐
 │ Context Gathering │  ← プロジェクト情報収集 (glob, read_file)
 └───────────────────┘    exploration_model を使用
-    │
+    │                    ResourceReference 自動解決（GitHub Issue/PR）
     ▼
 ┌───────────────────┐
-│     Planning      │  ← 単一モデルがタスク計画を作成
-└───────────────────┘    decision_model を使用
+│     Planning      │  ← Solo: decision_model が計画作成
+└───────────────────┘    Ensemble: review_models が並列生成 → 投票
     │
     ▼
 ╔═══════════════════════════╗
-║  Quorum Consensus #1     ║  ← 全モデルが計画をレビュー（必須）
+║  Quorum Consensus #1     ║  ← 全モデルが計画をレビュー（PhaseScope::Full のみ）
 ║  Plan Review              ║    QuorumRule に基づく投票で承認/却下
 ╚═══════════════════════════╝
     │
     ▼
+┌─── Execution Confirm ────┐  ← PhaseScope::Full + Interactive のみ
+│  "本当に実行しますか？"     │    HilMode に応じて自動/手動判断
+└───────────────────────────┘
+    │
+    ▼
 ┌───────────────────┐
-│  Task Execution   │
-│   ├─ Low-risk  ────▶ 直接実行
+│  Task Execution   │   ← Native Tool Use マルチターンループ
+│   ├─ Low-risk  ────▶ 直接実行（並列）
 │   │
 │   └─ High-risk ────▶ ╔═══════════════════════════╗
 │                       ║  Quorum Consensus #2     ║
@@ -82,8 +102,9 @@ User Request
 
 | Review | Timing | Required | Purpose |
 |--------|--------|----------|---------|
-| **Plan Review** | 計画作成後 | 必須 | 計画の安全性・正確性を検証 |
-| **Action Review** | 高リスクツール実行前 | 高リスク操作時 | 書き込み・コマンド実行の安全性検証 |
+| **Plan Review** | 計画作成後 | PhaseScope::Full | 計画の安全性・正確性を検証 |
+| **Execution Confirm** | 計画承認後 | PhaseScope::Full + Interactive | 実行前の最終確認 |
+| **Action Review** | 高リスクツール実行前 | PhaseScope::Full | 書き込み・コマンド実行の安全性検証 |
 | **Final Review** | 全タスク完了後 | オプション | 実行結果全体の品質検証 |
 
 ### Risk-Based Tool Classification / リスクベースのツール分類
@@ -93,21 +114,26 @@ User Request
 | `read_file` | Low | No | 読み取り専用 |
 | `glob_search` | Low | No | 読み取り専用 |
 | `grep_search` | Low | No | 読み取り専用 |
+| `web_fetch` | Low | No | 読み取り専用（`web-tools` feature） |
+| `web_search` | Low | No | 読み取り専用（`web-tools` feature） |
 | `write_file` | **High** | **Yes** | ファイルシステムを変更 |
 | `run_command` | **High** | **Yes** | 外部コマンド実行、元に戻すのが困難 |
 
 ### Plan Review Details / 計画レビューの詳細
 
-計画レビューは **常に必須** です（`require_plan_review: true` は変更不可）。
+計画レビューは `PhaseScope::Full` で実行されます（Fast/PlanOnly ではスキップ）。
 
-1. 全ての review_models に計画を並列送信
+1. 全ての review_models に計画を並列送信（`JoinSet` で並行実行）
 2. 各モデルが APPROVE / REJECT を投票
 3. QuorumRule（デフォルト: 過半数）で判定
 4. 却下時は全モデルのフィードバックを集約し、計画を修正 → 再投票
 
+実装: `application/src/use_cases/run_agent/review.rs` — `review_plan()`, `query_model_for_review()`
+
 ### Action Review Details / アクションレビューの詳細
 
 高リスクツール（`write_file`, `run_command`）の実行前に自動発動します。
+`QuorumActionReviewer` が `ActionReviewer` trait を実装し、マルチモデル投票で判断します。
 
 判断基準:
 - 操作は必要か？
@@ -115,6 +141,31 @@ User Request
 - より安全な代替手段はないか？
 
 却下されたアクションはスキップされます（エラーではない）。
+
+実装: `application/src/use_cases/run_agent/review.rs` — `QuorumActionReviewer`
+
+---
+
+## InteractionForm / インタラクション形式
+
+エージェントは `InteractionForm` の一形態として実行されます。
+TUI では各インタラクションが独立したタブで実行されます。
+
+| Form | Description | 使用する設定 |
+|------|-------------|------------|
+| `Agent` | 自律タスク実行（計画・ツール使用・レビュー） | SessionMode, AgentPolicy, ExecutionParams |
+| `Ask` | 単発の質問→回答（読み取り専用ツールのみ） | SessionMode (モデル選択), ExecutionParams (max_tool_turns) |
+| `Discuss` | マルチモデル議論 / Quorum council | SessionMode (consensus + strategy) |
+
+```
+TUI                          Application
+───                          ───────────
+:ask "question"  ──────────→ RunAskUseCase
+:agent "task"    ──────────→ RunAgentUseCase
+:discuss "topic" ──────────→ RunQuorumUseCase
+```
+
+定義ファイル: `domain/src/interaction/mod.rs`
 
 ---
 
@@ -124,6 +175,10 @@ User Request
 
 Quorum が合意に至らない場合、エージェントは無限にリトライする代わりに、
 ユーザーに判断を委ねることができます。
+
+HiL には 2 つのゲートがあります：
+1. **Plan Review HiL**: `max_plan_revisions` 到達時
+2. **Execution Confirmation**: 計画承認後、タスク実行前（`PhaseScope::Full` のみ）
 
 ```
 Planning → Review REJECTED → Revision 1
@@ -156,6 +211,19 @@ Continue or Abort
 | `Interactive` | ユーザーにプロンプトを表示して判断を求める（デフォルト） |
 | `AutoReject` | 自動的に中止する |
 | `AutoApprove` | 自動的に最後の計画を承認する（危険！） |
+
+### Execution Confirmation Gate / 実行確認ゲート
+
+`PhaseScope::Full` の場合、計画が承認された後でもタスク実行前に追加の確認ゲートがあります。
+`HilMode` に応じた決定ソース：
+
+| HilMode | 動作 |
+|---------|------|
+| `Interactive` | `HumanInterventionPort::request_execution_confirmation()` |
+| `AutoApprove` | 自動承認 |
+| `AutoReject` | 自動拒否（計画は作成されるが実行されない） |
+
+実装: `application/src/use_cases/run_agent/hil.rs` — `handle_execution_confirmation()`
 
 ### Interactive Mode UI / インタラクティブモード UI
 
@@ -191,6 +259,36 @@ Commands:
 
 agent-hil>
 ```
+
+---
+
+## Resource Reference Resolution / リソース参照の自動解決
+
+Context Gathering フェーズで、ユーザーリクエスト中の GitHub Issue/PR 参照を自動検出・解決します。
+
+### ResourceReference 抽出
+
+`extract_references()` がテキストから以下のパターンを認識します（優先度順）：
+
+| パターン | 例 | 結果 |
+|---------|-----|------|
+| GitHub URL | `github.com/owner/repo/issues/123` | `GitHubIssue { repo: Some("owner/repo"), number: 123 }` |
+| クロスリポジトリ | `owner/repo#123` | `GitHubIssue { repo: Some("owner/repo"), number: 123 }` |
+| 型付き明示 | `PR #123`, `Issue #42` | 対応する型 |
+| 範囲参照 | `#10-15` (差が≤10) | `GitHubIssue` × 6 |
+| ベア参照 | `#123` | `GitHubIssue { repo: None, number: 123 }` |
+
+定義ファイル: `domain/src/context/reference.rs`
+
+### GitHubReferenceResolver
+
+`gh` CLI を使用して Issue/PR の内容を取得します。
+
+- `try_new()`: `gh` のインストール・認証を確認、失敗時は `None`（graceful degradation）
+- `gh issue view`: Issues と PR の両方に対応（GitHub API は同一エンドポイント）
+- `resolve_all()`: `futures::join_all()` で並列解決
+
+定義ファイル: `infrastructure/src/reference/github.rs`
 
 ---
 
@@ -323,49 +421,118 @@ strategy = "quorum"            # "quorum" or "debate"
 
 ## Architecture / アーキテクチャ
 
+### run_agent/ ディレクトリ構造
+
+`RunAgentUseCase` の実装は責務ごとにモジュール分割されています：
+
+| File | Description |
+|------|-------------|
+| `mod.rs` | メインフロー（`execute_with_progress`）、`RunAgentUseCase` 定義、Flow テスト基盤 |
+| `types.rs` | `RunAgentInput`, `RunAgentOutput`, `RunAgentError`, `PlanningResult`, `QuorumReviewResult` |
+| `hil.rs` | `handle_human_intervention()`, `handle_execution_confirmation()` |
+| `planning.rs` | `create_plan()`, `create_ensemble_plans()`（並列生成 + 投票 + 選択） |
+| `review.rs` | `review_plan()`, `final_review()`, `QuorumActionReviewer`（`ActionReviewer` 実装） |
+
+### ToolExecution State Machine / ツール実行ステートマシン
+
+個々のツール呼び出しのライフサイクルを追跡するステートマシンです。
+
+```
+Pending ──> Running ──> Completed
+                   └──> Error
+```
+
+各状態は tagged union として実装され、その状態でのみ有効なフィールドを持ちます：
+
+| State | Fields | Description |
+|-------|--------|-------------|
+| `Pending` | tool_name, arguments, native_id | ツール呼び出し受信、実行待ち |
+| `Running` | + started_at | 実行中 |
+| `Completed` | + completed_at, output_preview, metadata | 正常完了 |
+| `Error` | + failed_at, error_message | 実行失敗 |
+
+遷移メソッド: `mark_running()`, `mark_completed(&ToolResult)`, `mark_error(message)`
+不正な遷移（例: Pending→Completed）は no-op として安全に処理されます。
+
+定義ファイル: `domain/src/agent/tool_execution.rs`
+
 ### Key Files / 主要ファイル
 
 | File | Description |
 |------|-------------|
-| `domain/src/agent/entities.rs` | `AgentState`, `Plan`, `Task`, `AgentPhase` |
+| `domain/src/agent/entities.rs` | `AgentState`, `Plan`, `Task`, `AgentPhase`, `ReviewRound`, `ModelVote` |
 | `domain/src/agent/model_config.rs` | `ModelConfig`（ロールベースモデル設定） |
 | `domain/src/agent/agent_policy.rs` | `AgentPolicy`, `HilAction`（ドメインポリシー） |
+| `domain/src/agent/tool_execution.rs` | `ToolExecution`, `ToolExecutionState`（ステートマシン） |
+| `domain/src/agent/validation.rs` | `ConfigIssue`, `ConfigIssueCode`, `Severity` |
 | `domain/src/orchestration/session_mode.rs` | `SessionMode`（runtime-mutable オーケストレーション設定） |
-| `domain/src/agent/validation.rs` | `ConfigIssue`, `ConfigIssueCode`, `Severity`（組み合わせバリデーション） |
-| `domain/src/agent/value_objects.rs` | `AgentId`, `AgentContext`, `TaskResult`, `Thought` |
+| `domain/src/context/reference.rs` | `ResourceReference`, `extract_references()` |
+| `domain/src/interaction/mod.rs` | `InteractionForm` (`Agent`, `Ask`, `Discuss`) |
 | `domain/src/tool/entities.rs` | `ToolDefinition`, `ToolCall`, `ToolSpec`, `RiskLevel` |
-| `domain/src/tool/value_objects.rs` | `ToolResult`, `ToolError` |
-| `domain/src/tool/traits.rs` | `ToolValidator` |
-| `domain/src/prompt/agent.rs` | `AgentPromptTemplate` |
-| `application/src/ports/tool_executor.rs` | `ToolExecutorPort` trait |
+| `application/src/use_cases/run_agent/` | `RunAgentUseCase` — メインフロー（5モジュール分割） |
 | `application/src/config/execution_params.rs` | `ExecutionParams`（実行ループ制御） |
-| `application/src/config/quorum_config.rs` | `QuorumConfig`（4型コンテナ、Buffer 伝播用） |
-| `application/src/use_cases/run_agent.rs` | `RunAgentUseCase`, `RunAgentInput`, `RunAgentOutput`, `AgentProgressNotifier` |
+| `application/src/config/quorum_config.rs` | `QuorumConfig`（4型コンテナ） |
+| `application/src/ports/agent_progress.rs` | `AgentProgressNotifier`（進捗通知ポート） |
+| `application/src/ports/ui_event.rs` | `UiEvent`（Application→Presentation 出力ポート） |
+| `infrastructure/src/reference/github.rs` | `GitHubReferenceResolver`（`gh` CLI 解決） |
 | `infrastructure/src/tools/` | `LocalToolExecutor` 実装 |
-| `presentation/src/agent/repl.rs` | エージェント REPL UI |
 
 ### Data Flow / データフロー
 
 ```
-RunAgentUseCase (Application層)
+RunAgentUseCase::execute_with_progress() (Application層)
 │
-├── gather_context()
-│   └── ToolExecutorPort.execute(glob_search, read_file)
+├── Phase 1: GatherContextUseCase.execute()
+│   ├── ToolExecutorPort.execute(glob_search, read_file)
+│   ├── extract_references(request) → Vec<ResourceReference>
+│   └── ReferenceResolverPort.resolve_all(refs) → GitHub Issue/PR 内容
 │
-├── create_plan()
-│   └── LlmSession.chat() → Plan
+├── Phase 2: create_plan() or create_ensemble_plans()
+│   ├── Solo: LlmSession.send_with_tools() → Plan (Native Tool Use)
+│   └── Ensemble: JoinSet で並列生成 → 投票 → 選択
 │
-├── review_plan() → QuorumReviewResult
+├── Phase 3: review_plan() → QuorumReviewResult
 │   ├── Model A: Vote (APPROVE/REJECT)
 │   ├── Model B: Vote
 │   └── Model C: Vote
+│   └── Rejected → plan_feedback → loop back to Phase 2
 │
-├── execute_tasks()
-│   ├── Low-risk tool → ToolExecutorPort.execute()
-│   └── High-risk tool → review_action() → ToolExecutorPort.execute()
+├── Phase 3b: handle_execution_confirmation()
+│   └── PhaseScope::Full + Interactive → HumanInterventionPort
 │
-└── final_review() → QuorumReviewResult (optional)
+├── Phase 4: ExecuteTaskUseCase.execute()
+│   ├── Native Tool Use multi-turn loop
+│   ├── Low-risk tool → ToolExecutorPort.execute() (並列)
+│   └── High-risk tool → QuorumActionReviewer → ToolExecutorPort.execute()
+│
+└── Phase 5: final_review() → QuorumReviewResult (optional)
 ```
+
+### UiEvent Output Port / UI イベント出力ポート
+
+`UiEvent` は Application 層から Presentation 層への出力ポートです。
+`AgentController` がユースケースの結果を `UiEvent` に変換し、
+`TuiPresenter` / `ReplPresenter` が受け取ってレンダリングします。
+
+```
+AgentController ──→ UiEvent ──→ TuiPresenter ──→ TuiState mutations
+                                ReplPresenter ──→ Console output
+```
+
+主なイベント：
+
+| Category | Events |
+|----------|--------|
+| Welcome & Info | `Welcome(WelcomeInfo)`, `ConfigDisplay(ConfigSnapshot)` |
+| Mode Changes | `ModeChanged`, `ScopeChanged`, `StrategyChanged` |
+| Agent Execution | `AgentStarting`, `AgentResult`, `AgentError` |
+| Interaction | `InteractionSpawned`, `InteractionCompleted`, `InteractionSpawnError` |
+| Ask | `AskStarting`, `AskResult`, `AskError` |
+| Quorum | `QuorumStarting`, `QuorumResult`, `QuorumError` |
+| Context Init | `ContextInitStarting`, `ContextInitResult`, `ContextInitError` |
+| Errors | `CommandError`, `UnknownCommand` |
+
+定義ファイル: `application/src/ports/ui_event.rs`
 
 ### Progress Notification / 進捗通知
 
@@ -373,7 +540,7 @@ RunAgentUseCase (Application層)
 
 > **Note**: 進捗通知には 2 つの trait があります：
 > - `ProgressNotifier`（`domain/src/orchestration/strategy.rs`）— Quorum Discussion のフェーズ進行通知（ドメイン層）
-> - `AgentProgressNotifier`（`application/src/use_cases/run_agent.rs`）— エージェント実行全体の進捗通知（アプリケーション層）
+> - `AgentProgressNotifier`（`application/src/ports/agent_progress.rs`）— エージェント実行全体の進捗通知（アプリケーション層）
 >
 > 両者は別の trait であり、`ProgressNotifier` は Quorum Discussion の各フェーズ（Initial Query → Peer Review → Synthesis）を、`AgentProgressNotifier` はエージェントの各フェーズ（Planning → Execution → Review 等）を通知します。
 
@@ -383,23 +550,22 @@ RunAgentUseCase (Application層)
 | **メインループ** (`execute_with_progress`) | 結果に基づき UI 通知を発火 |
 | **AgentProgressNotifier** (Presentation 層) | UI 更新、フィードバック表示 |
 
-```rust
-pub trait AgentProgressNotifier: Send + Sync {
-    fn on_phase_change(&self, phase: &AgentPhase);
-    fn on_thought(&self, thought: &Thought);
-    fn on_task_start(&self, task: &Task, index: usize, total: usize);
-    fn on_task_complete(&self, task: &Task, success: bool, index: usize, total: usize);
-    fn on_tool_call(&self, tool_name: &str, args: &str);
-    fn on_tool_result(&self, tool_name: &str, success: bool);
-    fn on_quorum_start(&self, phase: &str, model_count: usize);
-    fn on_quorum_model_complete(&self, model: &Model, approved: bool);
-    fn on_quorum_complete(&self, phase: &str, approved: bool, feedback: Option<&str>);
-    // ... tool error/retry, plan revision, action retry,
-    //     quorum_complete_with_votes, human_intervention_required,
-    //     ensemble start/plan_generated/voting_start/complete
-    //     (全 18 メソッド — 詳細は application/src/use_cases/run_agent.rs 参照)
-}
-```
+`AgentProgressNotifier` のコールバックカテゴリ：
+
+| Category | Callbacks |
+|----------|-----------|
+| Phase | `on_phase_change` |
+| Reasoning | `on_thought` |
+| Task | `on_task_start`, `on_task_complete` |
+| Tool | `on_tool_call`, `on_tool_result`, `on_tool_error`, `on_tool_retry`, `on_tool_not_found`, `on_tool_resolved` |
+| Tool Execution Lifecycle | `on_tool_execution_created`, `on_tool_execution_started`, `on_tool_execution_completed`, `on_tool_execution_failed` |
+| LLM Streaming | `on_llm_chunk`, `on_llm_stream_start`, `on_llm_stream_end` |
+| Plan Revision | `on_plan_revision`, `on_action_retry` |
+| Quorum | `on_quorum_start`, `on_quorum_model_complete`, `on_quorum_complete`, `on_quorum_complete_with_votes` |
+| HiL | `on_human_intervention_required`, `on_execution_confirmation_required` |
+| Ensemble | `on_ensemble_start`, `on_ensemble_plan_generated`, `on_ensemble_voting_start`, `on_ensemble_model_failed`, `on_ensemble_complete`, `on_ensemble_fallback` |
+
+全メソッドにはデフォルトの no-op 実装があり、必要なコールバックのみオーバーライドできます。
 
 ### ReviewRound & ModelVote
 
@@ -439,6 +605,15 @@ pub trait HumanInterventionPort: Send + Sync {
         plan: &Plan,
         review_history: &[ReviewRound],
     ) -> Result<HumanDecision, HumanInterventionError>;
+
+    async fn request_execution_confirmation(
+        &self,
+        request: &str,
+        plan: &Plan,
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        // デフォルト実装: 自動承認（後方互換性）
+        Ok(HumanDecision::Approve)
+    }
 }
 
 pub enum HumanDecision {
@@ -461,6 +636,8 @@ pub enum HumanDecision {
 - [Quorum Discussion & Consensus](../concepts/quorum.md) - エージェントが使用する合議メカニズム
 - [Ensemble Mode](../concepts/ensemble-mode.md) - マルチモデル計画生成モード
 - [Tool System](./tool-system.md) - エージェントが使用するツールの詳細
+- [Native Tool Use](./native-tool-use.md) - 構造化ツール呼び出し API
+- [TUI](../guides/tui.md) - エージェントの TUI インターフェース
 - [CLI & Configuration](../guides/cli-and-configuration.md) - エージェントの設定と REPL コマンド
 
-<!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。設定は4型に分割: SessionMode(domain, runtime-mutable: consensus_level/phase_scope/strategy)、ModelConfig(domain: exploration/decision/review)、AgentPolicy(domain: hil_mode/require_plan_review/require_final_review/max_plan_revisions)、ExecutionParams(application: max_iterations/max_tool_turns/max_tool_retries/working_dir/ensemble_session_timeout)。QuorumConfig(application)が4型コンテナとしてBuffer間の伝播を担う。組み合わせバリデーション: SessionMode::validate_combination()。Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。定義は domain/src/agent/validation.rs + domain/src/orchestration/session_mode.rs。主要ファイルは domain/src/agent/、domain/src/orchestration/session_mode.rs、application/src/config/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->
+<!-- LLM Context: Agent System は Solo/Ensemble モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum) → Execution Confirm → Task Execution → Final Review のフロー。PhaseScope (Full/Fast/PlanOnly) でフェーズ範囲を制御。高リスクツールは Action Review (QuorumActionReviewer) が必須。HiL は 2 ゲート: Plan Review HiL (max_plan_revisions 到達時) と Execution Confirmation (PhaseScope::Full のみ)。run_agent/ は 5 モジュール分割: mod.rs (メインフロー), types.rs, hil.rs, planning.rs, review.rs。ToolExecution ステートマシン (Pending→Running→Completed/Error) が domain/src/agent/tool_execution.rs。UiEvent 出力ポートが application/src/ports/ui_event.rs で Application→Presentation の構造化イベント伝達。AgentProgressNotifier (application/src/ports/agent_progress.rs) は 6 カテゴリ・26+ コールバック。ResourceReference (domain/src/context/reference.rs) と GitHubReferenceResolver (infrastructure/src/reference/github.rs) で GitHub Issue/PR 自動解決。InteractionForm (Agent/Ask/Discuss) が domain/src/interaction/mod.rs。設定は 4 型分割: SessionMode, ModelConfig, AgentPolicy, ExecutionParams。QuorumConfig (application) が 4 型コンテナ。組み合わせバリデーション: SessionMode::validate_combination()。 -->

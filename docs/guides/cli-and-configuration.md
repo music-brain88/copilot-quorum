@@ -245,7 +245,8 @@ context_header = true          # $EDITOR 起動時のコンテキストヘッダ
 | File | Description |
 |------|-------------|
 | `presentation/src/cli/commands.rs` | CLAP CLI コマンド定義 |
-| `presentation/src/agent/repl.rs` | REPL 実装（コマンド処理、プロンプト表示） |
+| `presentation/src/tui/app.rs` | TUI アプリケーション（コマンド処理、REPL 統合） |
+| `presentation/src/agent/presenter.rs` | REPL プレゼンター（UiEvent レンダリング） |
 | `infrastructure/src/config/file_config.rs` | TOML 設定構造定義 |
 | `infrastructure/src/config/loader.rs` | 設定ローダー（優先順位処理） |
 | `domain/src/config/` | `OutputFormat` など設定ドメイン型 |

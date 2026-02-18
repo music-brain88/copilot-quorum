@@ -195,11 +195,14 @@ The agent system extends quorum to autonomous task execution with safety through
 
 | Document | Description |
 |----------|-------------|
-| [tui.md](docs/guides/tui.md) | Modal TUI（モーダルインターフェース） |
+| [tui.md](docs/guides/tui.md) | Modal TUI（Tab/Pane、Actorパターン） |
+| [cli-and-configuration.md](docs/guides/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |
 | [quorum.md](docs/concepts/quorum.md) | Quorum Discussion & Consensus |
-| [agent-system.md](docs/systems/agent-system.md) | Agent System + HiL |
 | [ensemble-mode.md](docs/concepts/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
+| [interaction-model.md](docs/concepts/interaction-model.md) | InteractionForm、ContextMode、ネスティング |
+| [agent-system.md](docs/systems/agent-system.md) | Agent System + HiL + ToolExecution |
 | [tool-system.md](docs/systems/tool-system.md) | Tool System（プラグイン、リスク分類） |
 | [native-tool-use.md](docs/systems/native-tool-use.md) | Native Tool Use API（構造化ツール呼び出し） |
 | [transport.md](docs/systems/transport.md) | Transport Demultiplexer（並列セッションルーティング） |
-| [cli-and-configuration.md](docs/guides/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |
+| [logging.md](docs/systems/logging.md) | ログシステム（ConversationLogger、JSONL） |
+| [vision/](docs/vision/README.md) | 将来ビジョン（Knowledge、Workflow、Extension） |
