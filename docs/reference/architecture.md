@@ -659,7 +659,7 @@ Quorum（合意形成）に関する型を定義します。
 | `MessageRouter` | - | TCP demultiplexer（セッション間メッセージルーティング） |
 | `SessionChannel` | - | セッション専用の受信チャネル |
 
-> 詳細は [features/transport.md](./features/transport.md) を参照してください。
+> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
 
 ### Tools Adapter
 
@@ -810,7 +810,7 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 
 ### Transport Demultiplexer / トランスポート多重分離
 
-> 詳細は [features/transport.md](./features/transport.md) を参照してください。
+> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
 
 単一の TCP 接続上で複数セッションを並列運用するため、`MessageRouter` がメッセージを
 session_id ベースで各 `SessionChannel` にルーティングします。
@@ -857,13 +857,13 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 
 各 `JoinSet::spawn` 内で `gateway.create_session()` が呼ばれ、`MessageRouter` が
 session_id 毎に独立した `SessionChannel` を払い出すため、並列セッション間でメッセージが
-混線することはありません（詳細は [features/transport.md](./features/transport.md)）。
+混線することはありません（詳細は [systems/transport.md](../systems/transport.md)）。
 
 ---
 
 ## Agent System / エージェントシステム
 
-> 詳細は [features/agent-system.md](./features/agent-system.md) を参照してください。
+> 詳細は [systems/agent-system.md](../systems/agent-system.md) を参照してください。
 
 エージェントシステムは、Quorumの概念を自律タスク実行に拡張したものです。
 Solo モードで動作し、重要なポイントでは Quorum Consensus によるレビューを行います。
@@ -960,7 +960,7 @@ UseCase (Application層)
 
 ## Tool Provider System / ツールプロバイダーシステム
 
-> 詳細は [features/tool-system.md](./features/tool-system.md) を参照してください。
+> 詳細は [systems/tool-system.md](../systems/tool-system.md) を参照してください。
 
 ツールプロバイダーシステムは、**プラグインベースのオーケストレーション**アーキテクチャを採用しています。
 Quorum はツールの呼び出し・連携に専念し、実際のツール実装は外部プロバイダーに委譲します。

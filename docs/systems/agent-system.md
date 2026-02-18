@@ -458,9 +458,9 @@ pub enum HumanDecision {
 
 ## Related Features / 関連機能
 
-- [Quorum Discussion & Consensus](./quorum.md) - エージェントが使用する合議メカニズム
-- [Ensemble Mode](./ensemble-mode.md) - マルチモデル計画生成モード
+- [Quorum Discussion & Consensus](../concepts/quorum.md) - エージェントが使用する合議メカニズム
+- [Ensemble Mode](../concepts/ensemble-mode.md) - マルチモデル計画生成モード
 - [Tool System](./tool-system.md) - エージェントが使用するツールの詳細
-- [CLI & Configuration](./cli-and-configuration.md) - エージェントの設定と REPL コマンド
+- [CLI & Configuration](../guides/cli-and-configuration.md) - エージェントの設定と REPL コマンド
 
 <!-- LLM Context: Agent System は Solo モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum Consensus) → Execution → Final Review のフロー。高リスクツールは Action Review が必須。HiL で人間介入も可能。設定は4型に分割: SessionMode(domain, runtime-mutable: consensus_level/phase_scope/strategy)、ModelConfig(domain: exploration/decision/review)、AgentPolicy(domain: hil_mode/require_plan_review/require_final_review/max_plan_revisions)、ExecutionParams(application: max_iterations/max_tool_turns/max_tool_retries/working_dir/ensemble_session_timeout)。QuorumConfig(application)が4型コンテナとしてBuffer間の伝播を担う。組み合わせバリデーション: SessionMode::validate_combination()。Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。定義は domain/src/agent/validation.rs + domain/src/orchestration/session_mode.rs。主要ファイルは domain/src/agent/、domain/src/orchestration/session_mode.rs、application/src/config/、application/src/use_cases/run_agent.rs、infrastructure/src/tools/。 -->

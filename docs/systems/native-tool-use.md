@@ -375,7 +375,7 @@ execute_task_native()
 
 - [Tool System](./tool-system.md) - ツールの定義、リスク分類、プロバイダーアーキテクチャ
 - [Agent System](./agent-system.md) - エージェントライフサイクルと Quorum Review
-- [Ensemble Mode](./ensemble-mode.md) - マルチモデル計画生成
-- [CLI & Configuration](./cli-and-configuration.md) - 設定オプション
+- [Ensemble Mode](../concepts/ensemble-mode.md) - マルチモデル計画生成
+- [CLI & Configuration](../guides/cli-and-configuration.md) - 設定オプション
 
 <!-- LLM Context: Native Tool Use API は LLM プロバイダーの構造化ツール呼び出し。LlmSession の send_with_tools() で API パラメータとしてツール定義を送信し、LlmResponse の ContentBlock::ToolUse から直接 ToolCall を抽出（テキストパース不要）。マルチターンループで StopReason::ToolUse の間ツール実行を繰り返す。Low-risk ツールは futures::join_all() で並列実行、High-risk は Quorum Review 後に順次実行。max_tool_turns（デフォルト10）でループ制限。主要ファイルは domain/src/session/response.rs、application/src/ports/llm_gateway.rs、application/src/use_cases/run_agent.rs。 -->

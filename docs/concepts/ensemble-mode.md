@@ -306,8 +306,8 @@ impl EnsemblePlanResult {
 ## Related Features / 関連機能
 
 - [Quorum Discussion & Consensus](./quorum.md) - Ensemble が活用する合議メカニズム
-- [Agent System](./agent-system.md) - Ensemble 計画の実行フロー
-- [CLI & Configuration](./cli-and-configuration.md) - `/ens` コマンドと設定
+- [Agent System](../systems/agent-system.md) - Ensemble 計画の実行フロー
+- [CLI & Configuration](../guides/cli-and-configuration.md) - `/ens` コマンドと設定
 
 ## References / 参考文献
 

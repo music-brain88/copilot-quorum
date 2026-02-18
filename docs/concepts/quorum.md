@@ -265,8 +265,8 @@ pub trait OrchestrationStrategy: Send + Sync {
 
 ## Related Features / 関連機能
 
-- [Agent System](./agent-system.md) - Quorum Consensus を計画・アクションレビューで使用
+- [Agent System](../systems/agent-system.md) - Quorum Consensus を計画・アクションレビューで使用
 - [Ensemble Mode](./ensemble-mode.md) - 複数モデルの独立計画生成で Quorum の仕組みを活用
-- [CLI & Configuration](./cli-and-configuration.md) - `/discuss` コマンドで Discussion を実行
+- [CLI & Configuration](../guides/cli-and-configuration.md) - `/discuss` コマンドで Discussion を実行
 
 <!-- LLM Context: Quorum は copilot-quorum のコア概念。Discussion は 3 フェーズ（Initial Query → Peer Review → Synthesis）の議論プロセス。Consensus は Vote + QuorumRule による承認/却下メカニズム。主要ファイルは domain/src/quorum/ と application/src/use_cases/run_quorum.rs。 -->

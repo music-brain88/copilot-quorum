@@ -11,22 +11,36 @@
 | Document | Description |
 |----------|-------------|
 | [README](../README.md) | プロジェクト概要・クイックスタート |
-| [ARCHITECTURE](./ARCHITECTURE.md) | DDD + オニオンアーキテクチャの詳細 |
-| [Features](./features/README.md) | 機能別ドキュメント |
+| [Architecture](./reference/architecture.md) | DDD + オニオンアーキテクチャの詳細 |
 
 ---
 
-## Features / 機能ドキュメント
-
-機能ごとの詳細ドキュメントは [features/](./features/README.md) にまとまっています：
+## Concepts / 概念
 
 | Document | Description |
 |----------|-------------|
 | [Quorum Discussion & Consensus](./features/quorum.md) | 複数モデルによる議論と合意形成 |
-| [Agent System](./features/agent-system.md) | 自律タスク実行と Human-in-the-Loop |
 | [Ensemble Mode](./features/ensemble-mode.md) | 研究に基づいたマルチモデル計画生成 |
-| [Tool System](./features/tool-system.md) | プラグインベースのツールアーキテクチャ |
+
+---
+
+## Guides / ガイド
+
+| Document | Description |
+|----------|-------------|
 | [CLI & Configuration](./features/cli-and-configuration.md) | REPL コマンド、設定、コンテキスト管理 |
+| [Modal TUI](./features/tui.md) | Neovim ライクなモーダルインターフェース |
+
+---
+
+## Systems / システム
+
+| Document | Description |
+|----------|-------------|
+| [Agent System](./features/agent-system.md) | 自律タスク実行と Human-in-the-Loop |
+| [Tool System](./features/tool-system.md) | プラグインベースのツールアーキテクチャ |
+| [Native Tool Use](./features/native-tool-use.md) | Native Tool Use API による構造化ツール呼び出し |
+| [Transport Demultiplexer](./features/transport.md) | 並列セッションのメッセージルーティング |
 
 ---
 
@@ -35,15 +49,22 @@
 ### For Users / ユーザー向け
 
 1. **[README](../README.md)** - インストールと基本的な使い方
-2. **[CLI & Configuration](./features/cli-and-configuration.md)** - REPL コマンドと設定
-3. **[Features](./features/README.md)** - 各機能の詳細
+2. **[CLI & Configuration](./features/cli-and-configuration.md)** - 設定とコマンド
+3. **[Modal TUI](./features/tui.md)** - モーダル TUI の使い方
+4. **[Quorum](./features/quorum.md)** - 合議の仕組み
+5. **[Agent System](./features/agent-system.md)** - エージェントの動作
 
 ### For Contributors / コントリビューター向け
 
 1. **[README](../README.md)** - プロジェクト概要
-2. **[ARCHITECTURE](./ARCHITECTURE.md)** - レイヤー構造とデータフロー
-3. **[Features](./features/README.md)** - 機能別の設計と実装ガイド
-4. **crate-level docs** - `cargo doc --open` で各crateのAPIドキュメント
+2. **[Architecture](./reference/architecture.md)** - レイヤー構造とデータフロー
+3. **[Quorum](./features/quorum.md)** - コアコンセプトの理解
+4. **[Tool System](./features/tool-system.md)** - ツール追加方法
+5. **[Native Tool Use](./features/native-tool-use.md)** - Native API によるツール呼び出し
+6. **[Ensemble Mode](./features/ensemble-mode.md)** - 設計判断の背景
+7. **[Transport Demultiplexer](./features/transport.md)** - 並列セッションの仕組み
+8. **[Agent System](./features/agent-system.md)** - エージェントアーキテクチャ
+9. **[TUI Design Philosophy](./reference/architecture.md#tui-design-philosophy--tui-設計思想)** - TUI 設計思想
 
 ---
 

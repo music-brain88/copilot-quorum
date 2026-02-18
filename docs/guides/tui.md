@@ -2,7 +2,7 @@
 
 > Neovim ライクなモーダルインターフェースの使い方
 >
-> 設計思想は [ARCHITECTURE.md](../ARCHITECTURE.md#tui-design-philosophy--tui-設計思想) を参照
+> 設計思想は [architecture.md](../reference/architecture.md#tui-design-philosophy--tui-設計思想) を参照
 
 ---
 
@@ -195,7 +195,7 @@ INSERT モードで書き始めて「長くなるな」と思ったら:
 
 ## Related / 関連
 
-- [ARCHITECTURE.md - TUI Design Philosophy](../ARCHITECTURE.md#tui-design-philosophy--tui-設計思想) — 設計思想の詳細
+- [architecture.md - TUI Design Philosophy](../reference/architecture.md#tui-design-philosophy--tui-設計思想) — 設計思想の詳細
 - [Discussion #58: Neovim-Style Extensible TUI](https://github.com/music-brain88/copilot-quorum/discussions/58) — 元の提案
 - [CLI & Configuration](./cli-and-configuration.md) — 設定オプション
 
