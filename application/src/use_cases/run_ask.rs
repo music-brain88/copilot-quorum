@@ -69,6 +69,17 @@ pub struct RunAskUseCase<G: LlmGateway, T: ToolExecutorPort> {
     conversation_logger: Arc<dyn ConversationLogger>,
 }
 
+impl<G: LlmGateway, T: ToolExecutorPort> Clone for RunAskUseCase<G, T> {
+    fn clone(&self) -> Self {
+        Self {
+            gateway: self.gateway.clone(),
+            tool_executor: self.tool_executor.clone(),
+            tool_schema: self.tool_schema.clone(),
+            conversation_logger: self.conversation_logger.clone(),
+        }
+    }
+}
+
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T> {
     pub fn new(
         gateway: Arc<G>,

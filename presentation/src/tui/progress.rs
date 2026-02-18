@@ -4,23 +4,31 @@
 //! same mpsc channel as presenter events. No println!, no indicatif —
 //! everything goes through the channel for ratatui rendering.
 
-use super::event::TuiEvent;
+use super::event::{RoutedTuiEvent, TuiEvent};
 use quorum_application::{AgentProgressNotifier, ErrorCategory};
-use quorum_domain::{AgentPhase, Model, Plan, ReviewRound, Task, Thought};
+use quorum_domain::{AgentPhase, InteractionId, Model, Plan, ReviewRound, Task, Thought};
 use tokio::sync::mpsc;
 
 /// Bridge from AgentProgressNotifier callbacks to TuiEvent channel
 pub struct TuiProgressBridge {
-    tx: mpsc::UnboundedSender<TuiEvent>,
+    tx: mpsc::UnboundedSender<RoutedTuiEvent>,
+    interaction_id: Option<InteractionId>,
 }
 
 impl TuiProgressBridge {
-    pub fn new(tx: mpsc::UnboundedSender<TuiEvent>) -> Self {
-        Self { tx }
+    pub fn new(
+        tx: mpsc::UnboundedSender<RoutedTuiEvent>,
+        interaction_id: Option<InteractionId>,
+    ) -> Self {
+        Self { tx, interaction_id }
     }
 
     fn emit(&self, event: TuiEvent) {
-        let _ = self.tx.send(event);
+        let routed = match self.interaction_id {
+            Some(id) => RoutedTuiEvent::for_interaction(id, event),
+            None => RoutedTuiEvent::global(event),
+        };
+        let _ = self.tx.send(routed);
     }
 
     fn phase_name(phase: &AgentPhase) -> &'static str {
@@ -300,22 +308,24 @@ mod tests {
     #[test]
     fn test_phase_change_emits_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         bridge.on_phase_change(&AgentPhase::Planning);
 
         let event = rx.try_recv().unwrap();
+        assert!(event.interaction_id.is_none());
+        let event = event.event;
         assert!(matches!(event, TuiEvent::PhaseChange { .. }));
     }
 
     #[test]
     fn test_tool_call_emits_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         bridge.on_tool_call("read_file", "/test.rs");
 
-        let event = rx.try_recv().unwrap();
+        let event = rx.try_recv().unwrap().event;
         if let TuiEvent::ToolCall { tool_name, args } = event {
             assert_eq!(tool_name, "read_file");
             assert_eq!(args, "/test.rs");
@@ -327,36 +337,54 @@ mod tests {
     #[test]
     fn test_stream_chunk_emits_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         bridge.on_llm_chunk("hello ");
         bridge.on_llm_chunk("world");
         bridge.on_llm_stream_end();
 
-        assert!(matches!(rx.try_recv().unwrap(), TuiEvent::StreamChunk(_)));
-        assert!(matches!(rx.try_recv().unwrap(), TuiEvent::StreamChunk(_)));
-        assert!(matches!(rx.try_recv().unwrap(), TuiEvent::StreamEnd));
+        assert!(matches!(
+            rx.try_recv().unwrap().event,
+            TuiEvent::StreamChunk(_)
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap().event,
+            TuiEvent::StreamChunk(_)
+        ));
+        assert!(matches!(rx.try_recv().unwrap().event, TuiEvent::StreamEnd));
+    }
+
+    #[test]
+    fn test_routed_event_includes_interaction_id() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let bridge = TuiProgressBridge::new(tx, Some(InteractionId(42)));
+
+        bridge.on_llm_chunk("hello");
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.interaction_id, Some(InteractionId(42)));
+        assert!(matches!(event.event, TuiEvent::StreamChunk(_)));
     }
 
     #[test]
     fn test_quorum_events() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         bridge.on_quorum_start("Plan Review", 3);
         bridge.on_quorum_model_complete(&Model::ClaudeSonnet45, true);
         bridge.on_quorum_complete("Plan Review", true, Some("LGTM"));
 
         assert!(matches!(
-            rx.try_recv().unwrap(),
+            rx.try_recv().unwrap().event,
             TuiEvent::QuorumStart { .. }
         ));
         assert!(matches!(
-            rx.try_recv().unwrap(),
+            rx.try_recv().unwrap().event,
             TuiEvent::QuorumModelVote { .. }
         ));
         assert!(matches!(
-            rx.try_recv().unwrap(),
+            rx.try_recv().unwrap().event,
             TuiEvent::QuorumComplete { .. }
         ));
     }
@@ -364,13 +392,13 @@ mod tests {
     #[test]
     fn test_task_lifecycle() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         let task = Task::new("t1", "Fix bug");
         bridge.on_task_start(&task, 1, 3);
         bridge.on_task_complete(&task, true, 1, 3);
 
-        let event = rx.try_recv().unwrap();
+        let event = rx.try_recv().unwrap().event;
         if let TuiEvent::TaskStart {
             description,
             index,
@@ -385,7 +413,7 @@ mod tests {
         }
 
         assert!(matches!(
-            rx.try_recv().unwrap(),
+            rx.try_recv().unwrap().event,
             TuiEvent::TaskComplete {
                 index: 1,
                 total: 3,
@@ -400,7 +428,7 @@ mod tests {
         use quorum_domain::TaskResult;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         let mut task = Task::new("t1", "Analyze code");
         task.mark_completed(TaskResult::success(
@@ -408,7 +436,7 @@ mod tests {
         ));
         bridge.on_task_complete(&task, true, 1, 1);
 
-        let event = rx.try_recv().unwrap();
+        let event = rx.try_recv().unwrap().event;
         if let TuiEvent::TaskComplete {
             output, success, ..
         } = event
@@ -426,12 +454,12 @@ mod tests {
     #[test]
     fn test_task_complete_without_result() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         let task = Task::new("t1", "Do something");
         bridge.on_task_complete(&task, true, 1, 1);
 
-        let event = rx.try_recv().unwrap();
+        let event = rx.try_recv().unwrap().event;
         if let TuiEvent::TaskComplete { output, .. } = event {
             assert!(output.is_none());
         } else {
@@ -444,13 +472,13 @@ mod tests {
         use quorum_domain::TaskResult;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx);
+        let bridge = TuiProgressBridge::new(tx, None);
 
         let mut task = Task::new("t1", "Empty result");
         task.mark_completed(TaskResult::success(""));
         bridge.on_task_complete(&task, true, 1, 1);
 
-        let event = rx.try_recv().unwrap();
+        let event = rx.try_recv().unwrap().event;
         if let TuiEvent::TaskComplete { output, .. } = event {
             assert!(output.is_none()); // Empty output filtered to None
         } else {
