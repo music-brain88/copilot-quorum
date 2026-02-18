@@ -53,6 +53,11 @@ pub enum CommandAction {
     Continue,
     /// Exit the REPL
     Exit,
+    /// Execute an interaction (Ask, Discuss, or Agent) — caller should spawn to JoinSet
+    Execute {
+        form: InteractionForm,
+        query: String,
+    },
 }
 
 /// Agent controller managing business logic for the REPL
@@ -238,7 +243,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub async fn handle_command(
         &mut self,
         cmd: &str,
-        progress: &dyn AgentProgressNotifier,
+        _progress: &dyn AgentProgressNotifier,
     ) -> CommandAction {
         let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
         let command = parts.first().copied().unwrap_or("");
@@ -303,33 +308,39 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     let _ = self.tx.send(UiEvent::CommandError {
                         message: "Usage: /ask <question>".to_string(),
                     });
+                    CommandAction::Continue
                 } else {
-                    self.execute_inline(InteractionForm::Ask, args, progress)
-                        .await;
+                    CommandAction::Execute {
+                        form: InteractionForm::Ask,
+                        query: args.to_string(),
+                    }
                 }
-                CommandAction::Continue
             }
             "/discuss" | "/council" => {
                 if args.is_empty() {
                     let _ = self.tx.send(UiEvent::CommandError {
                         message: "Usage: /discuss <question>".to_string(),
                     });
+                    CommandAction::Continue
                 } else {
-                    self.execute_inline(InteractionForm::Discuss, args, progress)
-                        .await;
+                    CommandAction::Execute {
+                        form: InteractionForm::Discuss,
+                        query: args.to_string(),
+                    }
                 }
-                CommandAction::Continue
             }
             "/agent" => {
                 if args.is_empty() {
                     let _ = self.tx.send(UiEvent::CommandError {
                         message: "Usage: /agent <task>".to_string(),
                     });
+                    CommandAction::Continue
                 } else {
-                    self.execute_inline(InteractionForm::Agent, args, progress)
-                        .await;
+                    CommandAction::Execute {
+                        form: InteractionForm::Agent,
+                        query: args.to_string(),
+                    }
                 }
-                CommandAction::Continue
             }
             "/config" => {
                 let _ = self.tx.send(UiEvent::ConfigDisplay(ConfigSnapshot {
@@ -485,14 +496,34 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Run Ask interaction — lightweight Q&A with read-only tool access (inline, no new tab)
     pub async fn run_ask(&mut self, question: &str, progress: &dyn AgentProgressNotifier) {
-        self.execute_inline(InteractionForm::Ask, question, progress)
+        let (clean_query, full_query) = self.prepare_inline(question);
+        let context = self.build_spawn_context();
+        let completion = context
+            .execute(
+                None,
+                InteractionForm::Ask,
+                clean_query,
+                full_query,
+                progress,
+            )
             .await;
+        self.finalize(completion);
     }
 
     /// Run Quorum Discussion with conversation context (inline, no new tab)
     pub async fn run_discuss(&mut self, question: &str, progress: &dyn AgentProgressNotifier) {
-        self.execute_inline(InteractionForm::Discuss, question, progress)
+        let (clean_query, full_query) = self.prepare_inline(question);
+        let context = self.build_spawn_context();
+        let completion = context
+            .execute(
+                None,
+                InteractionForm::Discuss,
+                clean_query,
+                full_query,
+                progress,
+            )
             .await;
+        self.finalize(completion);
     }
 
     /// Run context initialization
@@ -559,8 +590,18 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Process a user request (run agent, inline in current tab)
     pub async fn process_request(&mut self, request: &str, progress: &dyn AgentProgressNotifier) {
-        self.execute_inline(InteractionForm::Agent, request, progress)
+        let (clean_query, full_query) = self.prepare_inline(request);
+        let context = self.build_spawn_context();
+        let completion = context
+            .execute(
+                None,
+                InteractionForm::Agent,
+                clean_query,
+                full_query,
+                progress,
+            )
             .await;
+        self.finalize(completion);
     }
 
     // =========================================================================
@@ -572,20 +613,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self.active_interaction_id = id;
     }
 
-    /// Execute an interaction inline in the current tab (no new tab, no tree node).
+    /// Prepare context for an inline execution (no tree node).
     ///
-    /// Performs context construction, use case execution, and history tracking
-    /// without creating an InteractionTree node or emitting InteractionSpawned/Completed events.
-    async fn execute_inline(
-        &mut self,
-        form: InteractionForm,
-        query: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) {
+    /// Returns (clean_query, full_query) where:
+    /// - clean_query: user query with flags stripped (for Agent which has its own context loader)
+    /// - full_query: query with conversation history prepended (for Ask/Discuss)
+    pub fn prepare_inline(&self, query: &str) -> (String, String) {
         let (ctx_override_flag, clean_query) = Self::parse_spawn_flags(query);
         let context_mode = ctx_override_flag.unwrap_or(ContextMode::Full);
-
-        // Build context
         let context = match context_mode {
             ContextMode::Full => self.build_context_from_history(),
             ContextMode::Projected => self.build_projected_context(),
@@ -596,23 +631,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         } else {
             format!("{}\n\n## Current Question\n\n{}", context, clean_query)
         };
-
-        // Agent uses clean_query (has its own context loader); Ask/Discuss use full_query
-        let result = match form {
-            InteractionForm::Ask => self.execute_ask_spawn(&full_query, progress).await,
-            InteractionForm::Discuss => self.execute_discuss_spawn(&full_query, progress).await,
-            InteractionForm::Agent => self.execute_agent_spawn(&clean_query, progress).await,
-        };
-
-        // Add to history
-        if let Some(interaction_result) = result {
-            let result_text = interaction_result.to_context_injection();
-            self.conversation_history.push(HistoryEntry {
-                form,
-                request: clean_query,
-                summary: truncate_str(&result_text, 200).to_string(),
-            });
-        }
+        (clean_query, full_query)
     }
 
     /// Spawn a new interaction (Ask, Discuss, or Agent).
@@ -705,27 +724,27 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
-    /// Finalize a spawn operation (Phase 3: synchronous cleanup)
+    /// Finalize a completed task (spawn or inline).
     ///
-    /// Updates history and notifies UI of completion.
-    pub fn finalize_spawn(&mut self, completion: SpawnCompletion) {
-        if let Some(result_text) = completion.result_text {
+    /// Updates conversation history. For spawn tasks (interaction_id is Some),
+    /// also emits InteractionCompleted event.
+    pub fn finalize(&mut self, completion: TaskCompletion) {
+        if let Some(result_text) = &completion.result_text {
             self.conversation_history.push(HistoryEntry {
                 form: completion.form,
-                request: completion.query,
-                summary: truncate_str(&result_text, 200).to_string(),
+                request: completion.query.clone(),
+                summary: truncate_str(result_text, 200).to_string(),
             });
-
-            // Parent ID lookup (needed for event)
-            let parent_id = self
-                .interaction_tree
-                .get(completion.child_id)
-                .and_then(|i| i.parent);
-
+        }
+        // Spawn path: emit InteractionCompleted
+        if let Some(child_id) = completion.interaction_id
+            && let Some(result_text) = completion.result_text
+        {
+            let parent_id = self.interaction_tree.get(child_id).and_then(|i| i.parent);
             let _ = self
                 .tx
                 .send(UiEvent::InteractionCompleted(InteractionCompletedEvent {
-                    id: completion.child_id,
+                    id: child_id,
                     form: completion.form,
                     parent_id,
                     result_text,
@@ -746,9 +765,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         {
             let context = self.build_spawn_context();
             let completion = context
-                .execute(child_id, form, clean_query, full_query, progress)
+                .execute(Some(child_id), form, clean_query, full_query, progress)
                 .await;
-            self.finalize_spawn(completion);
+            self.finalize(completion);
         }
     }
 
@@ -787,99 +806,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         ctx
     }
 
-    async fn execute_ask_spawn(
-        &mut self,
-        query: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Option<InteractionResult> {
-        let _ = self.tx.send(UiEvent::AskStarting);
-        let input = self.config.to_ask_input(query.to_string());
-        match self.ask_use_case.execute(input, progress).await {
-            Ok(result @ InteractionResult::AskResult { .. }) => {
-                // Send UiEvent for display (will appear in new tab's pane)
-                if let InteractionResult::AskResult { ref answer } = result {
-                    let _ = self.tx.send(UiEvent::AskResult(AskResultEvent {
-                        answer: answer.clone(),
-                    }));
-                }
-                Some(result)
-            }
-            Ok(_) => None,
-            Err(e) => {
-                let _ = self.tx.send(UiEvent::AskError {
-                    error: e.to_string(),
-                });
-                None
-            }
-        }
-    }
-
-    async fn execute_discuss_spawn(
-        &mut self,
-        query: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Option<InteractionResult> {
-        let _ = self.tx.send(UiEvent::QuorumStarting);
-        let input = self.config.to_quorum_input(query.to_string());
-        let use_case = RunQuorumUseCase::new(self.gateway.clone());
-        let adapter = QuorumProgressAdapter::new(progress);
-        match use_case.execute_with_progress(input, &adapter).await {
-            Ok(output) => {
-                let formatted = format_quorum_output(&output, OutputFormat::Synthesis);
-                let _ = self.tx.send(UiEvent::QuorumResult(QuorumResultEvent {
-                    formatted_output: formatted.clone(),
-                    output_format: OutputFormat::Synthesis,
-                }));
-                Some(InteractionResult::DiscussResult {
-                    synthesis: formatted,
-                    participant_count: output.models.len(),
-                })
-            }
-            Err(e) => {
-                let _ = self.tx.send(UiEvent::QuorumError {
-                    error: e.to_string(),
-                });
-                None
-            }
-        }
-    }
-
-    async fn execute_agent_spawn(
-        &mut self,
-        query: &str,
-        progress: &dyn AgentProgressNotifier,
-    ) -> Option<InteractionResult> {
-        let _ = self.tx.send(UiEvent::AgentStarting {
-            mode: self.config.mode().consensus_level,
-        });
-        let input = self.config.to_agent_input(query);
-        match self.use_case.execute_with_progress(input, progress).await {
-            Ok(output) => {
-                let _ = self
-                    .tx
-                    .send(UiEvent::AgentResult(Box::new(AgentResultEvent {
-                        success: output.success,
-                        summary: output.summary.clone(),
-                        state: output.state.clone(),
-                        verbose: self.verbose,
-                        thoughts: output.state.thoughts.clone(),
-                    })));
-                Some(InteractionResult::AgentResult {
-                    summary: output.summary,
-                    success: output.success,
-                })
-            }
-            Err(e) => {
-                let cancelled = e.is_cancelled();
-                let _ = self.tx.send(UiEvent::AgentError(AgentErrorEvent {
-                    error: e.to_string(),
-                    cancelled,
-                }));
-                None
-            }
-        }
-    }
-
     /// Get the active interaction ID
     pub fn active_interaction_id(&self) -> InteractionId {
         self.active_interaction_id
@@ -912,9 +838,10 @@ pub struct SpawnContext<
     pub verbose: bool,
 }
 
-/// Completion result of a spawn operation
-pub struct SpawnCompletion {
-    pub child_id: InteractionId,
+/// Completion result of a task (spawn or inline execution)
+pub struct TaskCompletion {
+    /// Some(id) for spawn (emits InteractionCompleted), None for inline (history only)
+    pub interaction_id: Option<InteractionId>,
     pub form: InteractionForm,
     pub query: String,
     pub result_text: Option<String>,
@@ -928,12 +855,12 @@ where
 {
     pub async fn execute(
         self,
-        child_id: InteractionId,
+        interaction_id: Option<InteractionId>,
         form: InteractionForm,
         clean_query: String,
         full_query: String,
         progress: &dyn AgentProgressNotifier,
-    ) -> SpawnCompletion {
+    ) -> TaskCompletion {
         let result = match form {
             InteractionForm::Ask => self.execute_ask(&full_query, progress).await,
             InteractionForm::Discuss => self.execute_discuss(&full_query, progress).await,
@@ -942,8 +869,8 @@ where
 
         let result_text = result.as_ref().map(|r| r.to_context_injection());
 
-        SpawnCompletion {
-            child_id,
+        TaskCompletion {
+            interaction_id,
             form,
             query: clean_query,
             result_text,
@@ -1448,15 +1375,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ask_with_question_sends_ask_starting() {
-        let (mut controller, mut rx) = create_test_controller();
+    async fn test_ask_command_returns_execute() {
+        let (mut controller, _rx) = create_test_controller();
 
-        controller
+        let action = controller
             .handle_command("/ask What is Rust?", &NoAgentProgress)
             .await;
-        // Inline execution: no InteractionSpawned, directly AskStarting
-        let event = rx.try_recv().unwrap();
-        assert!(matches!(event, UiEvent::AskStarting));
+        match action {
+            CommandAction::Execute { form, query } => {
+                assert_eq!(form, InteractionForm::Ask);
+                assert_eq!(query, "What is Rust?");
+            }
+            _ => panic!("Expected CommandAction::Execute"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_discuss_command_returns_execute() {
+        let (mut controller, _rx) = create_test_controller();
+
+        let action = controller
+            .handle_command("/discuss Design the auth", &NoAgentProgress)
+            .await;
+        match action {
+            CommandAction::Execute { form, query } => {
+                assert_eq!(form, InteractionForm::Discuss);
+                assert_eq!(query, "Design the auth");
+            }
+            _ => panic!("Expected CommandAction::Execute"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_command_returns_execute() {
+        let (mut controller, _rx) = create_test_controller();
+
+        let action = controller
+            .handle_command("/agent Fix the bug", &NoAgentProgress)
+            .await;
+        match action {
+            CommandAction::Execute { form, query } => {
+                assert_eq!(form, InteractionForm::Agent);
+                assert_eq!(query, "Fix the bug");
+            }
+            _ => panic!("Expected CommandAction::Execute"),
+        }
     }
 
     #[tokio::test]
@@ -1642,15 +1605,15 @@ mod tests {
     }
 
     #[test]
-    fn test_finalize_spawn_emits_completion() {
+    fn test_finalize_with_spawn_emits_completion() {
         let (mut controller, mut rx) = create_test_controller();
         let (child_id, clean_query, _) = controller
             .prepare_spawn(InteractionForm::Ask, "ship it", None)
             .unwrap();
         let _ = rx.try_recv(); // drain InteractionSpawned
 
-        controller.finalize_spawn(SpawnCompletion {
-            child_id,
+        controller.finalize(TaskCompletion {
+            interaction_id: Some(child_id),
             form: InteractionForm::Ask,
             query: clean_query,
             result_text: Some("done".to_string()),
@@ -1667,5 +1630,58 @@ mod tests {
             other => panic!("Expected InteractionCompleted, got {:?}", other),
         }
         assert_eq!(controller.conversation_history.len(), 1);
+    }
+
+    #[test]
+    fn test_finalize_inline_adds_history_only() {
+        let (mut controller, mut rx) = create_test_controller();
+
+        controller.finalize(TaskCompletion {
+            interaction_id: None,
+            form: InteractionForm::Agent,
+            query: "do something".to_string(),
+            result_text: Some("done it".to_string()),
+        });
+
+        // No InteractionCompleted event for inline
+        assert!(rx.try_recv().is_err());
+        assert_eq!(controller.conversation_history.len(), 1);
+    }
+
+    #[test]
+    fn test_prepare_inline_no_history() {
+        let (controller, _rx) = create_test_controller();
+        let (clean, full) = controller.prepare_inline("hello world");
+        assert_eq!(clean, "hello world");
+        assert_eq!(full, "hello world"); // no history = no context
+    }
+
+    #[test]
+    fn test_prepare_inline_with_history() {
+        let (mut controller, _rx) = create_test_controller();
+        controller.conversation_history.push(HistoryEntry {
+            form: InteractionForm::Ask,
+            request: "What is X?".to_string(),
+            summary: "X is Y".to_string(),
+        });
+
+        let (clean, full) = controller.prepare_inline("follow up");
+        assert_eq!(clean, "follow up");
+        assert!(full.contains("Previous Conversation Context"));
+        assert!(full.contains("follow up"));
+    }
+
+    #[test]
+    fn test_prepare_inline_fresh_flag() {
+        let (mut controller, _rx) = create_test_controller();
+        controller.conversation_history.push(HistoryEntry {
+            form: InteractionForm::Ask,
+            request: "What is X?".to_string(),
+            summary: "X is Y".to_string(),
+        });
+
+        let (clean, full) = controller.prepare_inline("--fresh no context please");
+        assert_eq!(clean, "no context please");
+        assert_eq!(full, "no context please"); // --fresh = no context
     }
 }

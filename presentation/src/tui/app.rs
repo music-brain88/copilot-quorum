@@ -252,7 +252,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // select! on all event sources
             // biased: prioritize ui_rx (InteractionSpawned, etc.) over tui_event_rx
             // to ensure tabs exist before progress events target them.
-            // TODO: Replace with interaction-aware routing when parallelizing controller_task.
             tokio::select! {
                 biased;
 
@@ -1589,23 +1588,23 @@ async fn controller_task<
     // Send welcome on startup
     controller.send_welcome();
 
-    let mut spawn_tasks = tokio::task::JoinSet::new();
+    let mut tasks = tokio::task::JoinSet::new();
 
     loop {
         tokio::select! {
             biased;
 
-            // Handle completed spawns
-            Some(res) = spawn_tasks.join_next() => {
+            // Handle completed tasks (spawns + inline executions)
+            Some(res) = tasks.join_next() => {
                 match res {
-                    Ok(completion) => controller.finalize_spawn(completion),
+                    Ok(completion) => controller.finalize(completion),
                     Err(e) => {
                         // Task panic or cancellation
                         if e.is_cancelled() {
                             // ignore
                         } else {
                             let _ = progress_tx.send(RoutedTuiEvent::global(TuiEvent::Flash(
-                                format!("Spawn task panicked: {}", e)
+                                format!("Task panicked: {}", e)
                             )));
                         }
                     }
@@ -1622,8 +1621,13 @@ async fn controller_task<
                 match cmd {
                     TuiCommand::ProcessRequest { interaction_id, request } => {
                         let iid = interaction_id.unwrap_or_else(|| controller.active_interaction_id());
-                        let progress = TuiProgressBridge::new(progress_tx.clone(), Some(iid));
-                        controller.process_request(&request, &progress).await;
+                        let (clean_query, full_query) = controller.prepare_inline(&request);
+                        let context = controller.build_spawn_context();
+                        let tx = progress_tx.clone();
+                        tasks.spawn(async move {
+                            let progress = TuiProgressBridge::new(tx, Some(iid));
+                            context.execute(None, InteractionForm::Agent, clean_query, full_query, &progress).await
+                        });
                     }
                     TuiCommand::HandleCommand { interaction_id, command } => {
                         if command == "__welcome" {
@@ -1643,6 +1647,15 @@ async fn controller_task<
                                 break;
                             }
                             CommandAction::Continue => {}
+                            CommandAction::Execute { form, query } => {
+                                let (clean_query, full_query) = controller.prepare_inline(&query);
+                                let context = controller.build_spawn_context();
+                                let tx = progress_tx.clone();
+                                tasks.spawn(async move {
+                                    let progress = TuiProgressBridge::new(tx, Some(iid));
+                                    context.execute(None, form, clean_query, full_query, &progress).await
+                                });
+                            }
                         }
                     }
                     TuiCommand::SetVerbose(verbose) => {
@@ -1664,9 +1677,9 @@ async fn controller_task<
                                 let context = controller.build_spawn_context();
                                 let tx = progress_tx.clone();
 
-                                spawn_tasks.spawn(async move {
+                                tasks.spawn(async move {
                                     let progress = TuiProgressBridge::new(tx, Some(child_id));
-                                    context.execute(child_id, form, clean_query, full_query, &progress).await
+                                    context.execute(Some(child_id), form, clean_query, full_query, &progress).await
                                 });
                             }
                             Err(e) => {
