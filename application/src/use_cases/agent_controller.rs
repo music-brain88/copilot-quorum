@@ -499,7 +499,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let (clean_query, full_query) = self.prepare_inline(question);
         let context = self.build_spawn_context();
         let completion = context
-            .execute(None, InteractionForm::Ask, clean_query, full_query, progress)
+            .execute(
+                None,
+                InteractionForm::Ask,
+                clean_query,
+                full_query,
+                progress,
+            )
             .await;
         self.finalize(completion);
     }
@@ -509,7 +515,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let (clean_query, full_query) = self.prepare_inline(question);
         let context = self.build_spawn_context();
         let completion = context
-            .execute(None, InteractionForm::Discuss, clean_query, full_query, progress)
+            .execute(
+                None,
+                InteractionForm::Discuss,
+                clean_query,
+                full_query,
+                progress,
+            )
             .await;
         self.finalize(completion);
     }
@@ -581,7 +593,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let (clean_query, full_query) = self.prepare_inline(request);
         let context = self.build_spawn_context();
         let completion = context
-            .execute(None, InteractionForm::Agent, clean_query, full_query, progress)
+            .execute(
+                None,
+                InteractionForm::Agent,
+                clean_query,
+                full_query,
+                progress,
+            )
             .await;
         self.finalize(completion);
     }
@@ -722,10 +740,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if let Some(child_id) = completion.interaction_id
             && let Some(result_text) = completion.result_text
         {
-            let parent_id = self
-                .interaction_tree
-                .get(child_id)
-                .and_then(|i| i.parent);
+            let parent_id = self.interaction_tree.get(child_id).and_then(|i| i.parent);
             let _ = self
                 .tx
                 .send(UiEvent::InteractionCompleted(InteractionCompletedEvent {
@@ -790,7 +805,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
         ctx
     }
-
 
     /// Get the active interaction ID
     pub fn active_interaction_id(&self) -> InteractionId {
