@@ -616,13 +616,16 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Spawn a new interaction (Ask, Discuss, or Agent).
-    pub async fn spawn_interaction(
+    /// Prepare a spawn operation (Phase 1: synchronous setup)
+    ///
+    /// Creates the interaction node, sends the spawn event, and builds the context.
+    /// Returns the data needed to execute the spawn in a separate task.
+    pub fn prepare_spawn(
         &mut self,
         form: InteractionForm,
         query: &str,
         context_mode_override: Option<ContextMode>,
-        progress: &dyn AgentProgressNotifier,
-    ) {
+    ) -> Result<(InteractionId, String, String), String> {
         let (ctx_override_flag, clean_query) = Self::parse_spawn_flags(query);
         let ctx_override = context_mode_override.or(ctx_override_flag);
 
@@ -644,7 +647,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 let _ = self.tx.send(UiEvent::InteractionSpawnError {
                     error: e.to_string(),
                 });
-                return;
+                return Err(e.to_string());
             }
         };
 
@@ -686,29 +689,66 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             format!("{}\n\n## Current Question\n\n{}", context, clean_query)
         };
 
-        // 5. Execute use case based on Form
-        let result = match form {
-            InteractionForm::Ask => self.execute_ask_spawn(&full_query, progress).await,
-            InteractionForm::Discuss => self.execute_discuss_spawn(&full_query, progress).await,
-            InteractionForm::Agent => self.execute_agent_spawn(&clean_query, progress).await,
-        };
+        Ok((child_id, clean_query, full_query))
+    }
 
-        // 6. Completion → Add to history + Send InteractionCompleted
-        if let Some(interaction_result) = result {
-            let result_text = interaction_result.to_context_injection();
+    /// Build a context object for executing a spawn in a background task
+    pub fn build_spawn_context(&self) -> SpawnContext<G, T, C> {
+        SpawnContext {
+            gateway: self.gateway.clone(),
+            agent_use_case: self.use_case.clone(),
+            ask_use_case: self.ask_use_case.clone(),
+            config: self.config.clone(),
+            tx: self.tx.clone(),
+            moderator: self.moderator.clone(),
+            verbose: self.verbose,
+        }
+    }
+
+    /// Finalize a spawn operation (Phase 3: synchronous cleanup)
+    ///
+    /// Updates history and notifies UI of completion.
+    pub fn finalize_spawn(&mut self, completion: SpawnCompletion) {
+        if let Some(result_text) = completion.result_text {
             self.conversation_history.push(HistoryEntry {
-                form,
-                request: clean_query,
+                form: completion.form,
+                request: completion.query,
                 summary: truncate_str(&result_text, 200).to_string(),
             });
+
+            // Parent ID lookup (needed for event)
+            let parent_id = self
+                .interaction_tree
+                .get(completion.child_id)
+                .and_then(|i| i.parent);
+
             let _ = self
                 .tx
                 .send(UiEvent::InteractionCompleted(InteractionCompletedEvent {
-                    id: child_id,
-                    form,
+                    id: completion.child_id,
+                    form: completion.form,
                     parent_id,
                     result_text,
                 }));
+        }
+    }
+
+    pub async fn spawn_interaction(
+        &mut self,
+        form: InteractionForm,
+        query: &str,
+        context_mode_override: Option<ContextMode>,
+        progress: &dyn AgentProgressNotifier,
+    ) {
+        // Backward compatibility wrapper using new split methods
+        if let Ok((child_id, clean_query, full_query)) =
+            self.prepare_spawn(form, query, context_mode_override)
+        {
+            let context = self.build_spawn_context();
+            let completion = context
+                .execute(child_id, form, clean_query, full_query, progress)
+                .await;
+            self.finalize_spawn(completion);
         }
     }
 
@@ -839,6 +879,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
         }
     }
+
+    /// Get the active interaction ID
+    pub fn active_interaction_id(&self) -> InteractionId {
+        self.active_interaction_id
+    }
 }
 
 /// Format quorum output based on output format
@@ -846,12 +891,165 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 /// This is a helper that replaces the ConsoleFormatter usage from presentation.
 /// In the future, this could be moved to a domain service.
 fn format_quorum_output(result: &QuorumResult, format: OutputFormat) -> String {
-    // Simple formatting — the detailed formatting will be done by the presenter
     match format {
         OutputFormat::Json => serde_json::to_string_pretty(result).unwrap_or_default(),
-        OutputFormat::Full | OutputFormat::Synthesis => {
-            // Return the synthesis text as-is; presenter will handle formatting
-            result.synthesis.conclusion.clone()
+        OutputFormat::Full | OutputFormat::Synthesis => result.synthesis.conclusion.clone(),
+    }
+}
+
+/// Context for executing a spawn in a background task
+pub struct SpawnContext<
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+> {
+    pub gateway: Arc<G>,
+    pub agent_use_case: RunAgentUseCase<G, T, C>,
+    pub ask_use_case: RunAskUseCase<G, T>,
+    pub config: QuorumConfig,
+    pub tx: mpsc::UnboundedSender<UiEvent>,
+    pub moderator: Option<Model>,
+    pub verbose: bool,
+}
+
+/// Completion result of a spawn operation
+pub struct SpawnCompletion {
+    pub child_id: InteractionId,
+    pub form: InteractionForm,
+    pub query: String,
+    pub result_text: Option<String>,
+}
+
+impl<G, T, C> SpawnContext<G, T, C>
+where
+    G: LlmGateway + 'static,
+    T: ToolExecutorPort + 'static,
+    C: ContextLoaderPort + 'static,
+{
+    pub async fn execute(
+        self,
+        child_id: InteractionId,
+        form: InteractionForm,
+        clean_query: String,
+        full_query: String,
+        progress: &dyn AgentProgressNotifier,
+    ) -> SpawnCompletion {
+        let result = match form {
+            InteractionForm::Ask => self.execute_ask(&full_query, progress).await,
+            InteractionForm::Discuss => self.execute_discuss(&full_query, progress).await,
+            InteractionForm::Agent => self.execute_agent(&clean_query, progress).await,
+        };
+
+        let result_text = result.as_ref().map(|r| r.to_context_injection());
+
+        SpawnCompletion {
+            child_id,
+            form,
+            query: clean_query,
+            result_text,
+        }
+    }
+
+    async fn execute_ask(
+        &self,
+        query: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Option<InteractionResult> {
+        let _ = self.tx.send(UiEvent::AskStarting);
+        let input = crate::use_cases::run_ask::RunAskInput::new(
+            query,
+            self.config.models().clone(),
+            self.config.execution().clone(),
+        );
+
+        match self.ask_use_case.execute(input, progress).await {
+            Ok(result) => {
+                if let InteractionResult::AskResult { ref answer } = result {
+                    let _ = self.tx.send(UiEvent::AskResult(AskResultEvent {
+                        answer: answer.clone(),
+                    }));
+                }
+                Some(result)
+            }
+            Err(e) => {
+                let _ = self.tx.send(UiEvent::AskError {
+                    error: e.to_string(),
+                });
+                None
+            }
+        }
+    }
+
+    async fn execute_discuss(
+        &self,
+        query: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Option<InteractionResult> {
+        let _ = self.tx.send(UiEvent::QuorumStarting);
+        let input = self.config.to_quorum_input(query.to_string());
+        let use_case = RunQuorumUseCase::new(self.gateway.clone());
+        let adapter = QuorumProgressAdapter::new(progress);
+        match use_case.execute_with_progress(input, &adapter).await {
+            Ok(output) => {
+                let formatted = format_quorum_output(&output, OutputFormat::Synthesis);
+                let _ = self.tx.send(UiEvent::QuorumResult(QuorumResultEvent {
+                    formatted_output: formatted.clone(),
+                    output_format: OutputFormat::Synthesis,
+                }));
+                Some(InteractionResult::DiscussResult {
+                    synthesis: formatted,
+                    participant_count: output.models.len(),
+                })
+            }
+            Err(e) => {
+                let _ = self.tx.send(UiEvent::QuorumError {
+                    error: e.to_string(),
+                });
+                None
+            }
+        }
+    }
+
+    async fn execute_agent(
+        &self,
+        query: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Option<InteractionResult> {
+        let _ = self.tx.send(UiEvent::AgentStarting {
+            mode: self.config.mode().consensus_level,
+        });
+
+        // Use the factory method from QuorumConfig
+        let input = self.config.to_agent_input(query);
+
+        match self
+            .agent_use_case
+            .execute_with_progress(input, progress)
+            .await
+        {
+            Ok(output) => {
+                let _ = self
+                    .tx
+                    .send(UiEvent::AgentResult(Box::new(AgentResultEvent {
+                        success: output.success,
+                        summary: output.summary.clone(),
+                        state: output.state.clone(),
+                        verbose: self.verbose,
+                        thoughts: output.state.thoughts.clone(),
+                    })));
+                Some(InteractionResult::AgentResult {
+                    summary: output.summary,
+                    success: output.success,
+                })
+            }
+            Err(e) => {
+                let cancelled = e.is_cancelled();
+                let _ = self.tx.send(UiEvent::AgentError(AgentErrorEvent {
+                    error: e.to_string(),
+                    cancelled,
+                }));
+                None
+            }
         }
     }
 }
@@ -1418,5 +1616,56 @@ mod tests {
 
         let ctx = controller.build_projected_context();
         assert!(ctx.contains("[discuss]"));
+    }
+
+    #[test]
+    fn test_prepare_spawn_emits_interaction_spawned() {
+        let (mut controller, mut rx) = create_test_controller();
+
+        let (child_id, clean_query, full_query) = controller
+            .prepare_spawn(InteractionForm::Ask, "hello", None)
+            .unwrap();
+
+        assert_eq!(clean_query, "hello");
+        assert_eq!(full_query, "hello");
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            UiEvent::InteractionSpawned(spawned) => {
+                assert_eq!(spawned.id, child_id);
+                assert_eq!(spawned.form, InteractionForm::Ask);
+                assert_eq!(spawned.query, "hello");
+                assert!(spawned.parent_id.is_some());
+            }
+            other => panic!("Expected InteractionSpawned, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_finalize_spawn_emits_completion() {
+        let (mut controller, mut rx) = create_test_controller();
+        let (child_id, clean_query, _) = controller
+            .prepare_spawn(InteractionForm::Ask, "ship it", None)
+            .unwrap();
+        let _ = rx.try_recv(); // drain InteractionSpawned
+
+        controller.finalize_spawn(SpawnCompletion {
+            child_id,
+            form: InteractionForm::Ask,
+            query: clean_query,
+            result_text: Some("done".to_string()),
+        });
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            UiEvent::InteractionCompleted(completed) => {
+                assert_eq!(completed.id, child_id);
+                assert_eq!(completed.form, InteractionForm::Ask);
+                assert_eq!(completed.result_text, "done");
+                assert!(completed.parent_id.is_some());
+            }
+            other => panic!("Expected InteractionCompleted, got {:?}", other),
+        }
+        assert_eq!(controller.conversation_history.len(), 1);
     }
 }

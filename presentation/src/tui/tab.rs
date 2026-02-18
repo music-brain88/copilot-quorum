@@ -183,6 +183,12 @@ impl TabManager {
         &mut self.tabs[self.active_index].pane
     }
 
+    /// Find pane by interaction id (mutable).
+    pub fn pane_for_interaction_mut(&mut self, interaction_id: InteractionId) -> Option<&mut Pane> {
+        self.find_tab_index_by_interaction(interaction_id)
+            .map(move |index| &mut self.tabs[index].pane)
+    }
+
     /// Find tab index by interaction id.
     pub fn find_tab_index_by_interaction(&self, interaction_id: InteractionId) -> Option<usize> {
         self.tabs.iter().position(|tab| match tab.pane.kind {
@@ -379,6 +385,22 @@ mod tests {
         assert_eq!(mgr.find_tab_index_by_interaction(ask_id), Some(1));
         assert_eq!(mgr.find_tab_index_by_interaction(discuss_id), Some(2));
         assert_eq!(mgr.find_tab_index_by_interaction(InteractionId(999)), None);
+    }
+
+    #[test]
+    fn test_pane_for_interaction_mut() {
+        let mut mgr = TabManager::new();
+        let id = InteractionId(7);
+        mgr.create_tab(PaneKind::Interaction(InteractionForm::Ask, Some(id)));
+
+        if let Some(pane) = mgr.pane_for_interaction_mut(id) {
+            pane.title = Some("Target".into());
+        } else {
+            panic!("Expected pane for interaction");
+        }
+
+        assert_eq!(mgr.tabs()[1].pane.title.as_deref(), Some("Target"));
+        assert!(mgr.pane_for_interaction_mut(InteractionId(999)).is_none());
     }
 
     #[test]

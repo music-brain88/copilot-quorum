@@ -12,7 +12,7 @@
 //! ```
 
 use super::editor::{self, EditorContext, EditorResult};
-use super::event::{HilKind, HilRequest, TuiCommand, TuiEvent};
+use super::event::{HilKind, HilRequest, RoutedTuiEvent, TuiCommand, TuiEvent};
 use super::mode::{self, InputMode, KeyAction};
 use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
@@ -45,7 +45,7 @@ use quorum_application::{
     NoConversationLogger, ToolExecutorPort, ToolSchemaPort, UiEvent,
 };
 use quorum_domain::core::string::truncate;
-use quorum_domain::interaction::InteractionForm;
+use quorum_domain::interaction::{InteractionForm, InteractionId};
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
@@ -65,7 +65,7 @@ pub struct TuiApp<
     // -- Actor channels --
     cmd_tx: mpsc::UnboundedSender<TuiCommand>,
     ui_rx: mpsc::UnboundedReceiver<UiEvent>,
-    tui_event_rx: mpsc::UnboundedReceiver<TuiEvent>,
+    tui_event_rx: mpsc::UnboundedReceiver<RoutedTuiEvent>,
     hil_rx: mpsc::UnboundedReceiver<HilRequest>,
 
     // -- Presenter (applies UiEvents to state) --
@@ -117,7 +117,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         // Channels
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();
         let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiEvent>();
-        let (tui_event_tx, tui_event_rx) = mpsc::unbounded_channel::<TuiEvent>();
+        let (tui_event_tx, tui_event_rx) = mpsc::unbounded_channel::<RoutedTuiEvent>();
         let (hil_tx, hil_rx) = mpsc::unbounded_channel::<HilRequest>();
 
         // Human intervention port (sends to hil_rx)
@@ -234,9 +234,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let mut tick = tokio::time::interval(Duration::from_millis(250));
 
         // Send welcome
-        let _ = self
-            .cmd_tx
-            .send(TuiCommand::HandleCommand("__welcome".into()));
+        let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+            interaction_id: None,
+            command: "__welcome".into(),
+        });
 
         loop {
             // Render
@@ -272,8 +273,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
 
                 // TuiEvents from progress bridge / presenter
-                Some(tui_event) = self.tui_event_rx.recv() => {
-                    self.apply_tui_event(&mut state, tui_event);
+                Some(routed) = self.tui_event_rx.recv() => {
+                    self.apply_routed_tui_event(&mut state, routed);
                 }
 
                 // HiL requests
@@ -586,7 +587,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 if !input.is_empty() {
                     state.tabs.active_pane_mut().set_title_if_empty(&input);
                     state.push_message(DisplayMessage::user(&input));
-                    let _ = self.cmd_tx.send(TuiCommand::ProcessRequest(input));
+                    let interaction_id = Self::active_interaction_id(state);
+                    let _ = self.cmd_tx.send(TuiCommand::ProcessRequest {
+                        interaction_id,
+                        request: input,
+                    });
                 }
             }
             KeyAction::SubmitCommand => {
@@ -598,20 +603,36 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     } else if let Some(flash) = self.handle_tab_command(state, &cmd) {
                         state.set_flash(flash);
                     } else {
-                        let _ = self.cmd_tx.send(TuiCommand::HandleCommand(cmd));
+                        let interaction_id = Self::active_interaction_id(state);
+                        let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+                            interaction_id,
+                            command: cmd,
+                        });
                     }
                 }
             }
 
             // Quick commands
             KeyAction::SwitchSolo => {
-                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("solo".into()));
+                let interaction_id = Self::active_interaction_id(state);
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+                    interaction_id,
+                    command: "solo".into(),
+                });
             }
             KeyAction::SwitchEnsemble => {
-                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("ens".into()));
+                let interaction_id = Self::active_interaction_id(state);
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+                    interaction_id,
+                    command: "ens".into(),
+                });
             }
             KeyAction::ToggleFast => {
-                let _ = self.cmd_tx.send(TuiCommand::HandleCommand("fast".into()));
+                let interaction_id = Self::active_interaction_id(state);
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+                    interaction_id,
+                    command: "fast".into(),
+                });
             }
             KeyAction::SwitchAsk => {
                 // Enter command mode with "ask " pre-filled
@@ -669,12 +690,414 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             KeyAction::ShowHelp => state.show_help = !state.show_help,
             KeyAction::ToggleConsensus => {
                 // Handled by command
-                let _ = self
-                    .cmd_tx
-                    .send(TuiCommand::HandleCommand("toggle_consensus".into()));
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+                    interaction_id: Self::active_interaction_id(state),
+                    command: "toggle_consensus".into(),
+                });
             }
         }
         None
+    }
+
+    fn active_interaction_id(state: &TuiState) -> Option<InteractionId> {
+        match state.tabs.active_pane().kind {
+            PaneKind::Interaction(_, Some(id)) => Some(id),
+            PaneKind::Interaction(_, None) => None,
+        }
+    }
+
+    /// Apply a routed TuiEvent to the appropriate interaction pane
+    fn apply_routed_tui_event(&self, state: &mut TuiState, routed: RoutedTuiEvent) {
+        if let Some(id) = routed.interaction_id
+            && state.tabs.find_tab_index_by_interaction(id).is_some()
+        {
+            self.apply_tui_event_to_interaction(state, id, routed.event);
+            return;
+        }
+        // Fallback to active pane (global event or untargeted)
+        self.apply_tui_event(state, routed.event);
+    }
+
+    /// Apply event to a specific interaction pane.
+    ///
+    /// Caller must verify that the tab for `id` exists before calling.
+    fn apply_tui_event_to_interaction(
+        &self,
+        state: &mut TuiState,
+        id: InteractionId,
+        event: TuiEvent,
+    ) {
+        match event {
+            TuiEvent::StreamChunk(chunk) => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    pane.streaming_text.push_str(&chunk);
+                    if pane.auto_scroll {
+                        pane.scroll_offset = 0;
+                    }
+                }
+            }
+            TuiEvent::StreamEnd => {
+                state.finalize_stream_for(id);
+            }
+            TuiEvent::PhaseChange { phase, name } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    progress.current_phase = Some(phase);
+                    progress.phase_name = name;
+                    progress.current_tool = None;
+                }
+            }
+            TuiEvent::TaskStart {
+                description,
+                index,
+                total,
+            } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    let completed_tasks = progress
+                        .task_progress
+                        .as_ref()
+                        .map(|tp| tp.completed_tasks.clone())
+                        .unwrap_or_default();
+                    progress.task_progress = Some(TaskProgress {
+                        current_index: index,
+                        total,
+                        description: description.clone(),
+                        completed_tasks,
+                        active_tool_executions: Vec::new(),
+                    });
+                }
+                state.push_message_to(
+                    id,
+                    DisplayMessage::system(format!(
+                        "Executing Task {}/{}: {}",
+                        index, total, description
+                    )),
+                );
+            }
+            TuiEvent::TaskComplete {
+                description,
+                success,
+                index,
+                total: _,
+                output,
+            } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    let active_execs = if let Some(ref mut tp) = progress.task_progress {
+                        std::mem::take(&mut tp.active_tool_executions)
+                    } else {
+                        Vec::new()
+                    };
+                    if let Some(ref mut tp) = progress.task_progress {
+                        tp.completed_tasks.push(TaskSummary {
+                            index,
+                            description: description.clone(),
+                            success,
+                            output: output.clone(),
+                            duration_ms: None,
+                            tool_executions: active_execs,
+                        });
+                    }
+                }
+
+                let tool_exec_lines = if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    if let Some(ref tp) = pane.progress.task_progress {
+                        tp.completed_tasks
+                            .last()
+                            .map(|summary| {
+                                summary
+                                    .tool_executions
+                                    .iter()
+                                    .map(|exec| {
+                                        let (icon, dur) = match &exec.state {
+                                            ToolExecutionDisplayStatus::Completed { .. } => {
+                                                let d = exec
+                                                    .duration_ms
+                                                    .map(|ms| {
+                                                        if ms < 1000 {
+                                                            format!("{}ms", ms)
+                                                        } else {
+                                                            format!("{:.1}s", ms as f64 / 1000.0)
+                                                        }
+                                                    })
+                                                    .unwrap_or_default();
+                                                ("✓", d)
+                                            }
+                                            ToolExecutionDisplayStatus::Error { message } => {
+                                                ("✗", truncate(message, 40))
+                                            }
+                                            _ => ("…", String::new()),
+                                        };
+                                        format!("  {} {} ({})", icon, exec.tool_name, dur)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(
+                                        "
+",
+                                    )
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                let status = if success { "✓" } else { "✗" };
+                let mut msg = if let Some(ref out) = output {
+                    let extracted = extract_response_text(out);
+                    if extracted.is_empty() {
+                        format!("Task {} {} {}", index, status, description)
+                    } else {
+                        format!(
+                            "Task {} {} {}\n  Output: {}",
+                            index, status, description, extracted
+                        )
+                    }
+                } else {
+                    format!("Task {} {} {}", index, status, description)
+                };
+                if !tool_exec_lines.is_empty() {
+                    msg.push('\n');
+                    msg.push_str(&tool_exec_lines);
+                }
+                state.push_message_to(id, DisplayMessage::system(msg));
+            }
+            TuiEvent::ToolCall { tool_name, args: _ } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    progress.current_tool = Some(tool_name.clone());
+                    progress.tool_log.push(ToolLogEntry {
+                        tool_name,
+                        success: None,
+                    });
+                }
+            }
+            TuiEvent::ToolResult { tool_name, success } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    progress.current_tool = None;
+                    if let Some(entry) = progress
+                        .tool_log
+                        .iter_mut()
+                        .rev()
+                        .find(|e| e.tool_name == tool_name && e.success.is_none())
+                    {
+                        entry.success = Some(success);
+                    }
+                }
+            }
+            TuiEvent::ToolError { tool_name, message } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    progress.current_tool = None;
+                    if let Some(entry) = progress
+                        .tool_log
+                        .iter_mut()
+                        .rev()
+                        .find(|e| e.tool_name == tool_name && e.success.is_none())
+                    {
+                        entry.success = Some(false);
+                    }
+                }
+                state.set_flash(format!("Tool error: {} - {}", tool_name, message));
+            }
+            TuiEvent::InteractionCompleted {
+                parent_id,
+                result_text,
+            } => {
+                let target_id = parent_id.unwrap_or(id);
+                state.push_message_to(target_id, DisplayMessage::system(result_text));
+                state.set_flash("Child interaction completed");
+            }
+            TuiEvent::QuorumStart { phase, model_count } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    pane.progress.quorum_status = Some(QuorumStatus {
+                        phase,
+                        total: model_count,
+                        completed: 0,
+                        approved: 0,
+                    });
+                }
+            }
+            TuiEvent::QuorumModelVote { model: _, approved } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut qs) = pane.progress.quorum_status
+                {
+                    qs.completed += 1;
+                    if approved {
+                        qs.approved += 1;
+                    }
+                }
+            }
+            TuiEvent::QuorumComplete {
+                phase,
+                approved,
+                feedback: _,
+            } => {
+                let status = if approved { "APPROVED" } else { "REJECTED" };
+                state.set_flash(format!("{}: {}", phase, status));
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    pane.progress.quorum_status = None;
+                }
+            }
+            TuiEvent::PlanRevision { revision, feedback } => {
+                state.push_message_to(
+                    id,
+                    DisplayMessage::system(format!("Plan revision #{}: {}", revision, feedback)),
+                );
+            }
+            TuiEvent::EnsembleStart(count) => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    pane.progress.ensemble_progress = Some(EnsembleProgress {
+                        total_models: count,
+                        plans_generated: 0,
+                        models_completed: Vec::new(),
+                        models_failed: Vec::new(),
+                        voting_started: false,
+                        plan_count: None,
+                        selected: None,
+                    });
+                }
+            }
+            TuiEvent::EnsemblePlanGenerated(model) => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                {
+                    ep.plans_generated += 1;
+                    ep.models_completed.push(model);
+                }
+            }
+            TuiEvent::EnsembleVotingStart(plan_count) => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                {
+                    ep.voting_started = true;
+                    ep.plan_count = Some(plan_count);
+                }
+            }
+            TuiEvent::EnsembleModelFailed { model, error } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                {
+                    ep.models_failed.push((model, error));
+                }
+            }
+            TuiEvent::EnsembleComplete {
+                selected_model,
+                score,
+            } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                {
+                    ep.selected = Some((selected_model.clone(), score));
+                }
+                state.push_message_to(
+                    id,
+                    DisplayMessage::system(format!(
+                        "Selected plan from {} (score: {:.1}/10)",
+                        selected_model, score
+                    )),
+                );
+            }
+            TuiEvent::EnsembleFallback(reason) => {
+                state.push_message_to(
+                    id,
+                    DisplayMessage::system(format!("Ensemble failed, solo fallback: {}", reason)),
+                );
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    pane.progress.ensemble_progress = None;
+                }
+            }
+            TuiEvent::AgentStarting => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    progress.is_running = true;
+                    progress.tool_log.clear();
+                    progress.quorum_status = None;
+                    progress.task_progress = None;
+                    progress.ensemble_progress = None;
+                }
+            }
+            TuiEvent::AgentResult {
+                success,
+                summary: _,
+            } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    let progress = &mut pane.progress;
+                    progress.is_running = false;
+                    progress.current_phase = None;
+                    progress.current_tool = None;
+                }
+                if success {
+                    state.set_flash("Agent completed successfully");
+                } else {
+                    state.set_flash("Agent completed with issues");
+                }
+            }
+            TuiEvent::AgentError(msg) => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    pane.progress.is_running = false;
+                }
+                state.set_flash(msg);
+            }
+            TuiEvent::Flash(msg) => {
+                state.set_flash(msg);
+            }
+            TuiEvent::HistoryCleared => {}
+            TuiEvent::Exit => {
+                state.should_quit = true;
+            }
+            TuiEvent::ToolExecutionUpdate {
+                task_index: _,
+                execution_id,
+                tool_name,
+                state: exec_state,
+                duration_ms,
+            } => {
+                use super::event::ToolExecutionDisplayState;
+
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut tp) = pane.progress.task_progress
+                {
+                    let display_status = match exec_state {
+                        ToolExecutionDisplayState::Pending => ToolExecutionDisplayStatus::Pending,
+                        ToolExecutionDisplayState::Running => ToolExecutionDisplayStatus::Running,
+                        ToolExecutionDisplayState::Completed { preview } => {
+                            ToolExecutionDisplayStatus::Completed { preview }
+                        }
+                        ToolExecutionDisplayState::Error { message } => {
+                            ToolExecutionDisplayStatus::Error { message }
+                        }
+                    };
+
+                    if let Some(existing) = tp
+                        .active_tool_executions
+                        .iter_mut()
+                        .find(|e| e.execution_id == execution_id)
+                    {
+                        existing.state = display_status;
+                        existing.duration_ms = duration_ms;
+                    } else {
+                        tp.active_tool_executions.push(ToolExecutionDisplay {
+                            execution_id,
+                            tool_name,
+                            state: display_status,
+                            duration_ms,
+                        });
+                    }
+                }
+            }
+            // Config/mode events handled by presenter already
+            TuiEvent::Welcome { .. }
+            | TuiEvent::ConfigDisplay(_)
+            | TuiEvent::ModeChanged { .. }
+            | TuiEvent::ScopeChanged(_)
+            | TuiEvent::StrategyChanged(_)
+            | TuiEvent::CommandError(_) => {}
+        }
     }
 
     /// Apply a TuiEvent (from progress bridge or presenter) to state
@@ -1161,60 +1584,105 @@ async fn controller_task<
 >(
     mut controller: AgentController<G, T, C>,
     mut cmd_rx: mpsc::UnboundedReceiver<TuiCommand>,
-    progress_tx: mpsc::UnboundedSender<TuiEvent>,
+    progress_tx: mpsc::UnboundedSender<RoutedTuiEvent>,
 ) {
     // Send welcome on startup
     controller.send_welcome();
 
-    while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
-            TuiCommand::ProcessRequest(request) => {
-                let progress = TuiProgressBridge::new(progress_tx.clone());
-                controller.process_request(&request, &progress).await;
+    let mut spawn_tasks = tokio::task::JoinSet::new();
+
+    loop {
+        tokio::select! {
+            biased;
+
+            // Handle completed spawns
+            Some(res) = spawn_tasks.join_next() => {
+                match res {
+                    Ok(completion) => controller.finalize_spawn(completion),
+                    Err(e) => {
+                        // Task panic or cancellation
+                        if e.is_cancelled() {
+                            // ignore
+                        } else {
+                            let _ = progress_tx.send(RoutedTuiEvent::global(TuiEvent::Flash(
+                                format!("Spawn task panicked: {}", e)
+                            )));
+                        }
+                    }
+                }
             }
-            TuiCommand::HandleCommand(command) => {
-                if command == "__welcome" {
-                    // Already sent welcome above, skip
-                    continue;
-                }
-                if command.starts_with("__") {
-                    // Internal commands, skip
-                    continue;
-                }
-                // Prefix with / for the controller's command parser
-                let cmd_str = format!("/{}", command);
-                let progress = TuiProgressBridge::new(progress_tx.clone());
-                match controller.handle_command(&cmd_str, &progress).await {
-                    CommandAction::Exit => {
+
+            // Handle commands
+            cmd_opt = cmd_rx.recv() => {
+                let cmd = match cmd_opt {
+                    Some(c) => c,
+                    None => break, // Channel closed
+                };
+
+                match cmd {
+                    TuiCommand::ProcessRequest { interaction_id, request } => {
+                        let iid = interaction_id.unwrap_or_else(|| controller.active_interaction_id());
+                        let progress = TuiProgressBridge::new(progress_tx.clone(), Some(iid));
+                        controller.process_request(&request, &progress).await;
+                    }
+                    TuiCommand::HandleCommand { interaction_id, command } => {
+                        if command == "__welcome" {
+                             continue;
+                        }
+                        if command.starts_with("__") {
+                            continue;
+                        }
+
+                        let cmd_str = format!("/{}", command);
+
+                        let iid = interaction_id.unwrap_or_else(|| controller.active_interaction_id());
+                        let progress = TuiProgressBridge::new(progress_tx.clone(), Some(iid));
+
+                        match controller.handle_command(&cmd_str, &progress).await {
+                            CommandAction::Exit => {
+                                break;
+                            }
+                            CommandAction::Continue => {}
+                        }
+                    }
+                    TuiCommand::SetVerbose(verbose) => {
+                        controller.set_verbose(verbose);
+                    }
+                    TuiCommand::SetCancellation(token) => {
+                        controller.set_cancellation(token);
+                    }
+                    TuiCommand::SetReferenceResolver(resolver) => {
+                        controller.set_reference_resolver(resolver);
+                    }
+                    TuiCommand::SpawnInteraction {
+                        form,
+                        query,
+                        context_mode_override,
+                    } => {
+                        match controller.prepare_spawn(form, &query, context_mode_override) {
+                            Ok((child_id, clean_query, full_query)) => {
+                                let context = controller.build_spawn_context();
+                                let tx = progress_tx.clone();
+
+                                spawn_tasks.spawn(async move {
+                                    let progress = TuiProgressBridge::new(tx, Some(child_id));
+                                    context.execute(child_id, form, clean_query, full_query, &progress).await
+                                });
+                            }
+                            Err(e) => {
+                                let _ = progress_tx.send(RoutedTuiEvent::global(TuiEvent::Flash(
+                                    format!("Failed to prepare spawn: {}", e)
+                                )));
+                            }
+                        }
+                    }
+                    TuiCommand::ActivateInteraction(id) => {
+                        controller.set_active_interaction(id);
+                    }
+                    TuiCommand::Quit => {
                         break;
                     }
-                    CommandAction::Continue => {}
                 }
-            }
-            TuiCommand::SetVerbose(verbose) => {
-                controller.set_verbose(verbose);
-            }
-            TuiCommand::SetCancellation(token) => {
-                controller.set_cancellation(token);
-            }
-            TuiCommand::SetReferenceResolver(resolver) => {
-                controller.set_reference_resolver(resolver);
-            }
-            TuiCommand::SpawnInteraction {
-                form,
-                query,
-                context_mode_override,
-            } => {
-                let progress = TuiProgressBridge::new(progress_tx.clone());
-                controller
-                    .spawn_interaction(form, &query, context_mode_override, &progress)
-                    .await;
-            }
-            TuiCommand::ActivateInteraction(id) => {
-                controller.set_active_interaction(id);
-            }
-            TuiCommand::Quit => {
-                break;
             }
         }
     }
