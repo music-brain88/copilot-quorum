@@ -708,12 +708,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Apply a routed TuiEvent to the appropriate interaction pane
     fn apply_routed_tui_event(&self, state: &mut TuiState, routed: RoutedTuiEvent) {
-        if let Some(id) = routed.interaction_id {
-            if state.tabs.find_tab_index_by_interaction(id).is_some() {
+        if let Some(id) = routed.interaction_id
+            && state.tabs.find_tab_index_by_interaction(id).is_some() {
                 self.apply_tui_event_to_interaction(state, id, routed.event);
                 return;
             }
-        }
         // Fallback to active pane (global event or untargeted)
         self.apply_tui_event(state, routed.event);
     }
@@ -924,14 +923,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             }
             TuiEvent::QuorumModelVote { model: _, approved } => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    if let Some(ref mut qs) = pane.progress.quorum_status {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut qs) = pane.progress.quorum_status {
                         qs.completed += 1;
                         if approved {
                             qs.approved += 1;
                         }
                     }
-                }
             }
             TuiEvent::QuorumComplete {
                 phase,
@@ -964,37 +962,33 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
             }
             TuiEvent::EnsemblePlanGenerated(model) => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    if let Some(ref mut ep) = pane.progress.ensemble_progress {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress {
                         ep.plans_generated += 1;
                         ep.models_completed.push(model);
                     }
-                }
             }
             TuiEvent::EnsembleVotingStart(plan_count) => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    if let Some(ref mut ep) = pane.progress.ensemble_progress {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress {
                         ep.voting_started = true;
                         ep.plan_count = Some(plan_count);
                     }
-                }
             }
             TuiEvent::EnsembleModelFailed { model, error } => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    if let Some(ref mut ep) = pane.progress.ensemble_progress {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress {
                         ep.models_failed.push((model, error));
                     }
-                }
             }
             TuiEvent::EnsembleComplete {
                 selected_model,
                 score,
             } => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    if let Some(ref mut ep) = pane.progress.ensemble_progress {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress {
                         ep.selected = Some((selected_model.clone(), score));
                     }
-                }
                 state.push_message_to(
                     id,
                     DisplayMessage::system(format!(
@@ -1060,8 +1054,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             } => {
                 use super::event::ToolExecutionDisplayState;
 
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    if let Some(ref mut tp) = pane.progress.task_progress {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut tp) = pane.progress.task_progress {
                         let display_status = match exec_state {
                             ToolExecutionDisplayState::Pending => {
                                 ToolExecutionDisplayStatus::Pending
@@ -1093,7 +1087,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             });
                         }
                     }
-                }
             }
             // Config/mode events handled by presenter already
             TuiEvent::Welcome { .. }
