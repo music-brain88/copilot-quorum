@@ -249,7 +249,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
 
             // select! on all event sources
+            // biased: prioritize ui_rx (InteractionSpawned, etc.) over tui_event_rx
+            // to ensure tabs exist before progress events target them.
+            // TODO: Replace with interaction-aware routing when parallelizing controller_task.
             tokio::select! {
+                biased;
+
                 // Terminal events (keyboard, mouse, resize)
                 Some(Ok(term_event)) = event_stream.next() => {
                     if let Some(side_effect) = self.handle_terminal_event(&mut state, term_event) {
@@ -1085,14 +1090,22 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             || normalized.starts_with("agent ")
         {
             let (cmd_name, rest) = normalized.split_once(' ').unwrap_or((normalized, ""));
-            // For now, treat bare commands without args as empty query (or reject them if needed)
             if let Ok(form) = cmd_name.parse::<InteractionForm>() {
                 if rest.is_empty() {
                     return Some(format!("Usage: {} <query>", cmd_name));
                 }
+                let query = rest.trim().to_string();
+
+                // Fix A: Create placeholder tab immediately so the user sees it
+                // without waiting for the controller to process SpawnInteraction.
+                // The real InteractionId is bound later when InteractionSpawned arrives.
+                let kind = PaneKind::Interaction(form, None);
+                state.tabs.create_tab(kind);
+                state.tabs.active_pane_mut().set_title_if_empty(&query);
+
                 let _ = self.cmd_tx.send(TuiCommand::SpawnInteraction {
                     form,
-                    query: rest.trim().to_string(),
+                    query,
                     context_mode_override: None,
                 });
                 return Some(format!("Spawning {}...", cmd_name));
