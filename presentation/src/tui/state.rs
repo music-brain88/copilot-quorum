@@ -194,6 +194,16 @@ impl TuiState {
         }
     }
 
+    /// Push a message to a specific interaction pane
+    pub fn push_message_to(&mut self, id: quorum_domain::InteractionId, msg: DisplayMessage) {
+        if let Some(pane) = self.tabs.pane_for_interaction_mut(id) {
+            pane.messages.push(msg);
+            if pane.auto_scroll {
+                pane.scroll_offset = 0;
+            }
+        }
+    }
+
     /// Finalize streaming text into a message
     pub fn finalize_stream(&mut self) {
         let pane = self.tabs.active_pane_mut();
@@ -203,6 +213,20 @@ impl TuiState {
             pane.messages.push(msg);
             if pane.auto_scroll {
                 pane.scroll_offset = 0;
+            }
+        }
+    }
+
+    /// Finalize streaming text for a specific interaction
+    pub fn finalize_stream_for(&mut self, id: quorum_domain::InteractionId) {
+        if let Some(pane) = self.tabs.pane_for_interaction_mut(id) {
+            if !pane.streaming_text.is_empty() {
+                let text = std::mem::take(&mut pane.streaming_text);
+                let msg = DisplayMessage::assistant(text);
+                pane.messages.push(msg);
+                if pane.auto_scroll {
+                    pane.scroll_offset = 0;
+                }
             }
         }
     }
@@ -422,6 +446,8 @@ pub struct HilPrompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::tab::PaneKind;
+    use quorum_domain::interaction::{InteractionForm, InteractionId};
 
     #[test]
     fn test_input_editing() {
@@ -493,6 +519,42 @@ mod tests {
             state.tabs.active_pane().messages[0].role,
             MessageRole::Assistant
         );
+    }
+
+    #[test]
+    fn test_push_message_to_interaction() {
+        let mut state = TuiState::new();
+        let id = InteractionId(9);
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Ask, Some(id)));
+        state.tabs.prev_tab(); // ensure active pane is not the target
+
+        state.push_message_to(id, DisplayMessage::system("hello"));
+
+        let index = state.tabs.find_tab_index_by_interaction(id).unwrap();
+        assert_eq!(state.tabs.tabs()[index].pane.messages.len(), 1);
+        assert_eq!(state.tabs.tabs()[index].pane.messages[0].content, "hello");
+    }
+
+    #[test]
+    fn test_finalize_stream_for_interaction() {
+        let mut state = TuiState::new();
+        let id = InteractionId(10);
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Discuss, Some(id)));
+
+        if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+            pane.streaming_text = "stream text".into();
+        }
+
+        state.finalize_stream_for(id);
+
+        let pane = state.tabs.pane_for_interaction_mut(id).unwrap();
+        assert!(pane.streaming_text.is_empty());
+        assert_eq!(pane.messages.len(), 1);
+        assert_eq!(pane.messages[0].content, "stream text");
     }
 
     #[test]

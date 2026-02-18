@@ -9,12 +9,41 @@ use quorum_domain::{
 };
 use tokio::sync::oneshot;
 
+/// Wrapper for TuiEvent that includes routing metadata
+#[derive(Debug, Clone)]
+pub struct RoutedTuiEvent {
+    pub interaction_id: Option<InteractionId>,
+    pub event: TuiEvent,
+}
+
+impl RoutedTuiEvent {
+    pub fn for_interaction(id: InteractionId, event: TuiEvent) -> Self {
+        Self {
+            interaction_id: Some(id),
+            event,
+        }
+    }
+
+    pub fn global(event: TuiEvent) -> Self {
+        Self {
+            interaction_id: None,
+            event,
+        }
+    }
+}
+
 /// Commands sent from the TUI event loop to the controller task (Actor inbox)
 pub enum TuiCommand {
     /// User submitted text from Insert mode
-    ProcessRequest(String),
+    ProcessRequest {
+        interaction_id: Option<InteractionId>,
+        request: String,
+    },
     /// User issued a slash-command from Command mode (e.g. "q", "help", "solo")
-    HandleCommand(String),
+    HandleCommand {
+        interaction_id: Option<InteractionId>,
+        command: String,
+    },
     /// Set verbose mode
     SetVerbose(bool),
     /// Set cancellation token
@@ -176,4 +205,30 @@ pub enum HilKind {
         request: String,
         plan: Plan,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_routed_event_for_interaction() {
+        let routed = RoutedTuiEvent::for_interaction(
+            InteractionId(7),
+            TuiEvent::Flash("hello".to_string()),
+        );
+
+        assert_eq!(routed.interaction_id, Some(InteractionId(7)));
+        match routed.event {
+            TuiEvent::Flash(msg) => assert_eq!(msg, "hello"),
+            other => panic!("Expected Flash event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_routed_event_global() {
+        let routed = RoutedTuiEvent::global(TuiEvent::Exit);
+        assert_eq!(routed.interaction_id, None);
+        assert!(matches!(routed.event, TuiEvent::Exit));
+    }
 }
