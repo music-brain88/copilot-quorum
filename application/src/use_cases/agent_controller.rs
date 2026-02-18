@@ -304,7 +304,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         message: "Usage: /ask <question>".to_string(),
                     });
                 } else {
-                    self.spawn_interaction(InteractionForm::Ask, args, None, progress)
+                    self.execute_inline(InteractionForm::Ask, args, progress)
                         .await;
                 }
                 CommandAction::Continue
@@ -315,7 +315,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         message: "Usage: /discuss <question>".to_string(),
                     });
                 } else {
-                    self.spawn_interaction(InteractionForm::Discuss, args, None, progress)
+                    self.execute_inline(InteractionForm::Discuss, args, progress)
                         .await;
                 }
                 CommandAction::Continue
@@ -326,7 +326,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         message: "Usage: /agent <task>".to_string(),
                     });
                 } else {
-                    self.spawn_interaction(InteractionForm::Agent, args, None, progress)
+                    self.execute_inline(InteractionForm::Agent, args, progress)
                         .await;
                 }
                 CommandAction::Continue
@@ -483,15 +483,15 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         context
     }
 
-    /// Run Ask interaction — lightweight Q&A with read-only tool access
+    /// Run Ask interaction — lightweight Q&A with read-only tool access (inline, no new tab)
     pub async fn run_ask(&mut self, question: &str, progress: &dyn AgentProgressNotifier) {
-        self.spawn_interaction(InteractionForm::Ask, question, None, progress)
+        self.execute_inline(InteractionForm::Ask, question, progress)
             .await;
     }
 
-    /// Run Quorum Discussion with conversation context
+    /// Run Quorum Discussion with conversation context (inline, no new tab)
     pub async fn run_discuss(&mut self, question: &str, progress: &dyn AgentProgressNotifier) {
-        self.spawn_interaction(InteractionForm::Discuss, question, None, progress)
+        self.execute_inline(InteractionForm::Discuss, question, progress)
             .await;
     }
 
@@ -557,9 +557,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
-    /// Process a user request (run agent)
+    /// Process a user request (run agent, inline in current tab)
     pub async fn process_request(&mut self, request: &str, progress: &dyn AgentProgressNotifier) {
-        self.spawn_interaction(InteractionForm::Agent, request, None, progress)
+        self.execute_inline(InteractionForm::Agent, request, progress)
             .await;
     }
 
@@ -570,6 +570,49 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     /// Set the currently active interaction ID
     pub fn set_active_interaction(&mut self, id: InteractionId) {
         self.active_interaction_id = id;
+    }
+
+    /// Execute an interaction inline in the current tab (no new tab, no tree node).
+    ///
+    /// Performs context construction, use case execution, and history tracking
+    /// without creating an InteractionTree node or emitting InteractionSpawned/Completed events.
+    async fn execute_inline(
+        &mut self,
+        form: InteractionForm,
+        query: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) {
+        let (ctx_override_flag, clean_query) = Self::parse_spawn_flags(query);
+        let context_mode = ctx_override_flag.unwrap_or(ContextMode::Full);
+
+        // Build context
+        let context = match context_mode {
+            ContextMode::Full => self.build_context_from_history(),
+            ContextMode::Projected => self.build_projected_context(),
+            ContextMode::Fresh => String::new(),
+        };
+        let full_query = if context.is_empty() {
+            clean_query.clone()
+        } else {
+            format!("{}\n\n## Current Question\n\n{}", context, clean_query)
+        };
+
+        // Agent uses clean_query (has its own context loader); Ask/Discuss use full_query
+        let result = match form {
+            InteractionForm::Ask => self.execute_ask_spawn(&full_query, progress).await,
+            InteractionForm::Discuss => self.execute_discuss_spawn(&full_query, progress).await,
+            InteractionForm::Agent => self.execute_agent_spawn(&clean_query, progress).await,
+        };
+
+        // Add to history
+        if let Some(interaction_result) = result {
+            let result_text = interaction_result.to_context_injection();
+            self.conversation_history.push(HistoryEntry {
+                form,
+                request: clean_query,
+                summary: truncate_str(&result_text, 200).to_string(),
+            });
+        }
     }
 
     /// Spawn a new interaction (Ask, Discuss, or Agent).
@@ -1213,8 +1256,7 @@ mod tests {
         controller
             .handle_command("/ask What is Rust?", &NoAgentProgress)
             .await;
-        let event = rx.try_recv().unwrap();
-        assert!(matches!(event, UiEvent::InteractionSpawned(_)));
+        // Inline execution: no InteractionSpawned, directly AskStarting
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::AskStarting));
     }
