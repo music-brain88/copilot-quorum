@@ -16,7 +16,10 @@ pub struct TuiProgressBridge {
 }
 
 impl TuiProgressBridge {
-    pub fn new(tx: mpsc::UnboundedSender<RoutedTuiEvent>, interaction_id: Option<InteractionId>) -> Self {
+    pub fn new(
+        tx: mpsc::UnboundedSender<RoutedTuiEvent>,
+        interaction_id: Option<InteractionId>,
+    ) -> Self {
         Self { tx, interaction_id }
     }
 
@@ -340,8 +343,14 @@ mod tests {
         bridge.on_llm_chunk("world");
         bridge.on_llm_stream_end();
 
-        assert!(matches!(rx.try_recv().unwrap().event, TuiEvent::StreamChunk(_)));
-        assert!(matches!(rx.try_recv().unwrap().event, TuiEvent::StreamChunk(_)));
+        assert!(matches!(
+            rx.try_recv().unwrap().event,
+            TuiEvent::StreamChunk(_)
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap().event,
+            TuiEvent::StreamChunk(_)
+        ));
         assert!(matches!(rx.try_recv().unwrap().event, TuiEvent::StreamEnd));
     }
 

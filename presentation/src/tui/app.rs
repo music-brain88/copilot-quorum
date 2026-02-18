@@ -56,7 +56,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::human_intervention::TuiHumanIntervention;
 
-
 /// Main TUI application
 pub struct TuiApp<
     G: LlmGateway + 'static,
@@ -235,12 +234,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let mut tick = tokio::time::interval(Duration::from_millis(250));
 
         // Send welcome
-        let _ = self
-            .cmd_tx
-            .send(TuiCommand::HandleCommand {
-                interaction_id: None,
-                command: "__welcome".into(),
-            });
+        let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+            interaction_id: None,
+            command: "__welcome".into(),
+        });
 
         loop {
             // Render
@@ -693,12 +690,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             KeyAction::ShowHelp => state.show_help = !state.show_help,
             KeyAction::ToggleConsensus => {
                 // Handled by command
-                let _ = self
-                    .cmd_tx
-                    .send(TuiCommand::HandleCommand {
-                        interaction_id: Self::active_interaction_id(state),
-                        command: "toggle_consensus".into(),
-                    });
+                let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+                    interaction_id: Self::active_interaction_id(state),
+                    command: "toggle_consensus".into(),
+                });
             }
         }
         None
@@ -807,51 +802,49 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     }
                 }
 
-                let tool_exec_lines =
-                    if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                        if let Some(ref tp) = pane.progress.task_progress {
-                            tp.completed_tasks
-                                .last()
-                                .map(|summary| {
-                                    summary
-                                        .tool_executions
-                                        .iter()
-                                        .map(|exec| {
-                                            let (icon, dur) = match &exec.state {
-                                                ToolExecutionDisplayStatus::Completed { .. } => {
-                                                    let d = exec
-                                                        .duration_ms
-                                                        .map(|ms| {
-                                                            if ms < 1000 {
-                                                                format!("{}ms", ms)
-                                                            } else {
-                                                                format!(
-                                                                    "{:.1}s",
-                                                                    ms as f64 / 1000.0
-                                                                )
-                                                            }
-                                                        })
-                                                        .unwrap_or_default();
-                                                    ("✓", d)
-                                                }
-                                                ToolExecutionDisplayStatus::Error { message } => {
-                                                    ("✗", truncate(message, 40))
-                                                }
-                                                _ => ("…", String::new()),
-                                            };
-                                            format!("  {} {} ({})", icon, exec.tool_name, dur)
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("
-")
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            String::new()
-                        }
+                let tool_exec_lines = if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    if let Some(ref tp) = pane.progress.task_progress {
+                        tp.completed_tasks
+                            .last()
+                            .map(|summary| {
+                                summary
+                                    .tool_executions
+                                    .iter()
+                                    .map(|exec| {
+                                        let (icon, dur) = match &exec.state {
+                                            ToolExecutionDisplayStatus::Completed { .. } => {
+                                                let d = exec
+                                                    .duration_ms
+                                                    .map(|ms| {
+                                                        if ms < 1000 {
+                                                            format!("{}ms", ms)
+                                                        } else {
+                                                            format!("{:.1}s", ms as f64 / 1000.0)
+                                                        }
+                                                    })
+                                                    .unwrap_or_default();
+                                                ("✓", d)
+                                            }
+                                            ToolExecutionDisplayStatus::Error { message } => {
+                                                ("✗", truncate(message, 40))
+                                            }
+                                            _ => ("…", String::new()),
+                                        };
+                                        format!("  {} {} ({})", icon, exec.tool_name, dur)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(
+                                        "
+",
+                                    )
+                            })
+                            .unwrap_or_default()
                     } else {
                         String::new()
-                    };
+                    }
+                } else {
+                    String::new()
+                };
 
                 let status = if success { "✓" } else { "✗" };
                 let mut msg = if let Some(ref out) = output {
@@ -954,10 +947,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             TuiEvent::PlanRevision { revision, feedback } => {
                 state.push_message_to(
                     id,
-                    DisplayMessage::system(format!(
-                        "Plan revision #{}: {}",
-                        revision, feedback
-                    )),
+                    DisplayMessage::system(format!("Plan revision #{}: {}", revision, feedback)),
                 );
             }
             TuiEvent::EnsembleStart(count) => {
@@ -1016,10 +1006,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             TuiEvent::EnsembleFallback(reason) => {
                 state.push_message_to(
                     id,
-                    DisplayMessage::system(format!(
-                        "Ensemble failed, solo fallback: {}",
-                        reason
-                    )),
+                    DisplayMessage::system(format!("Ensemble failed, solo fallback: {}", reason)),
                 );
                 if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
                     pane.progress.ensemble_progress = None;
@@ -1076,8 +1063,12 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
                     if let Some(ref mut tp) = pane.progress.task_progress {
                         let display_status = match exec_state {
-                            ToolExecutionDisplayState::Pending => ToolExecutionDisplayStatus::Pending,
-                            ToolExecutionDisplayState::Running => ToolExecutionDisplayStatus::Running,
+                            ToolExecutionDisplayState::Pending => {
+                                ToolExecutionDisplayStatus::Pending
+                            }
+                            ToolExecutionDisplayState::Running => {
+                                ToolExecutionDisplayStatus::Running
+                            }
                             ToolExecutionDisplayState::Completed { preview } => {
                                 ToolExecutionDisplayStatus::Completed { preview }
                             }
@@ -1646,7 +1637,7 @@ async fn controller_task<
                         if command.starts_with("__") {
                             continue;
                         }
-                        
+
                         let cmd_str = if command.starts_with("/") {
                             command.clone()
                         } else {
@@ -1655,7 +1646,7 @@ async fn controller_task<
 
                         let iid = interaction_id.unwrap_or_else(|| controller.active_interaction_id());
                         let progress = TuiProgressBridge::new(progress_tx.clone(), Some(iid));
-                        
+
                         match controller.handle_command(&cmd_str, &progress).await {
                             CommandAction::Exit => {
                                 break;
@@ -1681,7 +1672,7 @@ async fn controller_task<
                             Ok((child_id, clean_query, full_query)) => {
                                 let context = controller.build_spawn_context();
                                 let tx = progress_tx.clone();
-                                
+
                                 spawn_tasks.spawn(async move {
                                     let progress = TuiProgressBridge::new(tx, Some(child_id));
                                     context.execute(child_id, form, clean_query, full_query, &progress).await

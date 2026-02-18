@@ -1022,7 +1022,11 @@ where
         // Use the factory method from QuorumConfig
         let input = self.config.to_agent_input(query);
 
-        match self.agent_use_case.execute_with_progress(input, progress).await {
+        match self
+            .agent_use_case
+            .execute_with_progress(input, progress)
+            .await
+        {
             Ok(output) => {
                 let _ = self
                     .tx

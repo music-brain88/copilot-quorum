@@ -213,10 +213,8 @@ mod tests {
 
     #[test]
     fn test_routed_event_for_interaction() {
-        let routed = RoutedTuiEvent::for_interaction(
-            InteractionId(7),
-            TuiEvent::Flash("hello".to_string()),
-        );
+        let routed =
+            RoutedTuiEvent::for_interaction(InteractionId(7), TuiEvent::Flash("hello".to_string()));
 
         assert_eq!(routed.interaction_id, Some(InteractionId(7)));
         match routed.event {
