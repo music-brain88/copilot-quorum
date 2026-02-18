@@ -260,6 +260,7 @@ pub struct ToolResultMessage {
     pub tool_name: String,     // ツール名（ログ用）
     pub output: String,        // 実行結果 or エラーメッセージ
     pub is_error: bool,        // エラーかどうか
+    pub is_rejected: bool,     // HiL/action review で拒否されたか
 }
 ```
 

@@ -7,7 +7,7 @@
 //! | Form | Description | Context Default |
 //! |------|-------------|-----------------|
 //! | [`Agent`](InteractionForm::Agent) | Autonomous task execution with planning | `Full` |
-//! | [`Ask`](InteractionForm::Ask) | Single question → answer (no tool use) | `Projected` |
+//! | [`Ask`](InteractionForm::Ask) | Single question → answer (read-only tools) | `Projected` |
 //! | [`Discuss`](InteractionForm::Discuss) | Multi-model discussion / council | `Full` |
 //!
 //! # Nesting
@@ -52,9 +52,10 @@ pub enum InteractionForm {
     ///
     /// Uses: `SessionMode`, `AgentPolicy`, `ExecutionParams`
     Agent,
-    /// Single question → answer. No tool use, no planning.
+    /// Single question → answer. Uses low-risk (read-only) tools for context
+    /// gathering, no planning.
     ///
-    /// Uses: `SessionMode` (for model selection only)
+    /// Uses: `SessionMode` (for model selection), `ExecutionParams` (max_tool_turns)
     Ask,
     /// Multi-model discussion / Quorum council.
     ///
@@ -99,9 +100,9 @@ impl InteractionForm {
 
     /// Whether this form uses `ExecutionParams` (iteration limits, tool turns, etc.).
     ///
-    /// Only `Agent` has execution loops that need limiting.
+    /// Both `Agent` and `Ask` have tool-use loops that need `max_tool_turns`.
     pub fn uses_execution_params(&self) -> bool {
-        matches!(self, InteractionForm::Agent)
+        matches!(self, InteractionForm::Agent | InteractionForm::Ask)
     }
 
     /// Returns the canonical string representation.
@@ -470,7 +471,7 @@ mod tests {
     #[test]
     fn test_interaction_form_uses_execution_params() {
         assert!(InteractionForm::Agent.uses_execution_params());
-        assert!(!InteractionForm::Ask.uses_execution_params());
+        assert!(InteractionForm::Ask.uses_execution_params());
         assert!(!InteractionForm::Discuss.uses_execution_params());
     }
 
