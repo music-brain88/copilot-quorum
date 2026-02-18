@@ -220,14 +220,15 @@ impl TuiState {
     /// Finalize streaming text for a specific interaction
     pub fn finalize_stream_for(&mut self, id: quorum_domain::InteractionId) {
         if let Some(pane) = self.tabs.pane_for_interaction_mut(id)
-            && !pane.streaming_text.is_empty() {
-                let text = std::mem::take(&mut pane.streaming_text);
-                let msg = DisplayMessage::assistant(text);
-                pane.messages.push(msg);
-                if pane.auto_scroll {
-                    pane.scroll_offset = 0;
-                }
+            && !pane.streaming_text.is_empty()
+        {
+            let text = std::mem::take(&mut pane.streaming_text);
+            let msg = DisplayMessage::assistant(text);
+            pane.messages.push(msg);
+            if pane.auto_scroll {
+                pane.scroll_offset = 0;
             }
+        }
     }
 
     // -- Scrolling --
