@@ -3,7 +3,10 @@
 //! Defines the commands sent TO the controller task and the events
 //! coming FROM it (via UiEvent channel and progress bridge).
 
-use quorum_domain::{AgentPhase, ConsensusLevel, HumanDecision, Plan, ReviewRound};
+use quorum_domain::{
+    AgentPhase, ConsensusLevel, ContextMode, HumanDecision, InteractionForm, InteractionId, Plan,
+    ReviewRound,
+};
 use tokio::sync::oneshot;
 
 /// Commands sent from the TUI event loop to the controller task (Actor inbox)
@@ -18,6 +21,14 @@ pub enum TuiCommand {
     SetCancellation(tokio_util::sync::CancellationToken),
     /// Set reference resolver for automatic reference resolution
     SetReferenceResolver(std::sync::Arc<dyn quorum_application::ReferenceResolverPort>),
+    /// Spawn a new interaction
+    SpawnInteraction {
+        form: InteractionForm,
+        query: String,
+        context_mode_override: Option<ContextMode>,
+    },
+    /// Activate an existing interaction
+    ActivateInteraction(InteractionId),
     /// Graceful shutdown
     #[allow(dead_code)]
     Quit,
@@ -48,6 +59,17 @@ pub enum TuiEvent {
         summary: String,
     },
     AgentError(String),
+
+    // -- Interaction lifecycle --
+    InteractionSpawned {
+        id: InteractionId,
+        form: InteractionForm,
+        query: String,
+    },
+    InteractionCompleted {
+        parent_id: Option<InteractionId>,
+        result_text: String,
+    },
 
     // -- Streaming text --
     StreamChunk(String),

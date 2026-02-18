@@ -76,6 +76,28 @@ impl TuiPresenter {
                 state.push_message(DisplayMessage::system(format!("Ask error: {}", error)));
                 self.emit(TuiEvent::AgentError(error.clone()));
             }
+            UiEvent::InteractionSpawned(event) => {
+                self.emit(TuiEvent::InteractionSpawned {
+                    id: event.id,
+                    form: event.form,
+                    query: event.query.clone(),
+                });
+            }
+            UiEvent::InteractionCompleted(event) => {
+                // Root interaction completions (parent_id = None) are not propagated;
+                // only child completions need to notify their parent's tab.
+                if let Some(parent_id) = event.parent_id {
+                    self.emit(TuiEvent::InteractionCompleted {
+                        parent_id: Some(parent_id),
+                        result_text: event.result_text.clone(),
+                    });
+                }
+            }
+            UiEvent::InteractionSpawnError { error } => {
+                let message = format!("Interaction spawn error: {}", error);
+                state.push_message(DisplayMessage::system(message.clone()));
+                self.emit(TuiEvent::Flash(message));
+            }
             UiEvent::QuorumStarting => {
                 state.push_message(DisplayMessage::system("Quorum Discussion starting..."));
             }

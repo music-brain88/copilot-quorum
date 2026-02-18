@@ -45,6 +45,7 @@ use quorum_application::{
     NoConversationLogger, ToolExecutorPort, ToolSchemaPort, UiEvent,
 };
 use quorum_domain::core::string::truncate;
+use quorum_domain::interaction::InteractionForm;
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
@@ -592,7 +593,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     } else if let Some(flash) = self.handle_tab_command(state, &cmd) {
                         state.set_flash(flash);
                     } else {
-                        Self::set_title_from_command(state, &cmd);
                         let _ = self.cmd_tx.send(TuiCommand::HandleCommand(cmd));
                     }
                 }
@@ -630,6 +630,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             // Tabs
             KeyAction::NextTab => {
                 state.tabs.next_tab();
+                if let PaneKind::Interaction(_, Some(id)) = state.tabs.active_pane().kind {
+                    let _ = self.cmd_tx.send(TuiCommand::ActivateInteraction(id));
+                }
                 state.set_flash(format!(
                     "Tab {}/{}",
                     state.tabs.active_index() + 1,
@@ -638,6 +641,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             }
             KeyAction::PrevTab => {
                 state.tabs.prev_tab();
+                if let PaneKind::Interaction(_, Some(id)) = state.tabs.active_pane().kind {
+                    let _ = self.cmd_tx.send(TuiCommand::ActivateInteraction(id));
+                }
                 state.set_flash(format!(
                     "Tab {}/{}",
                     state.tabs.active_index() + 1,
@@ -826,6 +832,22 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     entry.success = Some(false);
                 }
                 state.set_flash(format!("Tool error: {} - {}", tool_name, message));
+            }
+            TuiEvent::InteractionSpawned { id, form, query } => {
+                let kind = PaneKind::Interaction(form, Some(id));
+                state.tabs.create_tab(kind);
+                state.tabs.active_pane_mut().set_title_if_empty(&query);
+            }
+            TuiEvent::InteractionCompleted {
+                parent_id,
+                result_text,
+            } => {
+                if let Some(pid) = parent_id {
+                    state
+                        .tabs
+                        .push_message_to_interaction(pid, DisplayMessage::system(result_text));
+                }
+                state.set_flash("Child interaction completed");
             }
             TuiEvent::QuorumStart { phase, model_count } => {
                 state.tabs.active_pane_mut().progress.quorum_status = Some(QuorumStatus {
@@ -1054,24 +1076,34 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
-    /// Set tab title from `:ask` / `:discuss` commands.
-    fn set_title_from_command(state: &mut TuiState, cmd: &str) {
-        let trimmed = cmd.trim();
-        let question = trimmed
-            .strip_prefix("ask ")
-            .or_else(|| trimmed.strip_prefix("discuss "));
-        if let Some(q) = question {
-            let q = q.trim();
-            if !q.is_empty() {
-                state.tabs.active_pane_mut().set_title_if_empty(q);
-            }
-        }
-    }
-
     /// Handle tab-related commands locally (no controller round-trip).
     /// Returns Some(flash_message) if a tab command was handled, None otherwise.
     fn handle_tab_command(&self, state: &mut TuiState, cmd: &str) -> Option<String> {
         let trimmed = cmd.trim();
+        let normalized = trimmed.strip_prefix(':').unwrap_or(trimmed);
+
+        if normalized == "ask"
+            || normalized.starts_with("ask ")
+            || normalized == "discuss"
+            || normalized.starts_with("discuss ")
+            || normalized == "agent"
+            || normalized.starts_with("agent ")
+        {
+            let (cmd_name, rest) = normalized.split_once(' ').unwrap_or((normalized, ""));
+            // For now, treat bare commands without args as empty query (or reject them if needed)
+            if let Ok(form) = cmd_name.parse::<InteractionForm>() {
+                if rest.is_empty() {
+                    return Some(format!("Usage: {} <query>", cmd_name));
+                }
+                let _ = self.cmd_tx.send(TuiCommand::SpawnInteraction {
+                    form,
+                    query: rest.trim().to_string(),
+                    context_mode_override: None,
+                });
+                return Some(format!("Spawning {}...", cmd_name));
+            }
+        }
+
         if trimmed == "tabs" {
             // List all tabs
             let summary = state.tabs.tab_list_summary();
@@ -1081,6 +1113,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         if trimmed == "tabclose" {
             if state.tabs.close_active() {
+                // Sync active_interaction_id with the new active tab
+                if let PaneKind::Interaction(_, Some(id)) = state.tabs.active_pane().kind {
+                    let _ = self.cmd_tx.send(TuiCommand::ActivateInteraction(id));
+                }
                 return Some(format!("Tab closed ({} remaining)", state.tabs.len()));
             } else {
                 return Some("Cannot close last tab".into());
@@ -1090,10 +1126,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         if trimmed == "tabnew" || trimmed.starts_with("tabnew ") {
             let arg = trimmed.strip_prefix("tabnew").unwrap().trim();
             let kind = if arg.is_empty() {
-                PaneKind::Interaction(quorum_domain::interaction::InteractionForm::Agent)
+                PaneKind::Interaction(quorum_domain::interaction::InteractionForm::Agent, None)
             } else {
                 match arg.parse::<quorum_domain::interaction::InteractionForm>() {
-                    Ok(form) => PaneKind::Interaction(form),
+                    Ok(form) => PaneKind::Interaction(form, None),
                     Err(_) => {
                         return Some(format!("Unknown form: {}. Use agent/ask/discuss", arg));
                     }
@@ -1155,6 +1191,19 @@ async fn controller_task<
             }
             TuiCommand::SetReferenceResolver(resolver) => {
                 controller.set_reference_resolver(resolver);
+            }
+            TuiCommand::SpawnInteraction {
+                form,
+                query,
+                context_mode_override,
+            } => {
+                let progress = TuiProgressBridge::new(progress_tx.clone());
+                controller
+                    .spawn_interaction(form, &query, context_mode_override, &progress)
+                    .await;
+            }
+            TuiCommand::ActivateInteraction(id) => {
+                controller.set_active_interaction(id);
             }
             TuiCommand::Quit => {
                 break;
