@@ -85,7 +85,10 @@ impl TuiPresenter {
                 // is created.
                 let kind = PaneKind::Interaction(event.form, Some(event.id));
                 state.tabs.create_tab(kind);
-                state.tabs.active_pane_mut().set_title_if_empty(&event.query);
+                state
+                    .tabs
+                    .active_pane_mut()
+                    .set_title_if_empty(&event.query);
             }
             UiEvent::InteractionCompleted(event) => {
                 // Root interaction completions (parent_id = None) are not propagated;

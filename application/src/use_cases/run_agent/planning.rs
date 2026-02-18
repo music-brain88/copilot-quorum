@@ -406,7 +406,10 @@ where
                         warn!("Voting failed for plan from {}: {}", plan_model_name, e);
                     }
                     Err(e) => {
-                        warn!("Voting task join error for plan from {}: {}", plan_model_name, e);
+                        warn!(
+                            "Voting task join error for plan from {}: {}",
+                            plan_model_name, e
+                        );
                     }
                 }
             }
