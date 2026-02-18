@@ -508,6 +508,7 @@ pub(super) async fn generate_plan_from_session(
                      fields. Please call create_plan again with all required arguments."
                 .to_string(),
             is_error: true,
+            is_rejected: false,
         }];
         let retry = session.send_tool_results(&results).await?;
         if let Some(plan) = extract_plan_from_response(&retry) {

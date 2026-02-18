@@ -115,6 +115,7 @@ impl StreamHandle {
 ///     tool_name: "read_file".to_string(),
 ///     output: "fn main() { ... }".to_string(),
 ///     is_error: false,
+///     is_rejected: false,
 /// };
 /// let next_response = session.send_tool_results(&[result]).await?;
 /// ```
@@ -128,6 +129,11 @@ pub struct ToolResultMessage {
     pub output: String,
     /// Whether this result represents an error.
     pub is_error: bool,
+    /// Whether this result was rejected by HiL / action review.
+    ///
+    /// When `true`, the transport layer sends `resultType: "rejected"` instead of
+    /// `"failure"`, allowing the LLM to distinguish policy rejections from tool errors.
+    pub is_rejected: bool,
 }
 
 /// An active LLM session
