@@ -78,13 +78,13 @@ impl TuiPresenter {
                 self.emit(TuiEvent::AgentError(error.clone()));
             }
             UiEvent::InteractionSpawned(event) => {
-                // Create tab directly to avoid race condition: if we emit a TuiEvent
-                // here, it goes through tui_event_tx and is processed one select! loop
-                // iteration later. Meanwhile, subsequent UiEvents (QuorumStarting, etc.)
-                // arrive on ui_rx and write to the OLD active tab before the new tab
-                // is created.
-                let kind = PaneKind::Interaction(event.form, Some(event.id));
-                state.tabs.create_tab(kind);
+                // Fix A: Try to bind the interaction_id to an existing placeholder tab
+                // (created immediately by handle_tab_command). If no placeholder exists
+                // (e.g., programmatic spawn), create a new tab as before.
+                if !state.tabs.bind_interaction_id(event.form, event.id) {
+                    let kind = PaneKind::Interaction(event.form, Some(event.id));
+                    state.tabs.create_tab(kind);
+                }
                 state
                     .tabs
                     .active_pane_mut()
