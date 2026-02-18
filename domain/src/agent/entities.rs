@@ -733,15 +733,23 @@ impl EnsemblePlanResult {
         }
     }
 
-    /// Select the best plan based on average scores
+    /// Select the best plan based on average scores.
+    ///
+    /// Tiebreaker rules when average scores are equal:
+    /// 1. More votes = more confidence (prefer the candidate with more votes)
+    /// 2. Lower index = generated first (stable ordering)
     pub fn select_best(candidates: Vec<PlanCandidate>) -> Self {
         let selected_index = candidates
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| {
+            .max_by(|(i, a), (j, b)| {
                 a.average_score()
                     .partial_cmp(&b.average_score())
                     .unwrap_or(std::cmp::Ordering::Equal)
+                    // Tiebreaker 1: more votes = more confidence
+                    .then_with(|| a.vote_count().cmp(&b.vote_count()))
+                    // Tiebreaker 2: lower index = generated first (stable ordering)
+                    .then_with(|| j.cmp(i))
             })
             .map(|(i, _)| i)
             .unwrap_or(0);
@@ -1374,6 +1382,32 @@ mod tests {
         plan.tasks[0].mark_in_progress();
         // next_task should return None (task-1 is InProgress, task-2 is blocked)
         assert!(plan.next_task().is_none());
+    }
+
+    #[test]
+    fn test_select_best_tiebreaker_by_vote_count() {
+        let mut c1 = PlanCandidate::new(Model::ClaudeSonnet45, Plan::new("A", "R"));
+        c1.add_vote("GPT", 8.0);
+        c1.add_vote("Gemini", 8.0);
+
+        let mut c2 = PlanCandidate::new(Model::Gpt52Codex, Plan::new("B", "R"));
+        c2.add_vote("Claude", 8.0);
+        // c2 has only 1 vote vs c1's 2 votes
+
+        let result = EnsemblePlanResult::select_best(vec![c1, c2]);
+        assert_eq!(result.selected_index, 0); // c1 wins: more votes
+    }
+
+    #[test]
+    fn test_select_best_tiebreaker_by_index() {
+        let mut c1 = PlanCandidate::new(Model::ClaudeSonnet45, Plan::new("A", "R"));
+        c1.add_vote("GPT", 8.0);
+
+        let mut c2 = PlanCandidate::new(Model::Gpt52Codex, Plan::new("B", "R"));
+        c2.add_vote("Claude", 8.0);
+
+        let result = EnsemblePlanResult::select_best(vec![c1, c2]);
+        assert_eq!(result.selected_index, 0); // c1 wins: same score, same votes, lower index
     }
 
     #[test]
