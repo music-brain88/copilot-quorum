@@ -69,6 +69,17 @@ pub struct RunAskUseCase<G: LlmGateway, T: ToolExecutorPort> {
     conversation_logger: Arc<dyn ConversationLogger>,
 }
 
+impl<G: LlmGateway, T: ToolExecutorPort> Clone for RunAskUseCase<G, T> {
+    fn clone(&self) -> Self {
+        Self {
+            gateway: self.gateway.clone(),
+            tool_executor: self.tool_executor.clone(),
+            tool_schema: self.tool_schema.clone(),
+            conversation_logger: self.conversation_logger.clone(),
+        }
+    }
+}
+
 impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T> {
     pub fn new(
         gateway: Arc<G>,
@@ -87,6 +98,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
     pub fn with_conversation_logger(mut self, logger: Arc<dyn ConversationLogger>) -> Self {
         self.conversation_logger = logger;
         self
+    }
+
+    /// Set a conversation logger (mutator).
+    pub fn set_conversation_logger(&mut self, logger: Arc<dyn ConversationLogger>) {
+        self.conversation_logger = logger;
     }
 
     /// Execute the Ask interaction with progress callbacks.
@@ -181,6 +197,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
                         tool_name: call.tool_name.clone(),
                         output,
                         is_error,
+                        is_rejected: false,
                     });
                 } else {
                     warn!(

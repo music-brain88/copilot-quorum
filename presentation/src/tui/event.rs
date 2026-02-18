@@ -3,21 +3,61 @@
 //! Defines the commands sent TO the controller task and the events
 //! coming FROM it (via UiEvent channel and progress bridge).
 
-use quorum_domain::{AgentPhase, ConsensusLevel, HumanDecision, Plan, ReviewRound};
+use quorum_domain::{
+    AgentPhase, ConsensusLevel, ContextMode, HumanDecision, InteractionForm, InteractionId, Plan,
+    ReviewRound,
+};
 use tokio::sync::oneshot;
+
+/// Wrapper for TuiEvent that includes routing metadata
+#[derive(Debug, Clone)]
+pub struct RoutedTuiEvent {
+    pub interaction_id: Option<InteractionId>,
+    pub event: TuiEvent,
+}
+
+impl RoutedTuiEvent {
+    pub fn for_interaction(id: InteractionId, event: TuiEvent) -> Self {
+        Self {
+            interaction_id: Some(id),
+            event,
+        }
+    }
+
+    pub fn global(event: TuiEvent) -> Self {
+        Self {
+            interaction_id: None,
+            event,
+        }
+    }
+}
 
 /// Commands sent from the TUI event loop to the controller task (Actor inbox)
 pub enum TuiCommand {
     /// User submitted text from Insert mode
-    ProcessRequest(String),
+    ProcessRequest {
+        interaction_id: Option<InteractionId>,
+        request: String,
+    },
     /// User issued a slash-command from Command mode (e.g. "q", "help", "solo")
-    HandleCommand(String),
+    HandleCommand {
+        interaction_id: Option<InteractionId>,
+        command: String,
+    },
     /// Set verbose mode
     SetVerbose(bool),
     /// Set cancellation token
     SetCancellation(tokio_util::sync::CancellationToken),
     /// Set reference resolver for automatic reference resolution
     SetReferenceResolver(std::sync::Arc<dyn quorum_application::ReferenceResolverPort>),
+    /// Spawn a new interaction
+    SpawnInteraction {
+        form: InteractionForm,
+        query: String,
+        context_mode_override: Option<ContextMode>,
+    },
+    /// Activate an existing interaction
+    ActivateInteraction(InteractionId),
     /// Graceful shutdown
     #[allow(dead_code)]
     Quit,
@@ -48,6 +88,14 @@ pub enum TuiEvent {
         summary: String,
     },
     AgentError(String),
+
+    // -- Interaction lifecycle --
+    // Note: InteractionSpawned is handled directly in presenter.apply() to avoid
+    // a select! loop race condition with subsequent UiEvents.
+    InteractionCompleted {
+        parent_id: Option<InteractionId>,
+        result_text: String,
+    },
 
     // -- Streaming text --
     StreamChunk(String),
@@ -157,4 +205,28 @@ pub enum HilKind {
         request: String,
         plan: Plan,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_routed_event_for_interaction() {
+        let routed =
+            RoutedTuiEvent::for_interaction(InteractionId(7), TuiEvent::Flash("hello".to_string()));
+
+        assert_eq!(routed.interaction_id, Some(InteractionId(7)));
+        match routed.event {
+            TuiEvent::Flash(msg) => assert_eq!(msg, "hello"),
+            other => panic!("Expected Flash event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_routed_event_global() {
+        let routed = RoutedTuiEvent::global(TuiEvent::Exit);
+        assert_eq!(routed.interaction_id, None);
+        assert!(matches!(routed.event, TuiEvent::Exit));
+    }
 }

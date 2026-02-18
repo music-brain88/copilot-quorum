@@ -3,8 +3,9 @@
 //! Pure state-update logic with no terminal I/O.
 //! Each UiEvent is mapped to one or more TuiState changes and/or TuiEvent emissions.
 
-use super::event::TuiEvent;
+use super::event::{RoutedTuiEvent, TuiEvent};
 use super::state::{DisplayMessage, TuiState};
+use super::tab::PaneKind;
 use quorum_application::{
     AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
     QuorumResultEvent, UiEvent, WelcomeInfo,
@@ -13,11 +14,11 @@ use tokio::sync::mpsc;
 
 /// Stateless presenter: applies UiEvents to TuiState and emits TuiEvents for rendering updates
 pub struct TuiPresenter {
-    event_tx: mpsc::UnboundedSender<TuiEvent>,
+    event_tx: mpsc::UnboundedSender<RoutedTuiEvent>,
 }
 
 impl TuiPresenter {
-    pub fn new(event_tx: mpsc::UnboundedSender<TuiEvent>) -> Self {
+    pub fn new(event_tx: mpsc::UnboundedSender<RoutedTuiEvent>) -> Self {
         Self { event_tx }
     }
 
@@ -75,6 +76,37 @@ impl TuiPresenter {
             UiEvent::AskError { error } => {
                 state.push_message(DisplayMessage::system(format!("Ask error: {}", error)));
                 self.emit(TuiEvent::AgentError(error.clone()));
+            }
+            UiEvent::InteractionSpawned(event) => {
+                // Fix A: Try to bind the interaction_id to an existing placeholder tab
+                // (created immediately by handle_tab_command). If no placeholder exists
+                // (e.g., programmatic spawn), create a new tab as before.
+                if !state.tabs.bind_interaction_id(event.form, event.id) {
+                    let kind = PaneKind::Interaction(event.form, Some(event.id));
+                    state.tabs.create_tab(kind);
+                }
+                state
+                    .tabs
+                    .active_pane_mut()
+                    .set_title_if_empty(&event.query);
+            }
+            UiEvent::InteractionCompleted(event) => {
+                // Root interaction completions (parent_id = None) are not propagated;
+                // only child completions need to notify their parent's tab.
+                if let Some(parent_id) = event.parent_id {
+                    let _ = self.event_tx.send(RoutedTuiEvent::for_interaction(
+                        parent_id,
+                        TuiEvent::InteractionCompleted {
+                            parent_id: Some(parent_id),
+                            result_text: event.result_text.clone(),
+                        },
+                    ));
+                }
+            }
+            UiEvent::InteractionSpawnError { error } => {
+                let message = format!("Interaction spawn error: {}", error);
+                state.push_message(DisplayMessage::system(message.clone()));
+                self.emit(TuiEvent::Flash(message));
             }
             UiEvent::QuorumStarting => {
                 state.push_message(DisplayMessage::system("Quorum Discussion starting..."));
@@ -218,7 +250,7 @@ impl TuiPresenter {
     }
 
     fn emit(&self, event: TuiEvent) {
-        let _ = self.event_tx.send(event);
+        let _ = self.event_tx.send(RoutedTuiEvent::global(event));
     }
 }
 
@@ -227,7 +259,11 @@ mod tests {
     use super::*;
     use quorum_domain::ConsensusLevel;
 
-    fn setup() -> (TuiPresenter, mpsc::UnboundedReceiver<TuiEvent>, TuiState) {
+    fn setup() -> (
+        TuiPresenter,
+        mpsc::UnboundedReceiver<RoutedTuiEvent>,
+        TuiState,
+    ) {
         let (tx, rx) = mpsc::unbounded_channel();
         let presenter = TuiPresenter::new(tx);
         let state = TuiState::new();

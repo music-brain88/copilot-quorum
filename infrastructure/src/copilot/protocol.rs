@@ -328,6 +328,13 @@ impl ToolCallResult {
         }
     }
 
+    pub fn rejected(text: impl Into<String>) -> Self {
+        Self {
+            text_result_for_llm: text.into(),
+            result_type: "rejected".to_string(),
+        }
+    }
+
     /// Serialize into the `{ "result": { ... } }` envelope expected by the
     /// Copilot CLI on the wire.
     pub fn into_rpc_value(self) -> serde_json::Value {
@@ -470,6 +477,16 @@ mod tests {
         let result = ToolCallResult::error("File not found");
         assert_eq!(result.result_type, "failure");
         assert_eq!(result.text_result_for_llm, "File not found");
+    }
+
+    #[test]
+    fn tool_call_result_rejected() {
+        let result = ToolCallResult::rejected("Action rejected by quorum review");
+        assert_eq!(result.result_type, "rejected");
+        assert_eq!(
+            result.text_result_for_llm,
+            "Action rejected by quorum review"
+        );
     }
 
     #[test]
