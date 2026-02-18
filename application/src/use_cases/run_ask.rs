@@ -89,6 +89,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
         self
     }
 
+    /// Set a conversation logger (mutator).
+    pub fn set_conversation_logger(&mut self, logger: Arc<dyn ConversationLogger>) {
+        self.conversation_logger = logger;
+    }
+
     /// Execute the Ask interaction with progress callbacks.
     pub async fn execute(
         &self,

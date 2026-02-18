@@ -33,6 +33,7 @@
 
 use crate::context::ContextMode;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Maximum nesting depth for interactions.
 ///
@@ -147,6 +148,38 @@ impl std::fmt::Display for InteractionId {
 }
 
 // =============================================================================
+// SpawnError
+// =============================================================================
+
+/// Error returned when spawning a child interaction fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpawnError {
+    /// Parent interaction not found.
+    ParentNotFound(InteractionId),
+    /// Max nesting depth exceeded.
+    MaxDepthExceeded { depth: usize, max: usize },
+}
+
+impl std::fmt::Display for SpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpawnError::ParentNotFound(parent_id) => {
+                write!(f, "Parent interaction not found: {}", parent_id)
+            }
+            SpawnError::MaxDepthExceeded { depth, max } => {
+                write!(
+                    f,
+                    "Max nesting depth exceeded (depth {}, max {})",
+                    depth, max
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpawnError {}
+
+// =============================================================================
 // Interaction
 // =============================================================================
 
@@ -202,6 +235,98 @@ impl Interaction {
     /// Whether this interaction can spawn children (depth check).
     pub fn can_spawn(&self) -> bool {
         self.depth < DEFAULT_MAX_NESTING_DEPTH
+    }
+}
+
+// =============================================================================
+// InteractionTree
+// =============================================================================
+
+/// Tree structure for nesting interactions with automatic id allocation.
+#[derive(Debug, Clone, Default)]
+pub struct InteractionTree {
+    nodes: HashMap<InteractionId, Interaction>,
+    children: HashMap<InteractionId, Vec<InteractionId>>,
+    next_id: usize,
+}
+
+impl InteractionTree {
+    /// Create and register a root interaction.
+    pub fn create_root(&mut self, form: InteractionForm) -> InteractionId {
+        let id = self.allocate_id();
+        let interaction = Interaction::root(id, form);
+        self.nodes.insert(id, interaction);
+        self.children.entry(id).or_default();
+        id
+    }
+
+    /// Spawn a child interaction with the form's default context mode.
+    pub fn spawn_child(
+        &mut self,
+        parent_id: InteractionId,
+        form: InteractionForm,
+    ) -> Result<InteractionId, SpawnError> {
+        self.spawn_child_internal(parent_id, form, None)
+    }
+
+    /// Spawn a child interaction with an explicit context mode.
+    pub fn spawn_child_with_context(
+        &mut self,
+        parent_id: InteractionId,
+        form: InteractionForm,
+        context_mode: ContextMode,
+    ) -> Result<InteractionId, SpawnError> {
+        self.spawn_child_internal(parent_id, form, Some(context_mode))
+    }
+
+    /// Get a reference to an interaction by id.
+    pub fn get(&self, id: InteractionId) -> Option<&Interaction> {
+        self.nodes.get(&id)
+    }
+
+    /// Get the parent id for an interaction.
+    pub fn parent_of(&self, id: InteractionId) -> Option<InteractionId> {
+        self.nodes.get(&id).and_then(|node| node.parent)
+    }
+
+    /// Get the child ids for an interaction.
+    pub fn children_of(&self, id: InteractionId) -> Option<&[InteractionId]> {
+        self.children.get(&id).map(|children| children.as_slice())
+    }
+
+    fn allocate_id(&mut self) -> InteractionId {
+        let id = InteractionId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    fn spawn_child_internal(
+        &mut self,
+        parent_id: InteractionId,
+        form: InteractionForm,
+        context_mode: Option<ContextMode>,
+    ) -> Result<InteractionId, SpawnError> {
+        let parent = self
+            .nodes
+            .get(&parent_id)
+            .cloned()
+            .ok_or(SpawnError::ParentNotFound(parent_id))?;
+        let child_depth = parent.depth + 1;
+        if child_depth > DEFAULT_MAX_NESTING_DEPTH {
+            return Err(SpawnError::MaxDepthExceeded {
+                depth: child_depth,
+                max: DEFAULT_MAX_NESTING_DEPTH,
+            });
+        }
+        let id = self.allocate_id();
+        let mut child = Interaction::child(id, form, &parent);
+        if let Some(mode) = context_mode {
+            child = child.with_context_mode(mode);
+        }
+        self.nodes.insert(id, child);
+        self.children.entry(parent_id).or_default().push(id);
+        self.children.entry(id).or_default();
+        Ok(id)
     }
 }
 
@@ -438,6 +563,87 @@ mod tests {
 
         assert_eq!(d3.depth, 3);
         assert!(!d3.can_spawn()); // At DEFAULT_MAX_NESTING_DEPTH
+    }
+
+    // =========================================================================
+    // InteractionTree tests
+    // =========================================================================
+
+    #[test]
+    fn test_interaction_tree_create_root() {
+        let mut tree = InteractionTree::default();
+        let root_id = tree.create_root(InteractionForm::Agent);
+        let root = tree.get(root_id).expect("root missing");
+
+        assert_eq!(root.id, root_id);
+        assert_eq!(root.form, InteractionForm::Agent);
+        assert_eq!(root.context_mode, ContextMode::Full);
+        assert_eq!(root.parent, None);
+        assert_eq!(root.depth, 0);
+        assert_eq!(tree.parent_of(root_id), None);
+        assert_eq!(tree.children_of(root_id).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_interaction_tree_spawn_child() {
+        let mut tree = InteractionTree::default();
+        let root_id = tree.create_root(InteractionForm::Agent);
+        let child_id = tree
+            .spawn_child(root_id, InteractionForm::Ask)
+            .expect("spawn child");
+
+        let child = tree.get(child_id).expect("child missing");
+        assert_eq!(child.parent, Some(root_id));
+        assert_eq!(child.depth, 1);
+        assert_eq!(child.context_mode, ContextMode::Projected);
+
+        let children = tree.children_of(root_id).expect("children missing");
+        assert_eq!(children, &[child_id]);
+        assert_eq!(tree.children_of(child_id).unwrap().len(), 0);
+        assert_eq!(tree.parent_of(child_id), Some(root_id));
+    }
+
+    #[test]
+    fn test_interaction_tree_depth_limit() {
+        let mut tree = InteractionTree::default();
+        let mut current_id = tree.create_root(InteractionForm::Agent);
+
+        for _ in 0..DEFAULT_MAX_NESTING_DEPTH {
+            current_id = tree
+                .spawn_child(current_id, InteractionForm::Ask)
+                .expect("spawn within depth");
+        }
+
+        let err = tree
+            .spawn_child(current_id, InteractionForm::Discuss)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            SpawnError::MaxDepthExceeded {
+                depth: DEFAULT_MAX_NESTING_DEPTH + 1,
+                max: DEFAULT_MAX_NESTING_DEPTH,
+            }
+        );
+    }
+
+    #[test]
+    fn test_interaction_tree_parent_not_found() {
+        let mut tree = InteractionTree::default();
+        let err = tree
+            .spawn_child(InteractionId(999), InteractionForm::Ask)
+            .unwrap_err();
+        assert_eq!(err, SpawnError::ParentNotFound(InteractionId(999)));
+    }
+
+    #[test]
+    fn test_interaction_tree_spawn_child_with_context() {
+        let mut tree = InteractionTree::default();
+        let root_id = tree.create_root(InteractionForm::Agent);
+        let child_id = tree
+            .spawn_child_with_context(root_id, InteractionForm::Ask, ContextMode::Full)
+            .expect("spawn child with context");
+        let child = tree.get(child_id).expect("child missing");
+        assert_eq!(child.context_mode, ContextMode::Full);
     }
 
     // =========================================================================

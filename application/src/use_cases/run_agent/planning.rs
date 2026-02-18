@@ -67,7 +67,7 @@ where
     /// - "Multi-Agent Debate" (ICLR 2025): Debate leads to "degeneration of thought"
     /// - "Beyond Majority Voting" (NeurIPS 2024): Advanced aggregation methods
     ///
-    /// See `docs/features/ensemble-mode.md` for detailed design rationale.
+    /// See `docs/concepts/ensemble-mode.md` for detailed design rationale.
     ///
     /// # Errors
     ///
@@ -321,6 +321,9 @@ where
         info!("Ensemble Step 2: Voting on {} plans", candidates.len());
         progress.on_ensemble_voting_start(candidates.len());
 
+        // Voting timeout = session_timeout / 2 (voting is lighter than plan generation)
+        let voting_timeout = session_timeout.map(|t| t / 2);
+
         // For each candidate, have other models vote on it
         for i in 0..candidates.len() {
             // Clone plan and model name for use in async tasks and logging
@@ -341,12 +344,26 @@ where
                 let system_prompt = system_prompt.to_string();
 
                 voting_join_set.spawn(async move {
-                    let session = gateway
-                        .create_session_with_system_prompt(&voter_model, &system_prompt)
-                        .await?;
-                    let response = session.send(&voting_prompt).await?;
-                    let score = parse_vote_score(&response);
-                    Ok::<(String, f64), GatewayError>((voter_model.to_string(), score))
+                    let voting_future = async {
+                        let session = gateway
+                            .create_session_with_system_prompt(&voter_model, &system_prompt)
+                            .await?;
+                        let response = session.send(&voting_prompt).await?;
+                        let score = parse_vote_score(&response);
+                        Ok::<(String, f64), GatewayError>((voter_model.to_string(), score))
+                    };
+
+                    if let Some(timeout) = voting_timeout {
+                        match tokio::time::timeout(timeout, voting_future).await {
+                            Ok(r) => r,
+                            Err(_) => Err(GatewayError::Other(format!(
+                                "voting timed out after {}s",
+                                timeout.as_secs()
+                            ))),
+                        }
+                    } else {
+                        voting_future.await
+                    }
                 });
             }
 
@@ -386,12 +403,22 @@ where
                         candidates[i].add_vote(&voter, score);
                     }
                     Ok(Err(e)) => {
-                        warn!("Voting failed: {}", e);
+                        warn!("Voting failed for plan from {}: {}", plan_model_name, e);
                     }
                     Err(e) => {
-                        warn!("Voting task join error: {}", e);
+                        warn!(
+                            "Voting task join error for plan from {}: {}",
+                            plan_model_name, e
+                        );
                     }
                 }
+            }
+
+            if candidates[i].vote_count() == 0 {
+                warn!(
+                    "Plan from {} received no votes — using score 0.0",
+                    plan_model_name
+                );
             }
         }
 

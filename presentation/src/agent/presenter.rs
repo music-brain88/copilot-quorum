@@ -72,6 +72,33 @@ impl ReplPresenter {
                 println!("{} {}", "Error:".red().bold(), error);
                 println!();
             }
+            UiEvent::InteractionSpawned(event) => {
+                let parent = event
+                    .parent_id
+                    .map(|id| format!(" (parent {})", id))
+                    .unwrap_or_default();
+                println!(
+                    "{} Interaction spawned: {} ({}){}",
+                    "▶".cyan(),
+                    event.id,
+                    event.form,
+                    parent
+                );
+            }
+            UiEvent::InteractionCompleted(event) => {
+                println!(
+                    "{} Interaction completed: {} ({})",
+                    "✓".green(),
+                    event.id,
+                    event.form
+                );
+            }
+            UiEvent::InteractionSpawnError { error, .. } => {
+                println!("{} {}", "❌".red(), "Interaction spawn failed".red().bold());
+                println!();
+                println!("{} {}", "Error:".red().bold(), error);
+                println!();
+            }
             UiEvent::QuorumStarting => self.render_quorum_starting(),
             UiEvent::QuorumResult(result) => self.render_quorum_result(result),
             UiEvent::QuorumError { error } => {
@@ -177,6 +204,10 @@ impl ReplPresenter {
         );
         println!("  {}     - Ask (lightweight Q&A)", "/ask".cyan());
         println!("  {} - Discuss (quorum discussion)", "/discuss".cyan());
+        println!(
+            "  {}    - Agent (autonomous task execution)",
+            "/agent".cyan()
+        );
         println!("  {}    - Toggle fast mode (skip reviews)", "/fast".cyan());
         println!(
             "  {}   - Change phase scope (full, fast, plan)",
@@ -213,6 +244,7 @@ impl ReplPresenter {
         println!("{}", "Interaction Commands:".bold().magenta());
         println!("  /ask <question>      - Ask (lightweight Q&A with read-only tools)");
         println!("  /discuss <question>  - Discuss (quorum discussion, consult multiple models)");
+        println!("  /agent <task>        - Agent (autonomous task execution)");
         println!();
         println!("{}", "Other Commands:".bold());
         println!("  /init [--force]      - Initialize project context");
