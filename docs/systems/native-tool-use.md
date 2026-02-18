@@ -1,8 +1,8 @@
 # Native Tool Use API / ネイティブツール呼び出し API
 
-> Structured tool calling via LLM provider APIs, eliminating text parsing and tool name hallucinations
+> Structured tool calling via LLM provider APIs — the sole tool execution path
 >
-> LLM プロバイダー API による構造化ツール呼び出し — テキストパースとツール名ハルシネーションの排除
+> LLM プロバイダー API による構造化ツール呼び出し — 唯一のツール実行パス
 
 ---
 
@@ -10,6 +10,7 @@
 
 Native Tool Use API は、LLM にツール定義を **API パラメータとして構造化データで渡し**、
 ツール呼び出しを **構造化レスポンスから直接抽出する** 仕組みです。
+copilot-quorum の**唯一のツール実行パス**として機能します。
 
 | 特徴 | 説明 |
 |------|------|
@@ -24,48 +25,103 @@ Native Tool Use API は、Anthropic の `tool_use`、OpenAI の `function_callin
 
 ---
 
-## Quick Start / クイックスタート
-
-Native Tool Use の型とマルチターンループの枠組みは整備済みです。
-各プロバイダーの `send_with_tools()` / `send_tool_results()` 実装は今後対応予定で、
-現時点では `send()` → `LlmResponse::from_text()` によるフォールバック経路で動作します。
-
-```bash
-# 現在はフォールバック経路で動作
-copilot-quorum --provider anthropic "List all Rust files"
-copilot-quorum "Fix the failing test"
-```
-
----
-
 ## How It Works / 仕組み
 
 ### Architecture / アーキテクチャ
 
-copilot-quorum は **Native Tool Use API** を通じてツール呼び出しを行います。
+copilot-quorum は **Native Tool Use API** を唯一のツール呼び出しパスとして使用します。
 
 ```
 LlmSession
     │
-    └── Native Tool Use API
+    └── Native Tool Use API (唯一のパス)
         │
-        ├── ツール定義 → API パラメータとして JSON Schema で送信
-        ├── LLM レスポンス → ContentBlock::ToolUse から直接抽出
-        ├── ツール名の正確性 → API がツール名を保証
-        └── マルチターンループ → ToolUse stop → 実行 → 結果送信 → ...
+        ├── ToolSchemaPort  → ツール定義を JSON Schema に変換
+        ├── send_with_tools → API パラメータとして JSON Schema で送信
+        ├── ContentBlock::ToolUse → レスポンスから直接抽出
+        ├── execute tools   → Low-risk 並列 / High-risk 順次+Review
+        └── send_tool_results → ToolResultMessage で結果返送
 ```
 
-### 各プロバイダーの対応状況
+### CopilotSession 実装
 
-| Provider | 実装方式 | Status |
-|----------|---------|--------|
-| **Copilot CLI** | JSON-RPC `session.create` に `tools` パラメータ追加 | 将来 |
-| **Anthropic API** | Messages API の `tools` パラメータ | 将来 |
-| **OpenAI API** | Chat Completions の `function_calling` | 将来 |
+Copilot CLI プロバイダーでの Native Tool Use 実装は、内部的に**別セッション**を作成する仕組みです：
 
-> **Note**: 各プロバイダーの Native 実装が未対応の間、`LlmSession` のデフォルト実装
-> （`send()` → `LlmResponse::from_text()`）がフォールバックとして機能します。
-> マルチターンループの枠組み（型、ツール定義の JSON Schema 変換、並列実行）は既に完成しています。
+```
+CopilotSession
+├── session_id: "main-session"       ← テキスト Q&A 用
+├── channel: SessionChannel          ← メインセッションの受信チャネル
+└── tool_session: Option<ToolSessionState>
+    ├── session_id: "tool-session"   ← ツール対話専用（tools パラメータ付き）
+    ├── channel: SessionChannel      ← ツールセッションの専用チャネル
+    └── pending_tool_call: Option<PendingToolCall>
+        └── request_id: u64         ← JSON-RPC リクエスト ID（結果返送時に使用）
+```
+
+**ライフサイクル**：
+
+1. `send_with_tools()` → `create_tool_session_and_send()` が呼ばれる
+2. `router.create_session(params_with_tools)` で tools 付きの新セッションを作成
+3. `router.request(session.send)` でプロンプトを送信
+4. `tool_channel.read_streaming_for_tools()` でレスポンスを読み取り
+   - `StreamingOutcome::Idle` → テキストレスポンス（`StopReason::EndTurn`）
+   - `StreamingOutcome::ToolCall` → ToolSessionState を保存、`StopReason::ToolUse` を返却
+5. `send_tool_results()` → 保存された `pending_tool_call` の `request_id` で JSON-RPC レスポンスを返送
+6. 次の `read_streaming_for_tools()` で再びツール呼び出しまたは終了を待機
+
+定義ファイル: `infrastructure/src/copilot/session.rs`
+
+---
+
+## ToolSchemaPort / JSON Schema 変換 (Port パターン)
+
+JSON Schema 変換は domain 層のツールフィルタリングから分離されています。
+
+```
+Domain Layer                  Application Layer               Infrastructure Layer
+─────────────                 ──────────────────               ────────────────────
+ToolSpec                      ToolSchemaPort (trait)           JsonSchemaToolConverter
+├── all()                     ├── tool_to_schema()            └── impl ToolSchemaPort
+├── low_risk_tools()          ├── all_tools_schema()
+└── high_risk_tools()         └── low_risk_tools_schema()
+```
+
+**Domain** は「どのツールを使うか」（フィルタリング）を担当し、
+**Infrastructure** は「API にどう渡すか」（JSON Schema 変換）を担当します。
+
+```rust
+// application/src/ports/tool_schema.rs
+pub trait ToolSchemaPort: Send + Sync {
+    fn tool_to_schema(&self, tool: &ToolDefinition) -> serde_json::Value;
+    fn all_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value>;
+    fn low_risk_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value>;
+}
+
+// infrastructure/src/tools/schema.rs
+pub struct JsonSchemaToolConverter;
+impl ToolSchemaPort for JsonSchemaToolConverter { ... }
+```
+
+### DI Chain / 依存注入チェーン
+
+```
+cli/main.rs
+  └── JsonSchemaToolConverter → Arc<dyn ToolSchemaPort>
+        ├── → RunAgentUseCase::new(gateway, executor, tool_schema)
+        ├── → GatherContextUseCase::new(executor, tool_schema, ...)
+        ├── → ExecuteTaskUseCase::new(..., tool_schema, ...)
+        ├── → RunAskUseCase::new(gateway, executor, tool_schema)
+        └── → AgentController → TuiApp
+```
+
+### param_type → JSON Schema 変換
+
+| `param_type` | JSON Schema `type` |
+|:----------:|:------------------:|
+| `"string"`, `"path"` | `"string"` |
+| `"number"` | `"number"` |
+| `"integer"` | `"integer"` |
+| `"boolean"` | `"boolean"` |
 
 ---
 
@@ -221,35 +277,6 @@ pub struct ToolCall {
 `send_tool_results()` 時に `ToolResultMessage::tool_use_id` として使用し、
 リクエストと結果の対応付けを行います。
 
-#### `ToolSchemaPort` — JSON Schema 変換 (Port パターン)
-
-JSON Schema 変換は `ToolSchemaPort` trait として application 層に定義され、
-infrastructure 層の `JsonSchemaToolConverter` が実装します。
-domain 層はツールのフィルタリング（`low_risk_tools()`, `high_risk_tools()`）のみを担当し、
-API フォーマットの関心事から分離されています。
-
-```rust
-// application/src/ports/tool_schema.rs
-pub trait ToolSchemaPort: Send + Sync {
-    fn tool_to_schema(&self, tool: &ToolDefinition) -> serde_json::Value;
-    fn all_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value>;
-    fn low_risk_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value>;
-}
-
-// infrastructure/src/tools/schema.rs
-pub struct JsonSchemaToolConverter;
-impl ToolSchemaPort for JsonSchemaToolConverter { ... }
-```
-
-`param_type` → JSON Schema 変換:
-
-| `param_type` | JSON Schema `type` |
-|:----------:|:------------------:|
-| `"string"`, `"path"` | `"string"` |
-| `"number"` | `"number"` |
-| `"integer"` | `"integer"` |
-| `"boolean"` | `"boolean"` |
-
 ### Application Layer / アプリケーション層
 
 #### `ToolResultMessage` — ツール実行結果
@@ -313,6 +340,27 @@ pub enum StreamEvent {
 
 ---
 
+## Copilot CLI Wire Format / ワイヤーフォーマット
+
+Copilot CLI プロバイダーでのツール定義の変換チェーン：
+
+```
+ToolDefinition (domain)
+  → JsonSchemaToolConverter::tool_to_schema() → { "input_schema": {...} }
+    → CopilotToolDefinition::from_api_tool() → { "parameters": {...} }
+      → JSON-RPC session.create の tools パラメータとして送信
+```
+
+| 段階 | フィールド名 | 説明 |
+|------|------------|------|
+| `JsonSchemaToolConverter` 出力 | `"input_schema"` | プロバイダー中立 |
+| `CopilotToolDefinition` | `"parameters"` | Copilot SDK 公式フォーマット |
+
+> **Note**: Copilot SDK の公式ツールフィールドは `"parameters"`（`"inputSchema"` や `"input_schema"` ではない）。
+> `CopilotToolDefinition::from_api_tool()` がマッピングを行います。
+
+---
+
 ## Configuration / 設定
 
 ```toml
@@ -341,31 +389,40 @@ let execution = ExecutionParams {
 | `domain/src/session/stream.rs` | `StreamEvent`（`ToolCallDelta`, `CompletedResponse` バリアント） |
 | `domain/src/tool/entities.rs` | `ToolCall::native_id`, `ToolSpec::low_risk_tools()`, `ToolSpec::all()` |
 | `application/src/ports/tool_schema.rs` | `ToolSchemaPort` trait — JSON Schema 変換ポート |
-| `infrastructure/src/tools/schema.rs` | `JsonSchemaToolConverter` — JSON Schema 変換実装 |
-| `domain/src/prompt/agent.rs` | `agent_system()` — エージェントシステムプロンプト生成 |
-| `application/src/config/execution_params.rs` | `ExecutionParams::max_tool_turns` |
 | `application/src/ports/llm_gateway.rs` | `ToolResultMessage`, `LlmSession` trait |
-| `application/src/use_cases/run_agent.rs` | `execute_task_native()`, `send_with_tools_cancellable()` |
+| `application/src/config/execution_params.rs` | `ExecutionParams::max_tool_turns` |
+| `application/src/use_cases/run_agent/mod.rs` | `execute_with_progress()` のマルチターンループ |
+| `infrastructure/src/tools/schema.rs` | `JsonSchemaToolConverter` — JSON Schema 変換実装 |
+| `infrastructure/src/copilot/session.rs` | `CopilotSession` — `send_with_tools` / `send_tool_results` 実装 |
+| `infrastructure/src/copilot/protocol.rs` | `CopilotToolDefinition` — Copilot SDK ワイヤーフォーマット |
 
 ### Data Flow / データフロー
 
 ```
-RunAgentUseCase::execute_single_task()
+ExecuteTaskUseCase::execute_single_task()
     │
     ▼
-execute_task_native()
+Native Tool Use multi-turn loop
     │
     ├── tool_schema.all_tools_schema(tool_spec) → JSON Schema 配列
     │
     ├── session.send_with_tools(prompt, tools) → LlmResponse
+    │   └── CopilotSession: create_tool_session_and_send()
+    │       ├── CopilotToolDefinition::from_api_tool() (input_schema → parameters)
+    │       ├── router.create_session(params_with_tools)
+    │       ├── router.request(session.send)
+    │       └── tool_channel.read_streaming_for_tools()
+    │           ├── Idle → LlmResponse (EndTurn)
+    │           └── ToolCall → stash ToolSessionState → LlmResponse (ToolUse)
     │
     ├── response.tool_calls() → Vec<ToolCall> (直接抽出)
     │
     ├── Low-risk → futures::join_all() 並列実行
     │
-    ├── High-risk → Quorum Review → 順次実行
+    ├── High-risk → QuorumActionReviewer → 順次実行
     │
     ├── session.send_tool_results(results) → 次の LlmResponse
+    │   └── CopilotSession: pending_tool_call.request_id で JSON-RPC レスポンス返送
     │
     └── turn_count < max_tool_turns? → ループ
 ```
@@ -376,7 +433,8 @@ execute_task_native()
 
 - [Tool System](./tool-system.md) - ツールの定義、リスク分類、プロバイダーアーキテクチャ
 - [Agent System](./agent-system.md) - エージェントライフサイクルと Quorum Review
-- [Ensemble Mode](./ensemble-mode.md) - マルチモデル計画生成
-- [CLI & Configuration](./cli-and-configuration.md) - 設定オプション
+- [Transport Demultiplexer](./transport.md) - MessageRouter による並列セッションルーティング
+- [Ensemble Mode](../concepts/ensemble-mode.md) - マルチモデル計画生成
+- [CLI & Configuration](../guides/cli-and-configuration.md) - 設定オプション
 
-<!-- LLM Context: Native Tool Use API は LLM プロバイダーの構造化ツール呼び出し。LlmSession の send_with_tools() で API パラメータとしてツール定義を送信し、LlmResponse の ContentBlock::ToolUse から直接 ToolCall を抽出（テキストパース不要）。マルチターンループで StopReason::ToolUse の間ツール実行を繰り返す。Low-risk ツールは futures::join_all() で並列実行、High-risk は Quorum Review 後に順次実行。max_tool_turns（デフォルト10）でループ制限。主要ファイルは domain/src/session/response.rs、application/src/ports/llm_gateway.rs、application/src/use_cases/run_agent.rs。 -->
+<!-- LLM Context: Native Tool Use API は LLM プロバイダーの構造化ツール呼び出しで、copilot-quorum の唯一のツール実行パス（フォールバック経路なし）。ToolSchemaPort (application/src/ports/tool_schema.rs) が Port パターンで JSON Schema 変換を分離し、JsonSchemaToolConverter (infrastructure/src/tools/schema.rs) が実装。DI チェーン: cli → RunAgentUseCase/GatherContextUseCase/ExecuteTaskUseCase/RunAskUseCase → AgentController → TuiApp。CopilotSession (infrastructure/src/copilot/session.rs) は send_with_tools() で内部 ToolSessionState (別セッション ID + SessionChannel + PendingToolCall) を作成し、send_tool_results() で pending_tool_call.request_id を使って JSON-RPC レスポンスを返送。StreamingOutcome::Idle → EndTurn、ToolCall → StopReason::ToolUse + ToolSessionState 保存。Copilot SDK ワイヤーフォーマット: CopilotToolDefinition が input_schema → parameters にマッピング。マルチターンループで StopReason::ToolUse の間ツール実行を繰り返す。Low-risk は futures::join_all() で並列、High-risk は QuorumActionReviewer + 順次。max_tool_turns (デフォルト 10) でループ制限。主要ファイルは domain/src/session/response.rs、application/src/ports/llm_gateway.rs、application/src/ports/tool_schema.rs、infrastructure/src/tools/schema.rs、infrastructure/src/copilot/session.rs。 -->

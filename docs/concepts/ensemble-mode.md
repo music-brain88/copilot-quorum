@@ -216,7 +216,7 @@ REPL コマンド:
 | `domain/src/agent/entities.rs` | `PlanCandidate` struct（候補計画 + 投票スコア） |
 | `domain/src/agent/entities.rs` | `EnsemblePlanResult` struct（選択結果） |
 | `application/src/use_cases/run_agent.rs` | `generate_ensemble_plans()`, `vote_on_plans()`, `select_best_plan()` |
-| `presentation/src/agent/repl.rs` | REPL でのモード切り替え UI |
+| `presentation/src/tui/app.rs` | TUI でのモード切り替え UI |
 
 ### Data Flow / データフロー
 
@@ -306,8 +306,8 @@ impl EnsemblePlanResult {
 ## Related Features / 関連機能
 
 - [Quorum Discussion & Consensus](./quorum.md) - Ensemble が活用する合議メカニズム
-- [Agent System](./agent-system.md) - Ensemble 計画の実行フロー
-- [CLI & Configuration](./cli-and-configuration.md) - `/ens` コマンドと設定
+- [Agent System](../systems/agent-system.md) - Ensemble 計画の実行フロー
+- [CLI & Configuration](../guides/cli-and-configuration.md) - `/ens` コマンドと設定
 
 ## References / 参考文献
 
@@ -317,4 +317,4 @@ impl EnsemblePlanResult {
 4. "Harnessing Multiple LLMs: A Survey on LLM Ensemble" (2025)
 5. "Multi-Agent Collaboration Mechanisms: A Survey" (2025)
 
-<!-- LLM Context: Ensemble モードは複数モデルが独立して計画を生成し、投票で最良の計画を選択する。ensemble-after-inference パラダイム。Solo モードとは Planning フェーズだけが異なり、実行フローは同じ。ConsensusLevel enum（Solo/Ensemble）で切り替え、PlanningApproach は ConsensusLevel から自動導出。主要ファイルは domain/src/orchestration/mode.rs と application/src/use_cases/run_agent.rs。 -->
+<!-- LLM Context: Ensemble モードは複数モデルが独立して計画を生成し、投票で最良の計画を選択する。ensemble-after-inference パラダイム。Solo モードとは Planning フェーズだけが異なり、実行フローは同じ。ConsensusLevel enum（Solo/Ensemble）で切り替え、PlanningApproach は ConsensusLevel から自動導出。主要ファイルは domain/src/orchestration/mode.rs（ConsensusLevel, PlanningApproach）、domain/src/agent/entities.rs（PlanCandidate, EnsemblePlanResult）、application/src/use_cases/run_agent/（generate_ensemble_plans, vote_on_plans, select_best_plan）、presentation/src/tui/app.rs（モード切り替え UI）。 -->

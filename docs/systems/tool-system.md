@@ -385,7 +385,7 @@ let registry = ToolRegistry::new()
 ## Related Features / 関連機能
 
 - [Agent System](./agent-system.md) - ツールを使って自律タスク実行
-- [Quorum Discussion & Consensus](./quorum.md) - 高リスクツールの Consensus レビュー
-- [CLI & Configuration](./cli-and-configuration.md) - ツール設定の詳細
+- [Quorum Discussion & Consensus](../concepts/quorum.md) - 高リスクツールの Consensus レビュー
+- [CLI & Configuration](../guides/cli-and-configuration.md) - ツール設定の詳細
 
-<!-- LLM Context: Tool System はプラグインベースのアーキテクチャ。5つの組み込みツール（read_file, write_file, run_command, glob_search, grep_search）+ 2つの Web ツール（web_fetch, web_search、web-tools feature flag）。RiskLevel で Low/High に分類。ToolRegistry が優先度ベースでプロバイダーをルーティング（Builtin:-100, CLI:50, Custom:75, MCP:100）。Custom Provider は quorum.toml でユーザー定義の CLI コマンドをファーストクラスのツールとして登録可能。コマンドテンプレートは {param_name} プレースホルダーを使い、パラメータはシェルエスケープされる。リスクレベルはデフォルト high（safe by default）。主要ファイルは domain/src/tool/、application/src/ports/tool_executor.rs、infrastructure/src/tools/（custom_provider.rs 含む）、infrastructure/src/config/file_config.rs。 -->
+<!-- LLM Context: Tool System はプラグインベースのアーキテクチャ。5つの組み込みツール（read_file, write_file, run_command, glob_search, grep_search）+ 2つの Web ツール（web_fetch, web_search、web-tools feature flag）。RiskLevel で Low/High に分類。ToolRegistry が優先度ベースでプロバイダーをルーティング（Builtin:-100, CLI:50, Custom:75, MCP:100）。Custom Provider（infrastructure/src/tools/custom_provider.rs）は quorum.toml でユーザー定義の CLI コマンドをファーストクラスのツールとして登録可能。コマンドテンプレートは {param_name} プレースホルダーを使い、パラメータはシェルエスケープされる。リスクレベルはデフォルト high（safe by default）。ToolResultMetadata フィールド: duration_ms, bytes, path, exit_code, match_count（domain/src/tool/value_objects.rs）。ToolSchemaPort（application/src/ports/tool_schema.rs）が JSON Schema 変換を担当。主要ファイルは domain/src/tool/（entities.rs, value_objects.rs, traits.rs）、application/src/ports/tool_executor.rs、application/src/ports/tool_schema.rs、infrastructure/src/tools/（registry.rs, custom_provider.rs, schema.rs）、infrastructure/src/config/file_config.rs。 -->

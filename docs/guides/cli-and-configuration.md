@@ -121,7 +121,7 @@ REPL では 2 つの合意レベルが利用可能です。`/mode <level>` ま�
 | Ensemble + Debate | Warning | StrategyExecutor 未実装 |
 | Ensemble + Fast | Warning | レビュースキップで Ensemble の価値が減少 |
 
-Error の場合は実行が中断されます。詳細は [Agent System](./agent-system.md) を参照。
+Error の場合は実行が中断されます。詳細は [Agent System](../systems/agent-system.md) を参照。
 
 バリデーション: `SessionMode::validate_combination()` → `Vec<ConfigIssue>`
 定義ファイル: `domain/src/agent/validation.rs`（`Severity`, `ConfigIssueCode`, `ConfigIssue`）、`domain/src/orchestration/session_mode.rs`
@@ -245,7 +245,8 @@ context_header = true          # $EDITOR 起動時のコンテキストヘッダ
 | File | Description |
 |------|-------------|
 | `presentation/src/cli/commands.rs` | CLAP CLI コマンド定義 |
-| `presentation/src/agent/repl.rs` | REPL 実装（コマンド処理、プロンプト表示） |
+| `presentation/src/tui/app.rs` | TUI アプリケーション（コマンド処理、REPL 統合） |
+| `presentation/src/agent/presenter.rs` | REPL プレゼンター（UiEvent レンダリング） |
 | `infrastructure/src/config/file_config.rs` | TOML 設定構造定義 |
 | `infrastructure/src/config/loader.rs` | 設定ローダー（優先順位処理） |
 | `domain/src/config/` | `OutputFormat` など設定ドメイン型 |
@@ -279,9 +280,9 @@ CLI Arguments / REPL Input
 
 ## Related Features / 関連機能
 
-- [Quorum Discussion & Consensus](./quorum.md) - `/council` コマンドで実行
-- [Agent System](./agent-system.md) - エージェント設定の詳細
-- [Ensemble Mode](./ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
-- [Tool System](./tool-system.md) - ツール設定の詳細
+- [Quorum Discussion & Consensus](../concepts/quorum.md) - `/council` コマンドで実行
+- [Agent System](../systems/agent-system.md) - エージェント設定の詳細
+- [Ensemble Mode](../concepts/ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
+- [Tool System](../systems/tool-system.md) - ツール設定の詳細
 
 <!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /council, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。設定は4型に分割: SessionMode(domain, runtime-mutable: consensus_level/phase_scope/strategy)、ModelConfig(domain: exploration/decision/review)、AgentPolicy(domain: hil_mode等)、ExecutionParams(application: max_iterations等)。QuorumConfig(application)が4型コンテナとしてAgentControllerで使用。組み合わせバリデーション: SessionMode::validate_combination()。Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults。[tui.input] セクションで TUI の入力設定を管理。主要ファイルは application/src/use_cases/agent_controller.rs と application/src/config/ と infrastructure/src/config/。 -->

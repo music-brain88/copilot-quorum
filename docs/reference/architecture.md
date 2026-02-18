@@ -125,6 +125,22 @@ Solo / Ensemble（`ConsensusLevel`）は、実行を制御する **3 つの独�
 - **拡張容易性** — 新しい PhaseScope や Strategy を追加しても他の軸に影響しない
 - **設定の明確性** — 各軸が「何を制御するか」が一目瞭然
 
+### Interaction Model / インタラクションモデル
+
+copilot-quorum のユーザー対話は **3 つの対等なインタラクション形式** で構成されています。
+どれが「メイン」で他が「サブ」ということはなく、全てが第一級市民です。
+
+| Form | Description | Context Default | 使う設定 |
+|------|-------------|-----------------|----------|
+| `Agent` | 自律タスク実行（計画→レビュー→実行） | `Full` | SessionMode, AgentPolicy, ExecutionParams |
+| `Ask` | 単一 Q&A（読み取り専用ツール） | `Projected` | SessionMode, ExecutionParams |
+| `Discuss` | 複数モデル議論 / Quorum Council | `Full` | SessionMode |
+
+インタラクションは **ネスト可能** で、最大深度 `DEFAULT_MAX_NESTING_DEPTH`（= 3）まで子インタラクションを生成できます。
+例：Agent が設計判断のために Discuss を子として生成し、その結果を親の実行に反映する。
+
+`InteractionTree` が ID 自動採番とネスト管理を担当し、`InteractionResult` が完了時の結果を型安全に運搬します。
+
 ### Quorum Layers（将来ビジョン）
 
 ```
@@ -197,26 +213,40 @@ copilot-quorum/
 │   ├── orchestration/         #   [オーケストレーション] フェーズ、結果、戦略trait
 │   ├── agent/                 #   [エージェント] 自律実行の状態管理
 │   ├── tool/                  #   [ツール] ツール定義、呼び出し、リスクレベル
-│   ├── context/               #   [コンテキスト] プロジェクト情報の読み込み
+│   ├── interaction/           #   [インタラクション] 対話形式、ネスト管理
+│   ├── context/               #   [コンテキスト] プロジェクト情報、リソース参照
 │   ├── prompt/                #   [プロンプト] テンプレート
 │   └── config/                #   [設定] 出力形式など
 │
 ├── application/               # アプリケーション層
-│   ├── ports/                 #   共通ポート定義
-│   └── use_cases/             #   ユースケース実装
-│       ├── run_quorum.rs      #     合議実行
-│       └── run_agent.rs       #     エージェント実行
+│   ├── ports/                 #   ポート定義（11トレイト）
+│   ├── use_cases/             #   ユースケース実装
+│   │   ├── run_agent/         #     エージェント実行（4ファイル分割）
+│   │   ├── run_quorum.rs      #     合議実行
+│   │   ├── run_ask.rs         #     Ask インタラクション実行
+│   │   ├── gather_context.rs  #     コンテキスト収集
+│   │   ├── execute_task.rs    #     タスク実行
+│   │   ├── agent_controller.rs #    REPL/TUI コントローラー
+│   │   └── init_context.rs    #     コンテキスト初期化
+│   └── config/                #   QuorumConfig, ExecutionParams
 │
 ├── infrastructure/            # インフラ層
-│   ├── copilot/               #   [Copilot] LlmGateway実装
-│   ├── tools/                 #   [Tools] LocalToolExecutor実装
-│   └── context/               #   [Context] LocalContextLoader実装
+│   ├── copilot/               #   [Copilot] LlmGateway実装, MessageRouter
+│   ├── tools/                 #   [Tools] ToolRegistry, プロバイダー群
+│   ├── context/               #   [Context] LocalContextLoader
+│   ├── logging/               #   [Logging] JsonlConversationLogger
+│   ├── reference/             #   [Reference] GitHubReferenceResolver
+│   └── config/                #   [Config] FileConfig, ConfigLoader
 │
-└── presentation/              # プレゼンテーション層
-    ├── cli/                   #   [CLI] コマンド定義
-    ├── chat/                  #   [Chat] REPL実装
-    ├── output/                #   [出力] フォーマッター
-    └── progress/              #   [進捗] レポーター
+├── presentation/              # プレゼンテーション層
+│   ├── cli/                   #   [CLI] コマンド定義
+│   ├── tui/                   #   [TUI] モーダルインターフェース（tab, widgets, event）
+│   ├── agent/                 #   [Agent UI] プログレス、思考表示、HiL UI
+│   ├── output/                #   [出力] フォーマッター
+│   ├── progress/              #   [進捗] レポーター
+│   └── config/                #   [設定] OutputConfig, ReplConfig
+│
+└── cli/                       # エントリポイント (DI構築)
 ```
 
 #### なぜ全層で同じ分割か？
@@ -237,61 +267,9 @@ presentation/template/     → ハンドラ、DTO
 - **機能削除時**: 4つのディレクトリを削除するだけ
 - **機能理解時**: 1つのドメイン名で全層を追跡可能
 
-#### Horizontal vs Vertical / 水平分割と垂直分割の違い
-
-```
-水平分割（機能で分割）:          垂直分割（ドメインで分割）:
-
-├── entities/                   ├── session/
-│   ├── Session.rs              │   ├── entities.rs
-│   ├── Message.rs              │   └── repository.rs
-│   ├── QuorumRun.rs            │
-│   └── ...                     ├── orchestration/
-│                               │   ├── entities.rs
-├── repositories/               │   ├── value_objects.rs
-│   ├── SessionRepo.rs          │   └── strategy.rs
-│   └── ...                     │
-│                               └── prompt/
-├── services/                       └── template.rs
-│   ├── QuorumService.rs
-│   └── ...                     (関連するものが近くにある)
-
-(同じ概念が散らばる)
-```
-
-**垂直分割のメリット:**
-
-1. **凝集度** - 関連するコードが同じディレクトリにまとまる
-2. **プラグイン性** - 新しいドメインをディレクトリ追加で実現
-3. **理解しやすさ** - 1つのドメインを理解するために見るファイルが限定される
-4. **独立した進化** - 各ドメインを独立して拡張・修正可能
-5. **削除容易性** - 機能を削除する際、関連ファイルが一箇所にまとまっている
-
 ### Plugin Architecture / プラグインアーキテクチャ
 
 垂直分割とトレイトの組み合わせにより、**プラグイン的に機能を追加**できます。
-
-#### 新機能追加の具体的フロー
-
-例：「ディベート戦略」という新しいオーケストレーション方式を追加する場合
-
-```
-Step 1: ドメイン層に戦略を追加
-domain/src/orchestration/strategies/
-└── debate.rs                    # DebateStrategy 実装
-
-Step 2: アプリケーション層にユースケースを追加（必要なら）
-application/src/use_cases/
-└── run_debate.rs                # RunDebateUseCase
-
-Step 3: プレゼンテーション層にCLIオプションを追加
-presentation/src/cli/commands.rs # --strategy debate オプション
-
-Step 4: cli/main.rs でDI設定を追加
-cli/src/main.rs                  # 戦略の選択ロジック
-
-既存コードの変更: 最小限（DIの登録部分のみ）
-```
 
 #### 拡張パターン別の追加場所
 
@@ -310,17 +288,15 @@ domain/src/orchestration/
 ├── strategy.rs     # OrchestrationStrategy enum + StrategyExecutor trait（既存）
 ├── mode.rs         # ConsensusLevel enum（既存）
 ├── scope.rs        # PhaseScope enum（既存）
-└── strategies/     # 新規ディレクトリ
-    ├── mod.rs
-    └── new_strategy.rs  # 新規: impl StrategyExecutor
+└── session_mode.rs # SessionMode（既存）
 
 新しいプレゼンテーション追加（例: HTTP API）:
 presentation/
 ├── cli/            # 既存: CLI
+├── tui/            # 既存: TUI
 └── server/         # 新規追加
     ├── mod.rs
     ├── http.rs     # Actix-web ハンドラ
-    ├── grpc.rs     # tonic gRPC
     └── dto.rs      # リクエスト/レスポンス型
 ```
 
@@ -343,6 +319,7 @@ presentation/
 | ユースケースにジェネリクス使用 | 実行時DI（Box<dyn>）ではなくコンパイル時DI |
 | インフラ層でプロトコル詳細を隠蔽 | JSON-RPC, LSPヘッダーなどの詳細はドメインに漏れない |
 | JSON Schema 変換を Port パターンで分離 | domain 層はツールの定義・フィルタリングのみ担当し、LLM API フォーマット（JSON Schema）への変換は `ToolSchemaPort` 経由で infrastructure 層が実装 |
+| インタラクション形式を対等な peer に | Agent / Ask / Discuss を階層化せず、全て `InteractionForm` enum の対等なバリアント |
 
 ### TUI Design Philosophy / TUI 設計思想
 
@@ -365,14 +342,6 @@ copilot-quorum の本質は **LLM 群を指揮するオーケストレーター*
 | INSERT は対話的入力に特化 | 内蔵エディタの完成度を競わない |
 | NORMAL キーバインドはオーケストレーション操作 | `d` = Discuss, `s` = Solo, `e` = Ensemble（vim の delete/substitute ではない） |
 
-他のツールとの差別化:
-
-| ツール | テキスト入力 | 本業 |
-|--------|-------------|------|
-| Claude Code | 内蔵エディタ | 会話 |
-| OpenCode | 内蔵 vim 風 | 会話 |
-| **copilot-quorum** | **$EDITOR 委譲** | **オーケストレーション** |
-
 #### Input Granularity Model / 入力粒度モデル
 
 LLM への入力を **3 つのニーズ粒度** に分類し、それぞれを **vim の自然な操作** にマッピングします。
@@ -393,57 +362,17 @@ LLM への入力を **3 つのニーズ粒度** に分類し、それぞれを *
 | `i` | INSERT | 応答パネルを見ながらの対話的入力 | `i` = INSERT モードに入る |
 | `I` | $EDITOR | がっつり書く。本物の vim/neovim で編集 | `I` = "大きい" INSERT |
 
-**なぜこの 3 段階か:**
+#### Tab + Pane Architecture / タブ・ペインアーキテクチャ
 
-- **`:ask`** — ex コマンドの即時性。`:w` で保存するように `:ask Fix the bug` で質問。INSERT モードへの遷移不要
-- **`i`** — 応答パネルが表示されたまま入力。LLM の出力を参照しながら追加質問や修正指示を出す対話フロー
-- **`I`** — `$EDITOR`（vim/neovim）を子プロセスとして起動。`git commit` が `$EDITOR` を呼ぶのと同じ Unix の伝統的パターン。ユーザーの vim 設定・プラグイン・スニペットが全て使える
+TUI は Vim のバッファ/ウィンドウ/タブページモデルを踏襲しています：
 
-#### First-Class COMMAND Mode Commands / COMMAND モードのファーストクラスコマンド
+| Vim | copilot-quorum | 説明 |
+|-----|----------------|------|
+| Buffer | `Interaction` (domain) | 対話データ（Agent/Ask/Discuss） |
+| Window | `Pane` (presentation) | 表示ユニット（会話、プログレス等を保持） |
+| Tab Page | `Tab` (presentation) | 1つ以上のペインを含むタブ |
 
-`:ask` と `:discuss` は COMMAND モードのファーストクラスコマンドです。
-「コマンドの種類（何をするか）」と「入力手段（どれくらい書くか）」は直交する 2 軸として設計されています。
-
-```
-                    :command (即時)    i (対話)     I (がっつり)
-                    ─────────────────────────────────────────
-Solo 質問            :ask              i で入力     I で起動
-Quorum Discussion    :discuss          ─            I で起動
-```
-
-`:ask` = Solo Agent 実行、`:discuss` = Quorum Discussion。
-同じ「LLM にテキストを送る」行為でも、vim のモーダル文法で粒度が自然に分かれます。
-
-#### $EDITOR Delegation / $EDITOR 委譲
-
-`I` キーで `$EDITOR` を全画面起動します。`git commit` が `$EDITOR` を呼ぶのと同じパターンです。
-
-```
-[NORMAL] ← ホームポジション
-    │
-    I → $EDITOR 起動 → プロンプトを書く → :wq で送信 / :q! でキャンセル
-    │
-    ▼
-[NORMAL] に戻る（応答表示後）
-```
-
-起動時にコンテキスト情報をコメント行で表示:
-
-```
-# --- Quorum Prompt ---
-# Mode: Ensemble | Strategy: Quorum
-# Buffers: src/auth.rs, README.md
-#
-# Write your prompt below. Lines starting with # are ignored.
-# :wq to send, :q! to cancel
-# ---------------------
-
-```
-
-この設計により:
-- **実装コスト**: エディタ再実装不要（子プロセス起動のみ）
-- **ユーザー体験**: 使い慣れた本物のエディタでプロンプトを書ける
-- **責務分離**: copilot-quorum はオーケストレーションに全力集中
+`TabManager` がタブの作成・切り替え・インタラクションとのバインドを管理します。
 
 #### Modal Architecture / モーダルアーキテクチャ
 
@@ -460,40 +389,46 @@ Quorum Discussion    :discuss          ─            I で起動
                         └───────────┘
 ```
 
-VISUAL モードは Phase 2 以降。Normal + Insert + Command で十分な初期体験を提供した後に追加。
-
 ---
 
 ## Layer Structure / レイヤー構成
 
 ```
 copilot-quorum/
-├── domain/          # ドメイン層 - ビジネスロジックの核心
-│   ├── core/        # 共通ドメイン概念 (Model, Question, Error)
-│   ├── session/     # LLMセッションドメイン
-│   ├── orchestration/  # Quorumオーケストレーションドメイン
-│   ├── agent/       # エージェント自律実行ドメイン
-│   ├── tool/        # ツール定義・実行ドメイン
-│   ├── context/     # プロジェクトコンテキストドメイン
-│   ├── prompt/      # プロンプトドメイン
-│   └── config/      # 設定ドメイン
+├── domain/              # ドメイン層 - ビジネスロジックの核心
+│   ├── core/            # 共通ドメイン概念 (Model, Question, Error)
+│   ├── session/         # LLMセッションドメイン
+│   ├── orchestration/   # Quorumオーケストレーションドメイン
+│   ├── agent/           # エージェント自律実行ドメイン
+│   ├── tool/            # ツール定義・実行ドメイン
+│   ├── interaction/     # インタラクション形式・ネスト管理
+│   ├── context/         # プロジェクトコンテキスト・リソース参照
+│   ├── quorum/          # 合意形成（Vote, QuorumRule）
+│   ├── prompt/          # プロンプトドメイン
+│   └── config/          # 設定ドメイン
 │
-├── application/     # アプリケーション層 - ユースケース
-│   ├── ports/       # ポート定義 (LlmGateway, ProgressNotifier, ToolExecutorPort, ContextLoaderPort)
-│   └── use_cases/   # ユースケース (RunQuorumUseCase, RunAgentUseCase)
+├── application/         # アプリケーション層 - ユースケース
+│   ├── ports/           # ポート定義（11トレイト）
+│   ├── use_cases/       # ユースケース
+│   └── config/          # QuorumConfig, ExecutionParams
 │
-├── infrastructure/  # インフラ層 - 技術的実装
-│   ├── copilot/     # Copilot CLIアダプター
-│   ├── tools/       # LocalToolExecutor
-│   └── context/     # LocalContextLoader
+├── infrastructure/      # インフラ層 - 技術的実装
+│   ├── copilot/         # Copilot CLIアダプター (Gateway, Router, Session)
+│   ├── tools/           # ToolRegistry, プロバイダー群, Schema変換
+│   ├── context/         # LocalContextLoader
+│   ├── logging/         # JsonlConversationLogger
+│   ├── reference/       # GitHubReferenceResolver
+│   └── config/          # FileConfig, ConfigLoader
 │
-├── presentation/    # プレゼンテーション層 - UI
-│   ├── cli/         # CLIコマンド定義
-│   ├── chat/        # ChatRepl
-│   ├── output/      # 出力フォーマッター
-│   └── progress/    # プログレス表示
+├── presentation/        # プレゼンテーション層 - UI
+│   ├── cli/             # CLIコマンド定義
+│   ├── tui/             # モーダル TUI (ratatui)
+│   ├── agent/           # Agent UI コンポーネント
+│   ├── output/          # 出力フォーマッター
+│   ├── progress/        # プログレス表示
+│   └── config/          # OutputConfig, ReplConfig
 │
-└── cli/             # エントリポイント (DI構築)
+└── cli/                 # エントリポイント (DI構築)
 ```
 
 ### Dependency Flow (Onion Structure) / 依存の方向
@@ -522,6 +457,8 @@ copilot-quorum/
 
 ### Core Module
 
+`domain/src/core/`
+
 | Type | Kind | Description |
 |------|------|-------------|
 | `Model` | Value Object | 利用可能なAIモデル（Claude, GPT, Gemini等） |
@@ -529,6 +466,8 @@ copilot-quorum/
 | `DomainError` | Error | ドメインレベルのエラー |
 
 ### Quorum Module
+
+`domain/src/quorum/`
 
 Quorum（合意形成）に関する型を定義します。
 
@@ -542,13 +481,21 @@ Quorum（合意形成）に関する型を定義します。
 
 ### Session Module
 
+`domain/src/session/`
+
 | Type | Kind | Description |
 |------|------|-------------|
 | `Session` | Entity | LLMとの会話セッション |
 | `Message` | Entity | 会話内のメッセージ |
 | `LlmSessionRepository` | Trait | セッション管理の抽象化 |
+| `LlmResponse` | Value Object | LLM からの構造化レスポンス（ContentBlock のリスト） |
+| `ContentBlock` | Enum | Text / ToolUse / ToolResult |
+| `StopReason` | Enum | EndTurn / ToolUse / MaxTokens / StopSequence |
+| `StreamEvent` | Enum | Delta / Completed / Error / ToolCallDelta / CompletedResponse |
 
 ### Orchestration Module
+
+`domain/src/orchestration/`
 
 #### 3つの直交する設定軸
 
@@ -560,10 +507,11 @@ Quorum（合意形成）に関する型を定義します。
 
 これらは直交しており、任意の組み合わせが可能です（例: `Solo + Fast + Debate`）。
 
-#### 派生型
+#### 設定コンテナ
 
 | Type | Kind | Description |
 |------|------|-------------|
+| `SessionMode` | Value Object | ランタイム可変設定（consensus_level, phase_scope, strategy） |
 | `PlanningApproach` | Enum (派生) | `ConsensusLevel` から自動導出（Solo→Single, Ensemble→Ensemble） |
 
 #### Quorum Discussion 型
@@ -571,7 +519,6 @@ Quorum（合意形成）に関する型を定義します。
 | Type | Kind | Description |
 |------|------|-------------|
 | `Phase` | Value Object | フェーズ（Initial, Review, Synthesis） |
-| `QuorumConfig` | Entity | Quorum設定（モデル、モデレーター等） |
 | `QuorumRun` | Entity | 実行中のQuorumセッション |
 | `ModelResponse` | Value Object | モデルからの回答 |
 | `PeerReview` | Value Object | ピアレビュー結果 |
@@ -579,43 +526,125 @@ Quorum（合意形成）に関する型を定義します。
 | `QuorumResult` | Value Object | 全フェーズの結果 |
 | `StrategyExecutor` | Trait | オーケストレーション戦略の実行インターフェース |
 
-### Prompt Module
+### Interaction Module
+
+`domain/src/interaction/`
+
+ユーザーとシステムの対話を3つの対等な形式で表現するモジュールです。
 
 | Type | Kind | Description |
 |------|------|-------------|
-| `PromptTemplate` | Service | 各フェーズのプロンプトテンプレート |
+| `InteractionForm` | Enum | Agent / Ask / Discuss — 対話形式 |
+| `InteractionId` | Value Object | インタラクションの一意識別子 |
+| `Interaction` | Entity | 対話インスタンス（form, context_mode, depth） |
+| `InteractionTree` | Entity | ネスト管理のツリー構造（ID自動採番） |
+| `InteractionResult` | Enum | AskResult / DiscussResult / AgentResult |
+| `SpawnError` | Error | 子インタラクション生成エラー（ParentNotFound, MaxDepthExceeded） |
+| `DEFAULT_MAX_NESTING_DEPTH` | Const | 最大ネスト深度（= 3） |
+
+`InteractionForm` は各形式がどの設定型を使うかを決定します：
+- `uses_agent_policy()` — Agent のみ true
+- `uses_execution_params()` — Agent と Ask が true
+- `default_context_mode()` — Agent/Discuss → Full, Ask → Projected
 
 ### Agent Module
+
+`domain/src/agent/`
 
 | Type | Kind | Description |
 |------|------|-------------|
 | `AgentState` | Entity | エージェント実行の現在状態 |
+| `AgentPhase` | Enum | ContextGathering / Planning / PlanReview / Executing / FinalReview / Completed |
 | `SessionMode` | Value Object | ランタイム可変オーケストレーション設定 |
-| `ModelConfig` | Value Object | ロールベースモデル選択 |
+| `ModelConfig` | Value Object | ロールベースモデル選択（exploration, decision, review） |
 | `AgentPolicy` | Value Object | ドメイン動作制約（HiL、レビュー設定） |
+| `HilMode` | Enum | Interactive / AutoApprove / AutoReject |
+| `HumanDecision` | Enum | Approve / Reject / Edit(Plan) |
 | `Plan` | Value Object | タスク計画（目的、理由付け、タスクリスト） |
 | `Task` | Value Object | 単一タスク（ツール呼び出し、依存関係） |
-| `AgentContext` | Value Object | 収集されたプロジェクトコンテキスト |
-| `Thought` | Value Object | エージェントの思考記録 |
+| `EnsemblePlanResult` | Entity | Ensemble 計画の結果（候補リスト + 選択） |
+| `PlanCandidate` | Value Object | Ensemble 候補プラン（モデル + スコア） |
+| `ReviewRound` | Entity | レビューラウンドの記録（投票リスト + 承認結果） |
+| `ModelVote` | Value Object | モデルからの投票（モデル名、承認/却下、フィードバック） |
+| `ToolExecution` | Entity | ツール実行のライフサイクル追跡（Pending → Running → Completed/Error） |
+| `ToolExecutionState` | Enum | ツール実行の状態マシン |
+| `ConfigIssue` | Value Object | 設定バリデーション問題 |
+
+#### ToolExecution State Machine
+
+```
+Pending ──> Running ──> Completed
+                   └──> Error
+```
+
+`ToolExecution` は各ツール呼び出しのライフサイクルを追跡します。
+状態遷移は enum ベースで、各状態に有効なフィールドのみを持ちます。
 
 ### Tool Module
 
+`domain/src/tool/`
+
 | Type | Kind | Description |
 |------|------|-------------|
-| `ToolDefinition` | Entity | ツールのメタデータ（名前、パラメータ、リスクレベル） |
-| `ToolCall` | Value Object | ツール呼び出し（引数付き） |
+| `ToolDefinition` | Entity | ツールのメタデータ（名前、説明、リスクレベル） |
+| `ToolParameter` | Value Object | ツールパラメータの定義 |
+| `ToolCall` | Value Object | ツール呼び出し（引数付き、`native_id` でAPI相関） |
 | `ToolResult` | Value Object | 実行結果（成功/失敗、出力） |
+| `ToolResultMetadata` | Value Object | 実行メタデータ（duration_ms, bytes, path, exit_code, match_count） |
 | `ToolSpec` | Entity | 利用可能なツールのレジストリ |
-| `RiskLevel` | Value Object | Low（読み取り専用）または High（変更あり） |
+| `RiskLevel` | Enum | Low（読み取り専用）/ High（変更あり） |
 | `ToolValidator` | Trait | ツール呼び出しのバリデーションロジック |
+| `ToolProvider` | Trait | 外部ツールプロバイダーの抽象化 |
 
 ### Context Module
+
+`domain/src/context/`
 
 | Type | Kind | Description |
 |------|------|-------------|
 | `ProjectContext` | Entity | プロジェクトの統合コンテキスト |
 | `KnownContextFile` | Value Object | 既知のコンテキストファイル種別（CLAUDE.md, README.md等） |
 | `LoadedContextFile` | Value Object | 読み込まれたファイルの内容 |
+| `ContextMode` | Enum | Full / Projected / Fresh — コンテキスト投影モード |
+| `ResourceReference` | Enum | GitHubIssue / GitHubPullRequest — テキスト中のリソース参照 |
+| `extract_references()` | Function | テキストからリソース参照を抽出 |
+
+#### ContextMode
+
+タスクやインタラクションに渡すコンテキスト量を制御します。Vim のバッファコマンドのアナロジーです：
+
+| Mode | 渡すコンテキスト | Vim アナロジー |
+|------|-----------------|----------------|
+| `Full` | 全 `AgentContext` | `:split` — 同じバッファを共有 |
+| `Projected` | タスクの `context_brief` のみ | `:edit` — 特定ファイルを開く |
+| `Fresh` | なし | `:enew` — 空バッファで開始 |
+
+#### ResourceReference
+
+テキスト中の GitHub Issue/PR 参照を自動検出します：
+
+- GitHub URL: `github.com/{owner}/{repo}/(issues|pull)/{N}`
+- クロスリポ参照: `{owner}/{repo}#{N}`
+- 型付き参照: `Issue #N`, `PR #N`, `Pull Request #N`
+- 範囲参照: `#N-M`（M-N <= 10）
+- ベア参照: `#N`
+
+### Prompt Module
+
+`domain/src/prompt/`
+
+| Type | Kind | Description |
+|------|------|-------------|
+| `PromptTemplate` | Service | 各フェーズのプロンプトテンプレート |
+| `AgentPromptTemplate` | Service | エージェント専用プロンプト（system, plan, review） |
+
+### Config Module
+
+`domain/src/config/`
+
+| Type | Kind | Description |
+|------|------|-------------|
+| `OutputFormat` | Enum | Full / Synthesis / Json |
 
 ---
 
@@ -625,24 +654,60 @@ Quorum（合意形成）に関する型を定義します。
 
 ### Ports (Interfaces) / ポート
 
-| Trait | Description |
-|-------|-------------|
-| `LlmGateway` | LLMプロバイダーへのゲートウェイ |
-| `LlmSession` | アクティブなLLMセッション |
-| `ProgressNotifier` | 進捗通知コールバック |
-| `ToolExecutorPort` | ツール実行の抽象化 |
-| `ContextLoaderPort` | コンテキストファイル読み込みの抽象化 |
-| `AgentProgressNotifier` | エージェント進捗通知コールバック |
-| `ToolSchemaPort` | ツール定義 → JSON Schema 変換の抽象化 |
+| Trait | Module | Description |
+|-------|--------|-------------|
+| `LlmGateway` | `llm_gateway` | LLMプロバイダーへのゲートウェイ |
+| `LlmSession` | `llm_gateway` | アクティブなLLMセッション（send, send_with_tools, send_tool_results） |
+| `ToolExecutorPort` | `tool_executor` | ツール実行の抽象化 |
+| `ToolSchemaPort` | `tool_schema` | ツール定義 → JSON Schema 変換の抽象化 |
+| `ContextLoaderPort` | `context_loader` | コンテキストファイル読み込みの抽象化 |
+| `ProgressNotifier` | `progress` | Quorum 進捗通知コールバック |
+| `AgentProgressNotifier` | `agent_progress` | エージェント進捗通知コールバック |
+| `HumanInterventionPort` | `human_intervention` | 人間介入の抽象化（プラン承認/却下/編集、実行確認） |
+| `ActionReviewer` | `action_reviewer` | 高リスクツール呼び出しのレビュー抽象化 |
+| `ConversationLogger` | `conversation_logger` | 構造化会話ログの記録（JSONL） |
+| `ReferenceResolverPort` | `reference_resolver` | リソース参照の解決（GitHub Issue/PR → コンテンツ） |
+| `UiEvent` | `ui_event` | アプリケーション → プレゼンテーション層への出力イベント |
+
+#### UiEvent（出力ポート）
+
+`UiEvent` は `AgentController` からプレゼンテーション層へのイベントチャネルです。
+Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, InteractionCompleted 等の
+バリアントで、UI の種類（CLI, TUI, 将来の Web）に依存しない形でイベントを伝達します。
 
 ### Use Cases / ユースケース
 
-| Type | Description |
+| Type | Module | Description |
+|------|--------|-------------|
+| `RunAgentUseCase` | `run_agent/` | エージェント自律実行（Phase 1-5 全体オーケストレーション） |
+| `RunQuorumUseCase` | `run_quorum` | Quorum（合議）実行 |
+| `RunAskUseCase` | `run_ask` | Ask インタラクション（読み取り専用ツールでの Q&A） |
+| `GatherContextUseCase` | `gather_context` | Phase 1: コンテキスト収集（3段階フォールバック） |
+| `ExecuteTaskUseCase` | `execute_task` | Phase 4: タスク実行（動的モデル選択 + アクションレビュー） |
+| `InitContextUseCase` | `init_context` | コンテキストファイル（.quorum/context.md）の初期化 |
+| `AgentController` | `agent_controller` | REPL/TUI のビジネスロジック。コマンド処理、UiEvent 発信 |
+
+#### run_agent/ ファイル分割
+
+`RunAgentUseCase` は責務ごとに4ファイルに分割されています：
+
+| File | Description |
 |------|-------------|
-| `RunQuorumUseCase` | Quorum（合議）実行のユースケース |
-| `RunAgentUseCase` | エージェント自律実行のユースケース |
-| `RunQuorumInput` | Quorumユースケースへの入力 |
-| `RunQuorumError` | Quorumユースケースのエラー |
+| `mod.rs` | メインオーケストレーション（Phase 1-5 フロー） |
+| `types.rs` | `RunAgentInput`, `RunAgentOutput`, `RunAgentError` |
+| `planning.rs` | Solo/Ensemble 計画生成ロジック |
+| `review.rs` | Quorum プランレビュー + アクションレビュー |
+| `hil.rs` | 人間介入ハンドリング（execution confirmation 含む） |
+
+### Config / 設定
+
+| Type | Module | Description |
+|------|--------|-------------|
+| `QuorumConfig` | `config/quorum_config` | 4型コンテナ（SessionMode, ModelConfig, AgentPolicy, ExecutionParams） |
+| `ExecutionParams` | `config/execution_params` | max_iterations, max_tool_turns, max_tool_retries, working_dir, ensemble_session_timeout |
+
+`QuorumConfig` はバッファ伝搬のための統合コンテナで、`mode_mut()` でランタイム変更可能。
+`to_agent_input()`, `to_quorum_input()` でユースケース入力を生成します。
 
 ---
 
@@ -652,16 +717,21 @@ Quorum（合意形成）に関する型を定義します。
 
 ### Copilot Adapter
 
+`infrastructure/src/copilot/`
+
 | Type | Implements | Description |
 |------|------------|-------------|
 | `CopilotLlmGateway` | `LlmGateway` | Copilot CLI経由のLLMゲートウェイ |
-| `CopilotSession` | `LlmSession` | Copilotセッション |
+| `CopilotSession` | `LlmSession` | Copilotセッション（send_with_tools, send_tool_results） |
 | `MessageRouter` | - | TCP demultiplexer（セッション間メッセージルーティング） |
-| `SessionChannel` | - | セッション専用の受信チャネル |
+| `SessionChannel` | - | セッション専用の受信チャネル（Drop時に自動登録解除） |
+| `CopilotError` | - | Copilot通信エラー（RouterStopped含む） |
 
-> 詳細は [features/transport.md](./features/transport.md) を参照してください。
+> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
 
 ### Tools Adapter
+
+`infrastructure/src/tools/`
 
 ツールシステムはプラグインベースのアーキテクチャを採用しています（詳細は [Tool Provider System](#tool-provider-system--ツールプロバイダーシステム) を参照）。
 
@@ -670,24 +740,33 @@ Quorum（合意形成）に関する型を定義します。
 | `ToolRegistry` | `ToolExecutorPort` | プロバイダーを集約、優先度でルーティング |
 | `BuiltinProvider` | `ToolProvider` | 最小限の組み込みツール（priority: -100） |
 | `CliToolProvider` | `ToolProvider` | システムCLIツールのラッパー（priority: 50） |
+| `CustomToolProvider` | `ToolProvider` | ユーザー定義カスタムツール（priority: 75） |
 | `JsonSchemaToolConverter` | `ToolSchemaPort` | ツール定義 → JSON Schema 変換（Port パターン） |
+| `LocalToolExecutor` | `ToolExecutorPort` | ファイル操作、コマンド実行、検索、Web ツール |
 
 #### 利用可能なツール
 
-**Builtin Provider:**
+**Builtin Provider (priority: -100):**
 - `read_file` - ファイル内容の読み取り（Low risk）
 - `write_file` - ファイルの書き込み/作成（High risk）
 - `run_command` - シェルコマンド実行（High risk）
 - `glob_search` - パターンによるファイル検索（Low risk）
 - `grep_search` - ファイル内容の検索（Low risk）
 
-**CLI Provider:**
+**CLI Provider (priority: 50):**
 - `grep_search` - grep/rg によるファイル内容検索（Low risk）
 - `glob_search` - find/fd によるファイルパターン検索（Low risk）
 
-CLI Provider は Builtin Provider より高い優先度を持つため、同じ名前のツールは CLI 版が優先されます。
+**Web Tools (`web-tools` feature, default in CLI):**
+- `web_fetch` - URL からコンテンツを取得（Low risk）
+- `web_search` - Web 検索（Low risk）
+
+**Custom Tools (priority: 75, `quorum.toml` で設定):**
+- ユーザー定義のシェルコマンドテンプレート（default risk: High）
 
 ### Context Adapter
+
+`infrastructure/src/context/`
 
 | Type | Implements | Description |
 |------|------------|-------------|
@@ -701,6 +780,40 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 5. `docs/**/*.md` - docsディレクトリ内の全Markdown
 6. `Cargo.toml`, `package.json`, `pyproject.toml` - ビルド設定
 
+### Logging Adapter
+
+`infrastructure/src/logging/`
+
+| Type | Implements | Description |
+|------|------------|-------------|
+| `JsonlConversationLogger` | `ConversationLogger` | JSONL ファイルへの構造化会話ログ記録 |
+
+各 `ConversationEvent` を `type` + `timestamp` 付きの JSON 行として追記。
+`Mutex<BufWriter<File>>` でスレッドセーフ。Drop 時に flush。
+`tracing` の診断ログとは分離された、会話トランスクリプト専用のログです。
+
+### Reference Adapter
+
+`infrastructure/src/reference/`
+
+| Type | Implements | Description |
+|------|------------|-------------|
+| `GitHubReferenceResolver` | `ReferenceResolverPort` | `gh` CLI 経由で GitHub Issue/PR を解決 |
+
+`try_new()` で `gh` CLI の存在と認証状態をチェックし、不在時は `None` で graceful degradation。
+`gh issue view --json title,body` で Issue と PR の両方を解決します。
+`resolve_all()` は `futures::future::join_all` で並列解決。
+
+### Config Adapter
+
+`infrastructure/src/config/`
+
+| Type | Description |
+|------|-------------|
+| `ConfigLoader` | `quorum.toml` / `~/.config/copilot-quorum/config.toml` の読み込み |
+| `FileConfig` | ファイルベースの設定構造体（TOML デシリアライズ） |
+| `FileCustomToolConfig` | カスタムツール設定（command テンプレート + parameters） |
+
 ---
 
 ## Presentation Layer / プレゼンテーション層
@@ -709,19 +822,76 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 
 ### CLI Module
 
-| Type | Description |
-|------|-------------|
-| `Cli` | CLAPコマンド定義 |
-| `OutputFormat` | 出力形式（Full, Synthesis, Json） |
-
-### Chat Module
+`presentation/src/cli/`
 
 | Type | Description |
 |------|-------------|
-| `ChatRepl` | インタラクティブなREPL実装 |
-| `ChatCommand` | `/init`, `/council` などのスラッシュコマンド |
+| `Cli` | CLAPコマンド定義（--ensemble, --chat, --model, etc.） |
+| `CliOutputFormat` | CLI用出力形式 |
+
+### TUI Module
+
+`presentation/src/tui/`
+
+モーダルインターフェースの実装。ratatui ベース。
+
+| Type | Description |
+|------|-------------|
+| `TuiApp` | メインアプリケーション（イベントループ、レンダリング） |
+| `TuiState` | TUI 全体の状態（タブ、入力バッファ、モード） |
+| `TuiPresenter` | `UiEvent` → `TuiEvent` 変換 + `RoutedTuiEvent` 送信 |
+| `TuiProgressBridge` | `AgentProgressNotifier` → `TuiEvent` ブリッジ |
+| `TuiHumanIntervention` | `HumanInterventionPort` の TUI 実装 |
+| `InputMode` | Normal / Insert / Command |
+| `KeyAction` | キーバインドアクション enum |
+| `TuiInputConfig` | 入力設定（submit_key, max_height, dynamic_height 等） |
+
+#### Tab + Pane
+
+| Type | Description |
+|------|-------------|
+| `TabManager` | タブの作成・切り替え・インタラクションバインド管理 |
+| `Tab` | タブ（TabId, ペインリスト） |
+| `Pane` | ペイン（PaneId, PaneKind, messages, streaming_text, progress） |
+| `PaneKind` | Interaction(InteractionForm, Option<InteractionId>) |
+
+#### Events
+
+| Type | Description |
+|------|-------------|
+| `TuiCommand` | TUI → Controller のコマンド（ProcessRequest, HandleCommand, SpawnInteraction, etc.） |
+| `TuiEvent` | Controller → TUI のイベント（Welcome, ModeChanged, AgentResult, etc.） |
+| `RoutedTuiEvent` | `TuiEvent` + ルーティング用 `interaction_id` |
+
+#### Widgets
+
+| Type | Description |
+|------|-------------|
+| `MainLayout` | メインレイアウト計算（Header + TabBar + Conversation + Progress + Input + StatusBar） |
+| `conversation` | 会話表示ウィジェット |
+| `header` | ヘッダーウィジェット |
+| `input` | 入力エリアウィジェット（動的高さ対応） |
+| `progress_panel` | プログレスパネルウィジェット |
+| `status_bar` | ステータスバーウィジェット |
+| `tab_bar` | タブバーウィジェット |
+
+### Agent Module
+
+`presentation/src/agent/`
+
+エージェント実行の UI コンポーネント。
+
+| Type | Description |
+|------|-------------|
+| `AgentProgressReporter` | `AgentProgressNotifier` の CLI 実装（indicatif） |
+| `SimpleAgentProgress` | シンプルなテキスト進捗表示 |
+| `InteractiveHumanIntervention` | `HumanInterventionPort` の CLI 実装（対話的承認/却下） |
+| `ReplPresenter` | `UiEvent` の CLI レンダリング |
+| `ThoughtStream` | エージェント思考の表示 |
 
 ### Output Module
+
+`presentation/src/output/`
 
 | Type | Description |
 |------|-------------|
@@ -730,10 +900,21 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 
 ### Progress Module
 
+`presentation/src/progress/`
+
 | Type | Description |
 |------|-------------|
 | `ProgressReporter` | indicatifによるプログレスバー |
 | `SimpleProgress` | シンプルなテキスト進捗表示 |
+
+### Config Module
+
+`presentation/src/config/`
+
+| Type | Description |
+|------|-------------|
+| `OutputConfig` | 出力設定（format, color） |
+| `ReplConfig` | REPL設定（show_progress, history_file） |
 
 ---
 
@@ -753,21 +934,28 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 |                            application/                                    |
 |                                                                            |
 |  +---------------------------------------------------------------------+   |
-|  |                       RunQuorumUseCase                              |   |
+|  |                    AgentController (TUI/REPL)                       |   |
 |  |                                                                     |   |
-|  |  Phase 1: Initial Query                                            |   |
-|  |           +-- Model A (parallel)  --> Response A                   |   |
-|  |           +-- Model B (parallel)  --> Response B                   |   |
-|  |           +-- Model C (parallel)  --> Response C                   |   |
+|  |  UiEvent channel  ←─────────────────────────────── TuiPresenter    |   |
 |  |                                                                     |   |
-|  |  Phase 2: Peer Review                                              |   |
-|  |           +-- A reviews [B, C] (anonymized)                        |   |
-|  |           +-- B reviews [A, C] (anonymized)                        |   |
-|  |           +-- C reviews [A, B] (anonymized)                        |   |
+|  |  ┌─────────────────────────────────────────────────────────────┐   |   |
+|  |  │  RunAgentUseCase (Phase 1-5)                                │   |   |
+|  |  │    ├── GatherContextUseCase (Phase 1)                       │   |   |
+|  |  │    ├── Planning + Review   (Phase 2-3)                      │   |   |
+|  |  │    └── ExecuteTaskUseCase  (Phase 4)                        │   |   |
+|  |  └─────────────────────────────────────────────────────────────┘   |   |
 |  |                                                                     |   |
-|  |  Phase 3: Synthesis                                                |   |
-|  |           +-- Moderator synthesizes all responses + reviews        |   |
+|  |  ┌─────────────────────────────────────────────────────────────┐   |   |
+|  |  │  RunQuorumUseCase                                           │   |   |
+|  |  │    Phase 1: Initial Query (parallel)                        │   |   |
+|  |  │    Phase 2: Peer Review (parallel)                          │   |   |
+|  |  │    Phase 3: Synthesis (moderator)                           │   |   |
+|  |  └─────────────────────────────────────────────────────────────┘   |   |
 |  |                                                                     |   |
+|  |  ┌─────────────────────────────────────────────────────────────┐   |   |
+|  |  │  RunAskUseCase                                              │   |   |
+|  |  │    Low-risk tool loop → direct answer                       │   |   |
+|  |  └─────────────────────────────────────────────────────────────┘   |   |
 |  +---------------------------------------------------------------------+   |
 |                                                                            |
 +==================================+=========================================+
@@ -783,6 +971,11 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 |                          +-------+-------+                                 |
 |                          | SessionChannel | (per session)                  |
 |                          +---------------+                                 |
+|                                                                            |
+|  +------------------+    +------------------+    +---------------------+   |
+|  | ToolRegistry     |    | JsonlConv.Logger |    | GitHubRefResolver  |   |
+|  | (providers)      |    | (.jsonl file)    |    | (gh CLI)           |   |
+|  +------------------+    +------------------+    +---------------------+   |
 |                                                                            |
 +===========================================================================+
 ```
@@ -810,7 +1003,7 @@ CLI Provider は Builtin Provider より高い優先度を持つため、同じ�
 
 ### Transport Demultiplexer / トランスポート多重分離
 
-> 詳細は [features/transport.md](./features/transport.md) を参照してください。
+> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
 
 単一の TCP 接続上で複数セッションを並列運用するため、`MessageRouter` がメッセージを
 session_id ベースで各 `SessionChannel` にルーティングします。
@@ -857,13 +1050,13 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 
 各 `JoinSet::spawn` 内で `gateway.create_session()` が呼ばれ、`MessageRouter` が
 session_id 毎に独立した `SessionChannel` を払い出すため、並列セッション間でメッセージが
-混線することはありません（詳細は [features/transport.md](./features/transport.md)）。
+混線することはありません（詳細は [systems/transport.md](../systems/transport.md)）。
 
 ---
 
 ## Agent System / エージェントシステム
 
-> 詳細は [features/agent-system.md](./features/agent-system.md) を参照してください。
+> 詳細は [systems/agent-system.md](../systems/agent-system.md) を参照してください。
 
 エージェントシステムは、Quorumの概念を自律タスク実行に拡張したものです。
 Solo モードで動作し、重要なポイントでは Quorum Consensus によるレビューを行います。
@@ -875,35 +1068,54 @@ User Request
     │
     ▼
 ┌───────────────────┐
-│ Context Gathering │  ← プロジェクト情報収集 (glob, read_file)
-└───────────────────┘
-    │
+│ Context Gathering │  ← GatherContextUseCase: 3段階フォールバック
+│  (Phase 1)        │    1. 既知ファイル直接読み込み
+└───────────────────┘    2. 探索エージェント (tool use)
+    │                    3. 最小コンテキストで続行
     ▼
 ┌───────────────────┐
-│     Planning      │  ← 単一モデルがタスク計画を作成
+│     Planning      │  ← Solo: decision_model が計画作成
+│  (Phase 2)        │    Ensemble: review_models が並列計画 + 投票
 └───────────────────┘
     │
     ▼
 ┌───────────────────────────┐
-│ 🗳️ Quorum Consensus #1   │  ← 全モデルが計画をレビュー（必須）
-│   Plan Review             │     過半数の投票で承認/却下
+│ Quorum Consensus #1       │  ← review_models が計画をレビュー
+│ Plan Review (Phase 3)     │     却下時: フィードバック付き再計画
+│                           │     max_plan_revisions 超過: HiL 介入
+└───────────────────────────┘
+    │
+    ▼
+┌───────────────────────────┐
+│ Execution Confirmation    │  ← PhaseScope::Full のみ
+│ (Phase 3b)                │     HilMode に応じて自動/対話的承認
 └───────────────────────────┘
     │
     ▼
 ┌───────────────────┐
-│  Task Execution   │
-│   ├─ Low-risk  ────▶ 直接実行
-│   │
-│   └─ High-risk ────▶ 🗳️ Quorum Consensus #2 (Action Review)
-│                        write_file, run_command 実行前にレビュー
+│  Task Execution   │  ← ExecuteTaskUseCase
+│  (Phase 4)        │    Low-risk: 直接並列実行
+│                   │    High-risk: ActionReviewer 経由
 └───────────────────┘
     │
     ▼
 ┌───────────────────────────┐
-│ 🗳️ Quorum Consensus #3   │  ← オプションの最終レビュー
-│  Final Review             │     (require_final_review: true)
+│ Final Review (Phase 5)    │  ← オプション (require_final_review: true)
+│                           │     実行結果全体をレビュー
 └───────────────────────────┘
 ```
+
+### PhaseScope による制御
+
+| Phase | Full | Fast | PlanOnly |
+|-------|------|------|----------|
+| 1. Context Gathering | yes | yes | yes |
+| 2. Planning | yes | yes | yes |
+| 3. Plan Review (Quorum) | yes | skip | skip |
+| 3b. Execution Confirmation | yes | skip | skip |
+| 4. Task Execution | yes | yes | skip+return |
+| 4a. Action Review | yes | skip | N/A |
+| 5. Final Review | opt | skip | N/A |
 
 ### Quorum Consensus / 合意形成
 
@@ -919,21 +1131,13 @@ Quorum Consensus は複数モデルの投票によって安全性を確保しま
 
 | Risk Level | Tools | Behavior |
 |------------|-------|----------|
-| Low | `read_file`, `glob_search`, `grep_search` | 直接実行（レビューなし） |
-| High | `write_file`, `run_command` | 合議レビュー後に実行 |
+| Low | `read_file`, `glob_search`, `grep_search`, `web_fetch`, `web_search` | 直接並列実行（レビューなし） |
+| High | `write_file`, `run_command` | ActionReviewer によるレビュー後に実行 |
 
 ### Progress Notification Pattern / 進捗通知パターン
 
 エージェントシステムは「アクションとUI通知の分離」パターンを採用しています。
 これはVuex/Fluxのような単方向データフローに似た設計です。
-
-#### 原則
-
-| 層 | 責任 | やらないこと |
-|---|---|---|
-| **低レベル関数** (`review_plan`, `review_action`, `final_review`) | ビジネスロジック実行、結果を返す | UI通知 |
-| **メインループ** (`execute_with_progress`) | 結果に基づきUI通知を発火 | - |
-| **ProgressNotifier** (Presentation層) | UIの更新、フィードバック表示 | ビジネスロジック |
 
 #### データフロー
 
@@ -946,35 +1150,16 @@ UseCase (Application層)
 ├── execute_with_progress() ─→ progress.on_quorum_complete_with_votes()
 │                                   │
 │                                   ▼
-└── ProgressNotifier (Presentation層) ──→ UI表示
+└── AgentProgressNotifier (Presentation層) ──→ UI表示
 ```
-
-#### なぜこの設計か
-
-1. **責任の分離**: ビジネスロジックがUI詳細を知らない
-2. **テスト容易性**: 低レベル関数はUI依存なしでテスト可能
-3. **柔軟性**: 異なるUI (CLI, TUI, Web) に同じロジックを再利用
-4. **バグ防止**: UI通知の重複呼び出しを構造的に防ぐ
 
 ---
 
 ## Tool Provider System / ツールプロバイダーシステム
 
-> 詳細は [features/tool-system.md](./features/tool-system.md) を参照してください。
+> 詳細は [systems/tool-system.md](../systems/tool-system.md) を参照してください。
 
 ツールプロバイダーシステムは、**プラグインベースのオーケストレーション**アーキテクチャを採用しています。
-Quorum はツールの呼び出し・連携に専念し、実際のツール実装は外部プロバイダーに委譲します。
-
-### Design Philosophy / 設計思想
-
-| 原則 | 説明 |
-|------|------|
-| **オーケストレーション専念** | Quorum はツールの呼び出し・連携に注力、実装は外部に委譲 |
-| **外部ツール追従** | CLI ツール（rg, gh, fd 等）や MCP サーバーが進化しても自動追従 |
-| **ユーザー選択可能** | 設定ファイルでツールプロバイダーを切り替え |
-| **プラグイン拡張** | コード変更なしで新しいツールを追加可能 |
-| **標準ツールがデフォルト** | grep, find, cat など標準ツールをデフォルトに（どこでも動く） |
-| **推奨ツール提案** | 高速ツール（rg, fd, bat）検知時はユーザーに切り替えを提案 |
 
 ### Architecture / アーキテクチャ
 
@@ -986,12 +1171,12 @@ Quorum はツールの呼び出し・連携に専念し、実際のツール実�
           │              │              │              │
           ▼              ▼              ▼              ▼
    ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-   │ Builtin  │   │   CLI    │   │   MCP    │   │  Script  │
+   │ Builtin  │   │   CLI    │   │  Custom  │   │   MCP    │
    │ Provider │   │ Provider │   │ Provider │   │ Provider │
    └──────────┘   └──────────┘   └──────────┘   └──────────┘
-   最小限の        rg, fd, gh     MCP サーバー    ユーザー
-   フォールバック   等をラップ    を統合         スクリプト
-   (優先度: -100)  (優先度: 50)  (優先度: 100)  (優先度: 75)
+   最小限の        rg, fd, gh     quorum.toml     MCP サーバー
+   フォールバック   等をラップ    [tools.custom]   を統合
+   (優先度: -100)  (優先度: 50)  (優先度: 75)    (優先度: 100)
 ```
 
 ### Provider Types / プロバイダーの種類
@@ -999,136 +1184,33 @@ Quorum はツールの呼び出し・連携に専念し、実際のツール実�
 | Provider | Priority | Description | Use Case |
 |----------|----------|-------------|----------|
 | **MCP** | 100 | MCP サーバー経由のツール | 外部サーバーとの連携、豊富な機能 |
-| **Script** | 75 | ユーザー定義スクリプト | カスタム処理、プロジェクト固有ツール |
+| **Custom** | 75 | ユーザー定義シェルコマンド | カスタム処理、プロジェクト固有ツール |
 | **CLI** | 50 | システムCLIツールのラッパー | grep/rg, find/fd, cat/bat |
 | **Builtin** | -100 | 最小限の組み込みツール | フォールバック、常に利用可能 |
-
-優先度が高いプロバイダーが同じ名前のツールを提供している場合、そちらが優先されます。
-
-### ToolProvider Trait
-
-```rust
-#[async_trait]
-pub trait ToolProvider: Send + Sync {
-    /// 一意な識別子 (e.g., "builtin", "cli", "mcp:filesystem")
-    fn id(&self) -> &str;
-
-    /// 表示名
-    fn display_name(&self) -> &str;
-
-    /// 優先度 (高い方が優先)
-    fn priority(&self) -> i32 { 0 }
-
-    /// プロバイダーが利用可能か確認
-    async fn is_available(&self) -> bool;
-
-    /// 利用可能なツールを検出
-    async fn discover_tools(&self) -> Result<Vec<ToolDefinition>, ProviderError>;
-
-    /// ツール実行
-    async fn execute(&self, call: &ToolCall) -> ToolResult;
-}
-```
-
-### CLI Tool Discovery / CLI ツール検知
-
-CLI プロバイダーは標準ツールをデフォルトとしつつ、高速な代替ツールを検知して提案します。
-
-#### Tool Mapping / ツールマッピング
-
-| Tool | Standard (Default) | Enhanced (Recommended) | Improvement |
-|------|-------------------|------------------------|-------------|
-| `grep_search` | `grep` | `rg` (ripgrep) | ~10x faster, .gitignore support |
-| `glob_search` | `find` | `fd` | ~5x faster, simpler syntax |
-| `read_file` | `cat` | `bat` | Syntax highlighting |
-
-#### Discovery Flow / 検知フロー
-
-```
-$ quorum init
-📦 Tool configuration...
-
-Default tools (always available):
-  ✓ grep  → file content search
-  ✓ find  → file pattern search
-
-🔍 Enhanced tools detected on your system:
-  • rg (ripgrep) - 10x faster than grep
-  • fd           - 5x faster than find
-
-Would you like to use these enhanced tools? [Y/n]: y
-
-✨ Configuration updated!
-```
-
-### Configuration / 設定
-
-`quorum.toml` でプロバイダーとツールを設定できます：
-
-```toml
-[tools]
-providers = ["cli", "builtin"]  # 有効化するプロバイダー
-suggest_enhanced_tools = true   # 推奨ツール検知時に提案するか
-
-[tools.builtin]
-enabled = true
-
-[tools.cli]
-enabled = true
-
-# ツールのエイリアス設定（標準ツールがデフォルト）
-[tools.cli.aliases]
-grep_search = "grep"    # デフォルト: grep, 推奨: rg
-glob_search = "find"    # デフォルト: find, 推奨: fd
-
-# MCP サーバー設定
-[tools.mcp]
-enabled = true
-
-[[tools.mcp.servers]]
-name = "filesystem"
-command = "npx"
-args = ["-y", "@anthropic/mcp-server-filesystem", "/workspace"]
-```
-
-### ToolRegistry / ツールレジストリ
-
-`ToolRegistry` は複数のプロバイダーを集約し、`ToolExecutorPort` を実装します：
-
-```rust
-// レジストリの初期化
-let mut registry = ToolRegistry::new()
-    .register(CliToolProvider::new())      // priority: 50
-    .register(BuiltinProvider::new());     // priority: -100
-
-// ツール検出（優先度順に処理）
-registry.discover().await?;
-
-// ツール実行（適切なプロバイダーにルーティング）
-let call = ToolCall::new("grep_search").with_arg("pattern", "TODO");
-let result = registry.execute(&call).await;
-```
 
 ### Module Structure / モジュール構造
 
 ```
 infrastructure/src/tools/
 ├── mod.rs              # 全体エクスポート
-├── registry.rs         # ToolRegistry 実装
+├── registry.rs         # ToolRegistry (ToolExecutorPort 実装)
+├── executor.rs         # LocalToolExecutor
+├── schema.rs           # JsonSchemaToolConverter (ToolSchemaPort 実装)
+├── custom_provider.rs  # CustomToolProvider (priority: 75)
 ├── builtin/
 │   ├── mod.rs
-│   ├── provider.rs     # BuiltinProvider (priority: -100)
-│   └── *.rs            # read_file, write_file, etc.
+│   └── provider.rs     # BuiltinProvider (priority: -100)
 ├── cli/
 │   ├── mod.rs
 │   ├── provider.rs     # CliToolProvider (priority: 50)
 │   └── discovery.rs    # 推奨ツール検知 & 提案
-├── mcp/                # (Future: MCP integration)
+├── web/
 │   ├── mod.rs
-│   ├── provider.rs     # McpToolProvider (priority: 100)
-│   └── client.rs       # MCP クライアント
-└── script/             # (Future: User scripts)
-    └── provider.rs     # ScriptToolProvider (priority: 75)
+│   ├── fetch.rs        # web_fetch (feature-gated: web-tools)
+│   └── search.rs       # web_search (feature-gated: web-tools)
+├── file.rs             # read_file, write_file 実装
+├── command.rs          # run_command 実装
+└── search.rs           # glob_search, grep_search 実装
 ```
 
 ---
@@ -1139,8 +1221,13 @@ infrastructure/src/tools/
 |------------|----------|----------|
 | `DomainError` | `domain/` | ドメインルール違反 |
 | `GatewayError` | `application/` | LLMゲートウェイエラー |
-| `RunQuorumError` | `application/` | ユースケース実行エラー |
-| `CopilotError` | `infrastructure/` | Copilot CLI通信エラー |
+| `RunAgentError` | `application/` | エージェント実行エラー |
+| `RunAskError` | `application/` | Ask実行エラー |
+| `RunQuorumError` | `application/` | Quorum実行エラー |
+| `CopilotError` | `infrastructure/` | Copilot CLI通信エラー（RouterStopped含む） |
+| `ReferenceError` | `application/` | リソース参照解決エラー |
+| `HumanInterventionError` | `application/` | 人間介入エラー（Cancelled, IoError） |
+| `SpawnError` | `domain/` | インタラクション生成エラー |
 
 部分的な失敗（一部のモデルがエラーを返す）は許容され、成功したモデルの結果のみで処理を続行します。
 
@@ -1167,12 +1254,9 @@ impl LlmGateway for OllamaLlmGateway {
 
 ### Adding New Orchestration Strategy / 新しいオーケストレーション戦略の追加
 
-新しい戦略の追加は 2 ステップで行います：
-
 **Step 1**: `OrchestrationStrategy` enum にバリアントを追加（`domain/src/orchestration/strategy.rs`）：
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OrchestrationStrategy {
     Quorum(QuorumConfig),
     Debate(DebateConfig),
@@ -1180,181 +1264,41 @@ pub enum OrchestrationStrategy {
 }
 ```
 
-**Step 2**: `StrategyExecutor` trait を実装する実行者を追加：
-
-```rust
-// domain/src/orchestration/strategies/new_strategy.rs
-pub struct NewStrategyExecutor { ... }
-
-#[async_trait]
-impl StrategyExecutor for NewStrategyExecutor {
-    fn name(&self) -> &'static str { "new-strategy" }
-    fn phases(&self) -> Vec<Phase> { /* ... */ }
-    async fn execute<G: LlmGateway>(
-        &self, question: &Question, models: &[Model],
-        moderator: &Model, gateway: &G, notifier: &dyn ProgressNotifier,
-    ) -> Result<QuorumResult, DomainError> {
-        // Strategy-specific execution logic
-    }
-}
-```
-
-### Adding HTTP/gRPC API / サーバー化
-
-`presentation/` にサーバーモジュールを追加：
-
-```rust
-// presentation/src/server/http.rs
-async fn run_quorum_handler(
-    use_case: web::Data<RunQuorumUseCase<CopilotLlmGateway>>,
-    req: web::Json<RunQuorumRequest>,
-) -> HttpResponse {
-    // Same UseCase, different interface
-    match use_case.execute(req.into_inner().into()).await {
-        Ok(result) => HttpResponse::Ok().json(result),
-        Err(e) => HttpResponse::InternalServerError().json(e),
-    }
-}
-```
-
-### Adding New Models / 新しいモデルの追加
-
-`domain/src/core/model.rs` の `Model` enum に追加：
-
-```rust
-pub enum Model {
-    // ...
-    NewModel,  // Add here
-}
-
-impl Model {
-    pub fn as_str(&self) -> &str {
-        match self {
-            // ...
-            Model::NewModel => "new-model-id",
-        }
-    }
-}
-```
-
-### Custom Output Formats / カスタム出力形式
-
-`presentation/output/` に新しいフォーマッターを追加：
-
-```rust
-pub struct MarkdownFormatter;
-
-impl OutputFormatter for MarkdownFormatter {
-    fn format(&self, result: &QuorumResult) -> String {
-        // Markdown format
-    }
-}
-```
-
-### Custom Progress Reporters / カスタム進捗表示
-
-`ProgressNotifier` トレイトを実装：
-
-```rust
-pub struct WebSocketProgress { /* ... */ }
-
-impl ProgressNotifier for WebSocketProgress {
-    fn on_phase_start(&self, phase: &Phase, total_tasks: usize) {
-        // Send WebSocket message
-    }
-    // ...
-}
-```
+**Step 2**: `StrategyExecutor` trait を実装する実行者を追加。
 
 ### Adding New Tools / 新しいツールの追加
 
-ツールプロバイダーシステムでは、複数の方法でツールを追加できます：
+#### Option 1: カスタムツール（設定のみ）
 
-#### Option 1: CLI ツールのラッピング（推奨）
-
-既存の CLI ツールを Quorum で利用可能にする最も簡単な方法：
+`quorum.toml` に追加するだけ：
 
 ```toml
-# quorum.toml
-[tools.cli.aliases]
-my_tool = "external-cli-command"
+[tools.custom.my_tool]
+description = "Run my custom tool"
+command = "my-command {input}"
+risk_level = "low"
+
+[tools.custom.my_tool.parameters.input]
+description = "Input to process"
+required = true
 ```
 
 #### Option 2: BuiltinProvider への追加
 
-`infrastructure/tools/builtin/` に新しいツールを追加：
-
-```rust
-// infrastructure/src/tools/builtin/my_tool.rs
-pub fn execute_my_tool(call: &ToolCall) -> ToolResult {
-    // Tool implementation
-}
-
-// infrastructure/src/tools/builtin/provider.rs の build_default_spec() に追加
-ToolDefinition::new("my_tool", "Description", RiskLevel::Low)
-    .with_parameter(ToolParameter::new("arg", "Description", true))
-```
+`infrastructure/tools/builtin/` に新しいツール実装を追加し、`default_tool_spec()` に登録。
 
 #### Option 3: 新しい ToolProvider の実装
 
-完全なカスタムプロバイダーを作成：
+`ToolProvider` trait を実装し、`ToolRegistry` に登録。
 
-```rust
-// infrastructure/src/tools/custom/provider.rs
-pub struct CustomToolProvider { /* ... */ }
+### Adding New Interaction Forms / 新しいインタラクション形式の追加
 
-#[async_trait]
-impl ToolProvider for CustomToolProvider {
-    fn id(&self) -> &str { "custom" }
-    fn display_name(&self) -> &str { "Custom Tools" }
-    fn priority(&self) -> i32 { 60 }  // CLI より高く、Script より低い
-
-    async fn is_available(&self) -> bool { true }
-
-    async fn discover_tools(&self) -> Result<Vec<ToolDefinition>, ProviderError> {
-        Ok(vec![
-            ToolDefinition::new("my_tool", "Description", RiskLevel::Low)
-        ])
-    }
-
-    async fn execute(&self, call: &ToolCall) -> ToolResult {
-        match call.tool_name.as_str() {
-            "my_tool" => execute_my_tool(call),
-            _ => ToolResult::failure(&call.tool_name, ToolError::not_found(&call.tool_name)),
-        }
-    }
-}
-```
-
-レジストリへの登録：
-
-```rust
-// cli/src/main.rs
-let mut registry = ToolRegistry::new()
-    .register(CustomToolProvider::new())  // priority: 60
-    .register(CliToolProvider::new())     // priority: 50
-    .register(BuiltinProvider::new());    // priority: -100
-```
+`domain/src/interaction/mod.rs` の `InteractionForm` にバリアントを追加し、
+対応するユースケースとプレゼンテーションを実装。
 
 ### Adding New Context File Types / 新しいコンテキストファイル種別の追加
 
-`domain/context/` の `KnownContextFile` enum に新しいファイル種別を追加：
-
-```rust
-pub enum KnownContextFile {
-    // ...
-    MyConfigFile,  // 追加
-}
-
-impl KnownContextFile {
-    pub fn relative_path(&self) -> &str {
-        match self {
-            // ...
-            Self::MyConfigFile => "my-config.yaml",
-        }
-    }
-}
-```
+`domain/context/value_objects.rs` の `KnownContextFile` enum に新しいファイル種別を追加。
 
 ---
 
@@ -1364,10 +1308,23 @@ impl KnownContextFile {
 
 | Layer | Test Type | Description |
 |-------|-----------|-------------|
-| domain | Unit | ドメインロジックの単体テスト |
-| application | Unit + Integration | モックゲートウェイでユースケーステスト |
+| domain | Unit | ドメインロジックの単体テスト（InteractionTree, ContextMode, ToolExecution等） |
+| application | Unit + Integration | ScriptedGateway/MockToolExecutor でフローテスト |
 | infrastructure | Integration | 実際のCopilot CLIとの結合テスト |
 | presentation | Unit | フォーマッターの出力テスト |
+
+### Flow Test Infrastructure
+
+`application/src/use_cases/run_agent/` のテストでは以下のテストインフラを使用：
+
+| Type | Description |
+|------|-------------|
+| `ScriptedGateway` | モデル名ごとにスクリプト化されたレスポンスを返すモックゲートウェイ |
+| `ScriptedSession` | 順序付きレスポンスを返すモックセッション |
+| `FlowTestBuilder` | Solo/Fast/PlanOnly/Ensemble のフローテスト構築用ビルダー |
+| `TrackingProgress` | フェーズ遷移を記録するモックプログレス |
+| `MockToolExecutor` | 呼び出しを記録して成功を返すモックツール実行器 |
+| `MockHumanIntervention` | 設定可能な HiL 決定を返すモック |
 
 ```bash
 # Run all tests
@@ -1379,3 +1336,39 @@ cargo test -p quorum-domain
 # Run with coverage
 cargo llvm-cov --workspace
 ```
+
+<!--
+LLM Context: Architecture Reference
+
+Key types and locations:
+- Domain: InteractionForm, InteractionTree, Interaction, InteractionResult, ContextMode, ResourceReference (domain/src/interaction/, domain/src/context/)
+- Domain: ToolExecution, ToolExecutionState, ToolExecutionId (domain/src/agent/tool_execution.rs)
+- Domain: ConsensusLevel, PhaseScope, OrchestrationStrategy, SessionMode (domain/src/orchestration/)
+- Domain: AgentState, Plan, Task, ModelConfig, AgentPolicy, HilMode, HumanDecision (domain/src/agent/)
+- Domain: ToolDefinition, ToolCall, ToolResult, ToolSpec, RiskLevel, ToolProvider (domain/src/tool/)
+- Domain: LlmResponse, ContentBlock, StopReason, StreamEvent (domain/src/session/)
+- Application Ports: LlmGateway, LlmSession, ToolExecutorPort, ToolSchemaPort, ContextLoaderPort, ProgressNotifier, AgentProgressNotifier, HumanInterventionPort, ActionReviewer, ConversationLogger, ReferenceResolverPort, UiEvent (application/src/ports/)
+- Application Use Cases: RunAgentUseCase (run_agent/), RunQuorumUseCase, RunAskUseCase, GatherContextUseCase, ExecuteTaskUseCase, AgentController, InitContextUseCase (application/src/use_cases/)
+- Application Config: QuorumConfig, ExecutionParams (application/src/config/)
+- Infrastructure: CopilotLlmGateway, CopilotSession, MessageRouter, SessionChannel (infrastructure/src/copilot/)
+- Infrastructure: ToolRegistry, LocalToolExecutor, BuiltinProvider, CliToolProvider, CustomToolProvider, JsonSchemaToolConverter (infrastructure/src/tools/)
+- Infrastructure: JsonlConversationLogger (infrastructure/src/logging/)
+- Infrastructure: GitHubReferenceResolver (infrastructure/src/reference/)
+- Infrastructure: ConfigLoader, FileConfig (infrastructure/src/config/)
+- Presentation: TuiApp, TuiState, TuiPresenter, TuiProgressBridge, TuiHumanIntervention (presentation/src/tui/)
+- Presentation: TabManager, Tab, Pane, PaneKind (presentation/src/tui/tab.rs)
+- Presentation: TuiCommand, TuiEvent, RoutedTuiEvent (presentation/src/tui/event.rs)
+- Presentation: MainLayout, widgets/* (presentation/src/tui/widgets/)
+- Presentation: AgentProgressReporter, InteractiveHumanIntervention, ReplPresenter, ThoughtStream (presentation/src/agent/)
+- Presentation: ConsoleFormatter (presentation/src/output/)
+- Presentation: ProgressReporter, SimpleProgress (presentation/src/progress/)
+- Presentation: Cli (presentation/src/cli/)
+- CLI: main.rs DI assembly (cli/src/main.rs)
+
+Module structure:
+- domain/src/: core/, quorum/, session/, orchestration/, agent/, tool/, interaction/, context/, prompt/, config/, util.rs
+- application/src/: ports/ (11 modules), use_cases/ (run_agent/ [mod,types,planning,review,hil], run_quorum, run_ask, gather_context, execute_task, agent_controller, init_context, shared), config/
+- infrastructure/src/: copilot/ (gateway, session, router, transport, protocol, error), tools/ (registry, executor, schema, custom_provider, builtin/, cli/, web/), context/, logging/, reference/, config/
+- presentation/src/: cli/, tui/ (app, state, presenter, progress, human_intervention, editor, mode, event, tab, widgets/), agent/ (progress, thought, human_intervention, presenter), output/, progress/, config/
+- cli/src/: main.rs
+-->
