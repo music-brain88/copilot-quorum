@@ -511,6 +511,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                             tool_name: call.tool_name.clone(),
                             output,
                             is_error,
+                            is_rejected: false,
                         });
                     } else {
                         warn!(
@@ -565,12 +566,34 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                         );
                         all_executions.push(exec);
 
+                        self.conversation_logger.log(ConversationEvent::new(
+                            "tool_call",
+                            serde_json::json!({
+                                "task_id": task_id_str,
+                                "tool": call.tool_name,
+                                "args": call.arguments,
+                                "risk": "high",
+                                "rejected": true,
+                            }),
+                        ));
+                        self.conversation_logger.log(ConversationEvent::new(
+                            "tool_result",
+                            serde_json::json!({
+                                "task_id": task_id_str,
+                                "tool": call.tool_name,
+                                "success": false,
+                                "rejected": true,
+                                "reason": "Action rejected by quorum review",
+                            }),
+                        ));
+
                         if let Some(native_id) = call.native_id.clone() {
                             tool_result_messages.push(ToolResultMessage {
                                 tool_use_id: native_id,
                                 tool_name: call.tool_name.clone(),
                                 output: "Action rejected by quorum review".to_string(),
-                                is_error: true,
+                                is_error: false,
+                                is_rejected: true,
                             });
                         } else {
                             warn!(
@@ -664,6 +687,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                         tool_name: call.tool_name.clone(),
                         output,
                         is_error,
+                        is_rejected: false,
                     });
                 } else {
                     warn!(

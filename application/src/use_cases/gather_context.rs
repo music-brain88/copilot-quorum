@@ -275,6 +275,7 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
                         tool_name: call.tool_name.clone(),
                         output,
                         is_error,
+                        is_rejected: false,
                     });
                 } else {
                     warn!(

@@ -39,7 +39,7 @@ use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
 use quorum_domain::util::truncate_str;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Internal state for a tool-enabled session (**Native Tool Use**).
 ///
@@ -462,7 +462,9 @@ impl LlmSession for CopilotSession {
         // Build the tool call result from the first result
         // (Copilot CLI sends one tool.call at a time)
         let tool_result = if let Some(result) = results.first() {
-            if result.is_error {
+            if result.is_rejected {
+                ToolCallResult::rejected(&result.output)
+            } else if result.is_error {
                 ToolCallResult::error(&result.output)
             } else {
                 ToolCallResult::success(&result.output)
@@ -470,6 +472,14 @@ impl LlmSession for CopilotSession {
         } else {
             ToolCallResult::success("")
         };
+
+        // Extract logging values before moving tool_result
+        let first_tool_name = results
+            .first()
+            .map(|r| r.tool_name.as_str())
+            .unwrap_or("unknown");
+        let first_output_bytes = results.first().map(|r| r.output.len()).unwrap_or(0);
+        let result_type = tool_result.result_type.clone();
 
         // Send the JSON-RPC response back to the CLI
         // Wrap in { "result": ... } envelope per official Copilot SDK wire format
@@ -480,7 +490,15 @@ impl LlmSession for CopilotSession {
             .await
             .map_err(|e| GatewayError::RequestFailed(e.to_string()))?;
 
-        debug!("Tool result sent for request_id={}", request_id);
+        debug!(
+            "Tool result sent for request_id={}: tool={}, type={}, output_bytes={}",
+            request_id, first_tool_name, result_type, first_output_bytes,
+        );
+        trace!(
+            "Tool result payload for request_id={}: {}",
+            request_id,
+            serde_json::to_string(&response).unwrap_or_default(),
+        );
 
         // Read the next streaming response from the tool session channel
         let outcome = state

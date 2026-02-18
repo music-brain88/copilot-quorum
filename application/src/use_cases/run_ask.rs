@@ -186,6 +186,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
                         tool_name: call.tool_name.clone(),
                         output,
                         is_error,
+                        is_rejected: false,
                     });
                 } else {
                     warn!(
