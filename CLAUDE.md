@@ -187,19 +187,22 @@ The agent system extends quorum to autonomous task execution with safety through
 - Multi-turn loop: `send_with_tools()` → ToolUse stop → execute → `send_tool_results()` → repeat
 - Low-risk ツールは `futures::join_all()` で並列実行、High-risk は順次 + Quorum Review
 
-詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照。
+詳細は [docs/reference/architecture.md](docs/reference/architecture.md) を参照。
 
 ## Feature Documentation
 
-機能別の詳細ドキュメント（[docs/features/](docs/features/README.md)）:
+機能別の詳細ドキュメント（[docs/README.md](docs/README.md)）:
 
 | Document | Description |
 |----------|-------------|
-| [tui.md](docs/features/tui.md) | Modal TUI（モーダルインターフェース） |
-| [quorum.md](docs/features/quorum.md) | Quorum Discussion & Consensus |
-| [agent-system.md](docs/features/agent-system.md) | Agent System + HiL |
-| [ensemble-mode.md](docs/features/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
-| [tool-system.md](docs/features/tool-system.md) | Tool System（プラグイン、リスク分類） |
-| [native-tool-use.md](docs/features/native-tool-use.md) | Native Tool Use API（構造化ツール呼び出し） |
-| [transport.md](docs/features/transport.md) | Transport Demultiplexer（並列セッションルーティング） |
-| [cli-and-configuration.md](docs/features/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |
+| [tui.md](docs/guides/tui.md) | Modal TUI（Tab/Pane、Actorパターン） |
+| [cli-and-configuration.md](docs/guides/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |
+| [quorum.md](docs/concepts/quorum.md) | Quorum Discussion & Consensus |
+| [ensemble-mode.md](docs/concepts/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
+| [interaction-model.md](docs/concepts/interaction-model.md) | InteractionForm、ContextMode、ネスティング |
+| [agent-system.md](docs/systems/agent-system.md) | Agent System + HiL + ToolExecution |
+| [tool-system.md](docs/systems/tool-system.md) | Tool System（プラグイン、リスク分類） |
+| [native-tool-use.md](docs/systems/native-tool-use.md) | Native Tool Use API（構造化ツール呼び出し） |
+| [transport.md](docs/systems/transport.md) | Transport Demultiplexer（並列セッションルーティング） |
+| [logging.md](docs/systems/logging.md) | ログシステム（ConversationLogger、JSONL） |
+| [vision/](docs/vision/README.md) | 将来ビジョン（Knowledge、Workflow、Extension） |
