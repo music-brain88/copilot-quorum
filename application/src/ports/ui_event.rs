@@ -5,7 +5,8 @@
 //! (e.g., ReplPresenter for CLI, TuiPresenter for TUI in Phase 2).
 
 use quorum_domain::{
-    AgentState, ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, Thought,
+    AgentState, ConsensusLevel, HilMode, InteractionForm, InteractionId, Model, OutputFormat,
+    PhaseScope, Thought,
 };
 
 /// Events emitted by AgentController for presentation layer to render
@@ -73,6 +74,14 @@ pub enum UiEvent {
     AskResult(AskResultEvent),
     /// Ask interaction failed
     AskError { error: String },
+
+    // === Interaction Lifecycle ===
+    /// Interaction spawned (root or child)
+    InteractionSpawned(InteractionSpawnedEvent),
+    /// Interaction completed
+    InteractionCompleted(InteractionCompletedEvent),
+    /// Interaction spawn failed
+    InteractionSpawnError { error: String },
 
     // === Errors & Control ===
     /// Command usage/validation error
@@ -149,4 +158,22 @@ pub struct ContextInitResultEvent {
 #[derive(Debug, Clone)]
 pub struct AskResultEvent {
     pub answer: String,
+}
+
+/// Interaction spawn event for display
+#[derive(Debug, Clone)]
+pub struct InteractionSpawnedEvent {
+    pub id: InteractionId,
+    pub form: InteractionForm,
+    pub parent_id: Option<InteractionId>,
+    pub query: String,
+}
+
+/// Interaction completion event for display
+#[derive(Debug, Clone)]
+pub struct InteractionCompletedEvent {
+    pub id: InteractionId,
+    pub form: InteractionForm,
+    pub parent_id: Option<InteractionId>,
+    pub result_text: String,
 }

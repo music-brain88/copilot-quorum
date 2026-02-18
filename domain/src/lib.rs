@@ -49,6 +49,7 @@ pub use context::{
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use interaction::{
     DEFAULT_MAX_NESTING_DEPTH, Interaction, InteractionForm, InteractionId, InteractionResult,
+    InteractionTree, SpawnError,
 };
 pub use orchestration::{
     entities::{Phase, QuorumRun},

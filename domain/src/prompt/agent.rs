@@ -331,7 +331,7 @@ Provide your assessment with:
     /// # See Also
     ///
     /// - [`EnsemblePlanResult`](crate::agent::EnsemblePlanResult) - Aggregates votes
-    /// - `docs/features/ensemble-mode.md` - Research background
+    /// - `docs/concepts/ensemble-mode.md` - Research background
     pub fn plan_voting(plan: &Plan) -> String {
         let tasks_description = plan
             .tasks

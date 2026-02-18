@@ -5,6 +5,7 @@
 
 use super::event::TuiEvent;
 use super::state::{DisplayMessage, TuiState};
+use super::tab::PaneKind;
 use quorum_application::{
     AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
     QuorumResultEvent, UiEvent, WelcomeInfo,
@@ -75,6 +76,34 @@ impl TuiPresenter {
             UiEvent::AskError { error } => {
                 state.push_message(DisplayMessage::system(format!("Ask error: {}", error)));
                 self.emit(TuiEvent::AgentError(error.clone()));
+            }
+            UiEvent::InteractionSpawned(event) => {
+                // Create tab directly to avoid race condition: if we emit a TuiEvent
+                // here, it goes through tui_event_tx and is processed one select! loop
+                // iteration later. Meanwhile, subsequent UiEvents (QuorumStarting, etc.)
+                // arrive on ui_rx and write to the OLD active tab before the new tab
+                // is created.
+                let kind = PaneKind::Interaction(event.form, Some(event.id));
+                state.tabs.create_tab(kind);
+                state
+                    .tabs
+                    .active_pane_mut()
+                    .set_title_if_empty(&event.query);
+            }
+            UiEvent::InteractionCompleted(event) => {
+                // Root interaction completions (parent_id = None) are not propagated;
+                // only child completions need to notify their parent's tab.
+                if let Some(parent_id) = event.parent_id {
+                    self.emit(TuiEvent::InteractionCompleted {
+                        parent_id: Some(parent_id),
+                        result_text: event.result_text.clone(),
+                    });
+                }
+            }
+            UiEvent::InteractionSpawnError { error } => {
+                let message = format!("Interaction spawn error: {}", error);
+                state.push_message(DisplayMessage::system(message.clone()));
+                self.emit(TuiEvent::Flash(message));
             }
             UiEvent::QuorumStarting => {
                 state.push_message(DisplayMessage::system("Quorum Discussion starting..."));
