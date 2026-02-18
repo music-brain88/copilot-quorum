@@ -191,6 +191,33 @@ impl TabManager {
         })
     }
 
+    /// Bind an interaction id to a placeholder tab (one with matching form and no id).
+    ///
+    /// Used by Fix A (immediate tab creation): `handle_tab_command` creates a tab
+    /// with `PaneKind::Interaction(form, None)`, and when `InteractionSpawned`
+    /// arrives later, this method associates the real `InteractionId`.
+    ///
+    /// Returns `true` if a placeholder was found and bound; `false` if a new tab
+    /// should be created instead (fallback for programmatic spawns without a
+    /// preceding placeholder).
+    pub fn bind_interaction_id(
+        &mut self,
+        form: InteractionForm,
+        interaction_id: InteractionId,
+    ) -> bool {
+        // Find the oldest placeholder tab matching the form
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane.kind == PaneKind::Interaction(form, None))
+        {
+            self.tabs[index].pane.kind = PaneKind::Interaction(form, Some(interaction_id));
+            true
+        } else {
+            false
+        }
+    }
+
     /// Push a message to the pane that owns the given interaction id.
     pub fn push_message_to_interaction(
         &mut self,
@@ -466,6 +493,78 @@ mod tests {
         pane.set_title_if_empty("   \n  \n  ");
         assert_eq!(pane.display_title(), "Agent");
         assert!(pane.title.is_none());
+    }
+
+    #[test]
+    fn test_bind_interaction_id_to_placeholder() {
+        let mut mgr = TabManager::new();
+        // Create placeholder (no interaction id)
+        mgr.create_tab(PaneKind::Interaction(InteractionForm::Discuss, None));
+        assert_eq!(mgr.len(), 2);
+
+        // Bind interaction id
+        let bound = mgr.bind_interaction_id(InteractionForm::Discuss, InteractionId(42));
+        assert!(bound);
+        assert_eq!(
+            mgr.tabs()[1].pane.kind,
+            PaneKind::Interaction(InteractionForm::Discuss, Some(InteractionId(42)))
+        );
+        // Should now be findable
+        assert_eq!(
+            mgr.find_tab_index_by_interaction(InteractionId(42)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_bind_interaction_id_no_placeholder() {
+        let mut mgr = TabManager::new();
+        // No placeholder for Discuss — bind should return false
+        let bound = mgr.bind_interaction_id(InteractionForm::Discuss, InteractionId(1));
+        assert!(!bound);
+    }
+
+    #[test]
+    fn test_bind_interaction_id_wrong_form() {
+        let mut mgr = TabManager::new();
+        // Placeholder is Ask, but trying to bind Discuss
+        mgr.create_tab(PaneKind::Interaction(InteractionForm::Ask, None));
+        let bound = mgr.bind_interaction_id(InteractionForm::Discuss, InteractionId(1));
+        assert!(!bound);
+        // Ask placeholder should remain unbound
+        assert_eq!(
+            mgr.tabs()[1].pane.kind,
+            PaneKind::Interaction(InteractionForm::Ask, None)
+        );
+    }
+
+    #[test]
+    fn test_bind_interaction_id_multiple_placeholders_binds_oldest() {
+        let mut mgr = TabManager::new();
+        // Two Discuss placeholders
+        mgr.create_tab(PaneKind::Interaction(InteractionForm::Discuss, None));
+        mgr.create_tab(PaneKind::Interaction(InteractionForm::Discuss, None));
+
+        // First bind goes to the oldest placeholder (index 1)
+        let bound = mgr.bind_interaction_id(InteractionForm::Discuss, InteractionId(10));
+        assert!(bound);
+        assert_eq!(
+            mgr.tabs()[1].pane.kind,
+            PaneKind::Interaction(InteractionForm::Discuss, Some(InteractionId(10)))
+        );
+        // Second placeholder still unbound
+        assert_eq!(
+            mgr.tabs()[2].pane.kind,
+            PaneKind::Interaction(InteractionForm::Discuss, None)
+        );
+
+        // Second bind goes to the remaining placeholder (index 2)
+        let bound = mgr.bind_interaction_id(InteractionForm::Discuss, InteractionId(11));
+        assert!(bound);
+        assert_eq!(
+            mgr.tabs()[2].pane.kind,
+            PaneKind::Interaction(InteractionForm::Discuss, Some(InteractionId(11)))
+        );
     }
 
     #[test]
