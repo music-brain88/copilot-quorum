@@ -10,7 +10,7 @@ use quorum_domain::{
 use tokio::sync::oneshot;
 
 /// Wrapper for TuiEvent that includes routing metadata
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RoutedTuiEvent {
     pub interaction_id: Option<InteractionId>,
     pub event: TuiEvent,
