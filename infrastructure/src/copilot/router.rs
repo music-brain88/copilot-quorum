@@ -23,6 +23,9 @@ use crate::copilot::protocol::{
     ToolCallParams, ToolCallResult,
 };
 use crate::copilot::transport::{MessageKind, StreamingOutcome, classify_message};
+use quorum_application::ports::conversation_logger::{
+    ConversationEvent, ConversationLogger, NoConversationLogger,
+};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -143,9 +146,38 @@ pub struct SessionChannel {
     rx: mpsc::UnboundedReceiver<RoutedMessage>,
     session_id: String,
     router: Arc<MessageRouter>,
+    conversation_logger: Arc<dyn ConversationLogger>,
 }
 
 impl SessionChannel {
+    /// Log a Copilot CLI internal tool execution event to the conversation logger.
+    ///
+    /// Extracts tool name, output size, and status from the `tool.execution_complete`
+    /// event and records it as an `internal_tool_complete` conversation event.
+    fn log_internal_tool_execution(&self, event: &serde_json::Value) {
+        let data = event.get("data");
+        let tool_name = data
+            .and_then(|d| d.get("toolName").or_else(|| d.get("name")))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let mut payload = serde_json::json!({
+            "session_id": self.session_id,
+            "tool": tool_name,
+            "source": "copilot_cli",
+        });
+        if let Some(d) = data {
+            if let Some(result) = d.get("result").or_else(|| d.get("output")) {
+                let size = serde_json::to_string(result).map(|s| s.len()).unwrap_or(0);
+                payload["output_bytes"] = serde_json::json!(size);
+            }
+            if let Some(status) = d.get("status").and_then(|v| v.as_str()) {
+                payload["status"] = serde_json::json!(status);
+            }
+        }
+        self.conversation_logger
+            .log(ConversationEvent::new("internal_tool_complete", payload));
+    }
+
     /// Receive the next routed message, blocking until one arrives.
     ///
     /// Returns [`CopilotError::RouterStopped`] if the background reader task
@@ -245,6 +277,7 @@ impl SessionChannel {
                             "Stream: tool.execution_complete: {}",
                             serde_json::to_string(&event).unwrap_or_default()
                         );
+                        self.log_internal_tool_execution(&event);
                     }
                     other => {
                         let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
@@ -348,6 +381,7 @@ impl SessionChannel {
                             "Tool stream: tool.execution_complete: {}",
                             serde_json::to_string(&event).unwrap_or_default()
                         );
+                        self.log_internal_tool_execution(&event);
                     }
                     "session.error" => {
                         let error_msg = event
@@ -508,6 +542,7 @@ impl SessionChannel {
                             "Stream: tool.execution_complete: {}",
                             serde_json::to_string(&event).unwrap_or_default()
                         );
+                        self.log_internal_tool_execution(&event);
                     }
                     other => {
                         let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
@@ -597,6 +632,9 @@ pub struct MessageRouter {
 
     /// Copilot CLI child process (killed on Drop to prevent orphans).
     child: Child,
+
+    /// Conversation logger for recording internal tool executions.
+    conversation_logger: Arc<dyn ConversationLogger>,
 }
 
 impl MessageRouter {
@@ -606,11 +644,24 @@ impl MessageRouter {
     /// during application startup. The returned `Arc<Self>` is shared by all
     /// [`CopilotSession`](super::session::CopilotSession)s.
     pub async fn spawn() -> Result<Arc<Self>> {
-        Self::spawn_with_command("copilot").await
+        Self::spawn_internal("copilot", Arc::new(NoConversationLogger)).await
     }
 
     /// Spawn with a custom command (useful for testing).
     pub async fn spawn_with_command(cmd: &str) -> Result<Arc<Self>> {
+        Self::spawn_internal(cmd, Arc::new(NoConversationLogger)).await
+    }
+
+    /// Spawn with a conversation logger for recording internal tool executions.
+    pub async fn spawn_with_logger(logger: Arc<dyn ConversationLogger>) -> Result<Arc<Self>> {
+        Self::spawn_internal("copilot", logger).await
+    }
+
+    /// Internal spawn implementation shared by all public constructors.
+    async fn spawn_internal(
+        cmd: &str,
+        conversation_logger: Arc<dyn ConversationLogger>,
+    ) -> Result<Arc<Self>> {
         debug!("Spawning Copilot CLI: {} --server", cmd);
 
         let mut cmd = Command::new(cmd);
@@ -695,6 +746,7 @@ impl MessageRouter {
             create_lock: Mutex::new(()),
             writer,
             child,
+            conversation_logger,
         });
 
         Ok(router)
@@ -1005,6 +1057,7 @@ impl MessageRouter {
             rx,
             session_id: session_id.clone(),
             router: Arc::clone(self),
+            conversation_logger: Arc::clone(&self.conversation_logger),
         };
 
         Ok((session_id, channel))
