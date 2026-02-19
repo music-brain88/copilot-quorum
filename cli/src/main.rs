@@ -299,6 +299,15 @@ async fn main() -> Result<()> {
     if let Some(review) = config.models.parse_review() {
         models = models.with_review(review);
     }
+    if let Some(participants) = config.models.parse_participants() {
+        models = models.with_participants(participants);
+    }
+    if let Some(moderator) = config.models.parse_moderator() {
+        models = models.with_moderator(moderator);
+    }
+    if let Some(ask) = config.models.parse_ask() {
+        models = models.with_ask(ask);
+    }
 
     // CLI --model flag overrides config file models (for backward compatibility)
     // First model from CLI becomes decision model, rest become review models

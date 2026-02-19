@@ -5,7 +5,7 @@
 use crate::ports::llm_gateway::{GatewayError, LlmGateway};
 use crate::ports::progress::{NoProgress, ProgressNotifier};
 use quorum_domain::{
-    Model, ModelResponse, PeerReview, Phase, PromptTemplate, Question, QuorumResult,
+    Model, ModelConfig, ModelResponse, PeerReview, Phase, PromptTemplate, Question, QuorumResult,
     SynthesisResult,
 };
 use std::sync::Arc;
@@ -34,37 +34,24 @@ pub enum RunQuorumError {
 pub struct RunQuorumInput {
     /// The question to ask
     pub question: Question,
-    /// Models to participate in the discussion
-    pub models: Vec<Model>,
-    /// Model to use for final synthesis (defaults to first model)
-    pub moderator: Option<Model>,
+    /// Model configuration (`participants` join the discussion, `moderator` synthesizes)
+    pub models: ModelConfig,
     /// Whether to include peer review phase
     pub enable_review: bool,
 }
 
 impl RunQuorumInput {
-    pub fn new(question: impl Into<Question>, models: Vec<Model>) -> Self {
+    pub fn new(question: impl Into<Question>, models: ModelConfig) -> Self {
         Self {
             question: question.into(),
             models,
-            moderator: None,
             enable_review: true,
         }
-    }
-
-    pub fn with_moderator(mut self, model: Model) -> Self {
-        self.moderator = Some(model);
-        self
     }
 
     pub fn without_review(mut self) -> Self {
         self.enable_review = false;
         self
-    }
-
-    /// Get the moderator, defaulting to the first model
-    pub fn get_moderator(&self) -> Option<&Model> {
-        self.moderator.as_ref().or(self.models.first())
     }
 }
 
@@ -89,11 +76,14 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
         input: RunQuorumInput,
         progress: &dyn ProgressNotifier,
     ) -> Result<QuorumResult, RunQuorumError> {
-        if input.models.is_empty() {
+        if input.models.participants.is_empty() {
             return Err(RunQuorumError::NoModels);
         }
 
-        info!("Starting Quorum with {} models", input.models.len());
+        info!(
+            "Starting Quorum with {} models",
+            input.models.participants.len()
+        );
 
         // Phase 1: Initial Query
         let responses = self.phase_initial(&input, progress).await?;
@@ -119,7 +109,12 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
 
         Ok(QuorumResult::new(
             input.question.content(),
-            input.models.iter().map(|m| m.to_string()).collect(),
+            input
+                .models
+                .participants
+                .iter()
+                .map(|m| m.to_string())
+                .collect(),
             responses,
             reviews,
             synthesis,
@@ -133,11 +128,11 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
         progress: &dyn ProgressNotifier,
     ) -> Result<Vec<ModelResponse>, RunQuorumError> {
         info!("Phase 1: Initial Query");
-        progress.on_phase_start(&Phase::Initial, input.models.len());
+        progress.on_phase_start(&Phase::Initial, input.models.participants.len());
 
         let mut join_set = JoinSet::new();
 
-        for model in &input.models {
+        for model in &input.models.participants {
             let gateway = Arc::clone(&self.gateway);
             let model = model.clone();
             let question = input.question.content().to_string();
@@ -262,10 +257,7 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
         info!("Phase 3: Synthesis");
         progress.on_phase_start(&Phase::Synthesis, 1);
 
-        let moderator = input
-            .get_moderator()
-            .cloned()
-            .unwrap_or_else(|| input.models[0].clone());
+        let moderator = input.models.moderator.clone();
 
         let successful_responses: Vec<(String, String)> = responses
             .iter()

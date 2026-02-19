@@ -1130,6 +1130,7 @@ mod tests {
                 exploration: Model::ClaudeHaiku45,
                 decision: Model::ClaudeSonnet45,
                 review: vec![Model::ClaudeSonnet45],
+                ..Default::default()
             };
             let policy = AgentPolicy {
                 hil_mode: HilMode::Interactive,
@@ -1215,6 +1216,7 @@ mod tests {
                 exploration: Model::ClaudeHaiku45,
                 decision: Model::ClaudeSonnet45,
                 review: vec![Model::ClaudeHaiku45, Model::ClaudeSonnet45],
+                ..Default::default()
             };
             let policy = AgentPolicy {
                 hil_mode: HilMode::Interactive,
