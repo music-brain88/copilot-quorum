@@ -109,7 +109,12 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
 
         Ok(QuorumResult::new(
             input.question.content(),
-            input.models.participants.iter().map(|m| m.to_string()).collect(),
+            input
+                .models
+                .participants
+                .iter()
+                .map(|m| m.to_string())
+                .collect(),
             responses,
             reviews,
             synthesis,
