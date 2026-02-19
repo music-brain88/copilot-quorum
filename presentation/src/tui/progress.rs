@@ -16,11 +16,18 @@ pub struct TuiProgressBridge {
 }
 
 impl TuiProgressBridge {
-    pub fn new(
-        tx: mpsc::UnboundedSender<RoutedTuiEvent>,
-        interaction_id: Option<InteractionId>,
-    ) -> Self {
-        Self { tx, interaction_id }
+    pub fn new(tx: mpsc::UnboundedSender<RoutedTuiEvent>) -> Self {
+        Self {
+            tx,
+            interaction_id: None,
+        }
+    }
+
+    pub fn for_interaction(tx: mpsc::UnboundedSender<RoutedTuiEvent>, id: InteractionId) -> Self {
+        Self {
+            tx,
+            interaction_id: Some(id),
+        }
     }
 
     fn emit(&self, event: TuiEvent) {
@@ -308,7 +315,7 @@ mod tests {
     #[test]
     fn test_phase_change_emits_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         bridge.on_phase_change(&AgentPhase::Planning);
 
@@ -321,7 +328,7 @@ mod tests {
     #[test]
     fn test_tool_call_emits_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         bridge.on_tool_call("read_file", "/test.rs");
 
@@ -337,7 +344,7 @@ mod tests {
     #[test]
     fn test_stream_chunk_emits_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         bridge.on_llm_chunk("hello ");
         bridge.on_llm_chunk("world");
@@ -357,7 +364,7 @@ mod tests {
     #[test]
     fn test_routed_event_includes_interaction_id() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, Some(InteractionId(42)));
+        let bridge = TuiProgressBridge::for_interaction(tx, InteractionId(42));
 
         bridge.on_llm_chunk("hello");
 
@@ -369,7 +376,7 @@ mod tests {
     #[test]
     fn test_quorum_events() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         bridge.on_quorum_start("Plan Review", 3);
         bridge.on_quorum_model_complete(&Model::ClaudeSonnet45, true);
@@ -392,7 +399,7 @@ mod tests {
     #[test]
     fn test_task_lifecycle() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         let task = Task::new("t1", "Fix bug");
         bridge.on_task_start(&task, 1, 3);
@@ -428,7 +435,7 @@ mod tests {
         use quorum_domain::TaskResult;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         let mut task = Task::new("t1", "Analyze code");
         task.mark_completed(TaskResult::success(
@@ -454,7 +461,7 @@ mod tests {
     #[test]
     fn test_task_complete_without_result() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         let task = Task::new("t1", "Do something");
         bridge.on_task_complete(&task, true, 1, 1);
@@ -472,7 +479,7 @@ mod tests {
         use quorum_domain::TaskResult;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TuiProgressBridge::new(tx, None);
+        let bridge = TuiProgressBridge::new(tx);
 
         let mut task = Task::new("t1", "Empty result");
         task.mark_completed(TaskResult::success(""));

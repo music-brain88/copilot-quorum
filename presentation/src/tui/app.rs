@@ -1625,7 +1625,7 @@ async fn controller_task<
                         let context = controller.build_spawn_context();
                         let tx = progress_tx.clone();
                         tasks.spawn(async move {
-                            let progress = TuiProgressBridge::new(tx, Some(iid));
+                            let progress = TuiProgressBridge::for_interaction(tx, iid);
                             context.execute(None, InteractionForm::Agent, clean_query, full_query, &progress).await
                         });
                     }
@@ -1640,7 +1640,7 @@ async fn controller_task<
                         let cmd_str = format!("/{}", command);
 
                         let iid = interaction_id.unwrap_or_else(|| controller.active_interaction_id());
-                        let progress = TuiProgressBridge::new(progress_tx.clone(), Some(iid));
+                        let progress = TuiProgressBridge::for_interaction(progress_tx.clone(), iid);
 
                         match controller.handle_command(&cmd_str, &progress).await {
                             CommandAction::Exit => {
@@ -1652,7 +1652,7 @@ async fn controller_task<
                                 let context = controller.build_spawn_context();
                                 let tx = progress_tx.clone();
                                 tasks.spawn(async move {
-                                    let progress = TuiProgressBridge::new(tx, Some(iid));
+                                    let progress = TuiProgressBridge::for_interaction(tx, iid);
                                     context.execute(None, form, clean_query, full_query, &progress).await
                                 });
                             }
@@ -1678,7 +1678,7 @@ async fn controller_task<
                                 let tx = progress_tx.clone();
 
                                 tasks.spawn(async move {
-                                    let progress = TuiProgressBridge::new(tx, Some(child_id));
+                                    let progress = TuiProgressBridge::for_interaction(tx, child_id);
                                     context.execute(Some(child_id), form, clean_query, full_query, &progress).await
                                 });
                             }

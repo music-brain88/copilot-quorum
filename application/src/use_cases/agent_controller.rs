@@ -719,7 +719,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             ask_use_case: self.ask_use_case.clone(),
             config: self.config.clone(),
             tx: self.tx.clone(),
-            moderator: self.moderator.clone(),
             verbose: self.verbose,
         }
     }
@@ -829,13 +828,12 @@ pub struct SpawnContext<
     T: ToolExecutorPort + 'static,
     C: ContextLoaderPort + 'static,
 > {
-    pub gateway: Arc<G>,
-    pub agent_use_case: RunAgentUseCase<G, T, C>,
-    pub ask_use_case: RunAskUseCase<G, T>,
-    pub config: QuorumConfig,
-    pub tx: mpsc::UnboundedSender<UiEvent>,
-    pub moderator: Option<Model>,
-    pub verbose: bool,
+    pub(crate) gateway: Arc<G>,
+    pub(crate) agent_use_case: RunAgentUseCase<G, T, C>,
+    pub(crate) ask_use_case: RunAskUseCase<G, T>,
+    pub(crate) config: QuorumConfig,
+    pub(crate) tx: mpsc::UnboundedSender<UiEvent>,
+    pub(crate) verbose: bool,
 }
 
 /// Completion result of a task (spawn or inline execution)
