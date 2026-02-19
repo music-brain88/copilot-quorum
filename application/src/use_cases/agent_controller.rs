@@ -719,7 +719,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             ask_use_case: self.ask_use_case.clone(),
             config: self.config.clone(),
             tx: self.tx.clone(),
-            moderator: self.moderator.clone(),
             verbose: self.verbose,
         }
     }
@@ -834,7 +833,6 @@ pub struct SpawnContext<
     pub(crate) ask_use_case: RunAskUseCase<G, T>,
     pub(crate) config: QuorumConfig,
     pub(crate) tx: mpsc::UnboundedSender<UiEvent>,
-    pub(crate) moderator: Option<Model>,
     pub(crate) verbose: bool,
 }
 
