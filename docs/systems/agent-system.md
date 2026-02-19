@@ -347,9 +347,14 @@ pub struct SessionMode {
 
 // domain/src/agent/model_config.rs — ロールベースモデル設定
 pub struct ModelConfig {
-    pub exploration: Model,   // コンテキスト収集用（デフォルト: Haiku）
-    pub decision: Model,      // 計画作成・高リスクツール判断用（デフォルト: Sonnet）
-    pub review: Vec<Model>,   // Quorum レビュー投票用
+    // Agent Roles
+    pub exploration: Model,       // コンテキスト収集用（デフォルト: Haiku）
+    pub decision: Model,          // 計画作成・高リスクツール判断用（デフォルト: Sonnet）
+    pub review: Vec<Model>,       // Quorum レビュー投票用
+    // Interaction Roles
+    pub participants: Vec<Model>, // Quorum Discussion 参加者
+    pub moderator: Model,         // Quorum Synthesis 担当
+    pub ask: Model,               // Ask (Q&A) 応答用
 }
 
 // domain/src/agent/agent_policy.rs — ドメインポリシー
@@ -640,4 +645,4 @@ pub enum HumanDecision {
 - [TUI](../guides/tui.md) - エージェントの TUI インターフェース
 - [CLI & Configuration](../guides/cli-and-configuration.md) - エージェントの設定と REPL コマンド
 
-<!-- LLM Context: Agent System は Solo/Ensemble モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum) → Execution Confirm → Task Execution → Final Review のフロー。PhaseScope (Full/Fast/PlanOnly) でフェーズ範囲を制御。高リスクツールは Action Review (QuorumActionReviewer) が必須。HiL は 2 ゲート: Plan Review HiL (max_plan_revisions 到達時) と Execution Confirmation (PhaseScope::Full のみ)。run_agent/ は 5 モジュール分割: mod.rs (メインフロー), types.rs, hil.rs, planning.rs, review.rs。ToolExecution ステートマシン (Pending→Running→Completed/Error) が domain/src/agent/tool_execution.rs。UiEvent 出力ポートが application/src/ports/ui_event.rs で Application→Presentation の構造化イベント伝達。AgentProgressNotifier (application/src/ports/agent_progress.rs) は 6 カテゴリ・26+ コールバック。ResourceReference (domain/src/context/reference.rs) と GitHubReferenceResolver (infrastructure/src/reference/github.rs) で GitHub Issue/PR 自動解決。InteractionForm (Agent/Ask/Discuss) が domain/src/interaction/mod.rs。設定は 4 型分割: SessionMode, ModelConfig, AgentPolicy, ExecutionParams。QuorumConfig (application) が 4 型コンテナ。組み合わせバリデーション: SessionMode::validate_combination()。 -->
+<!-- LLM Context: Agent System は Solo/Ensemble モードでの自律タスク実行。Context Gathering → Planning → Plan Review (Quorum) → Execution Confirm → Task Execution → Final Review のフロー。PhaseScope (Full/Fast/PlanOnly) でフェーズ範囲を制御。高リスクツールは Action Review (QuorumActionReviewer) が必須。HiL は 2 ゲート: Plan Review HiL (max_plan_revisions 到達時) と Execution Confirmation (PhaseScope::Full のみ)。run_agent/ は 5 モジュール分割: mod.rs (メインフロー), types.rs, hil.rs, planning.rs, review.rs。ToolExecution ステートマシン (Pending→Running→Completed/Error) が domain/src/agent/tool_execution.rs。UiEvent 出力ポートが application/src/ports/ui_event.rs で Application→Presentation の構造化イベント伝達。AgentProgressNotifier (application/src/ports/agent_progress.rs) は 6 カテゴリ・26+ コールバック。ResourceReference (domain/src/context/reference.rs) と GitHubReferenceResolver (infrastructure/src/reference/github.rs) で GitHub Issue/PR 自動解決。InteractionForm (Agent/Ask/Discuss) が domain/src/interaction/mod.rs。設定は 4 型分割: SessionMode, ModelConfig (Agent: exploration/decision/review + Interaction: participants/moderator/ask), AgentPolicy, ExecutionParams。QuorumConfig (application) が 4 型コンテナ。組み合わせバリデーション: SessionMode::validate_combination()。 -->

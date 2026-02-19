@@ -4,7 +4,7 @@
 //!
 //! Unlike [`RunAgentUseCase`](super::run_agent::RunAgentUseCase), Ask has no
 //! planning phase, no HiL review, and only uses [`RiskLevel::Low`] tools.
-//! The `exploration` model handles everything.
+//! The `ask` model handles everything.
 
 use crate::config::ExecutionParams;
 use crate::ports::agent_progress::AgentProgressNotifier;
@@ -33,13 +33,13 @@ pub enum RunAskError {
 
 /// Input for the [`RunAskUseCase`].
 ///
-/// Ask uses only the `exploration` model from [`ModelConfig`] and limits
+/// Ask uses only the `ask` model from [`ModelConfig`] and limits
 /// tool access to [`RiskLevel::Low`] operations.
 #[derive(Debug, Clone)]
 pub struct RunAskInput {
     /// The user's question.
     pub query: String,
-    /// Model configuration — only `exploration` is used.
+    /// Model configuration — only `ask` is used.
     pub models: ModelConfig,
     /// Execution parameters — `max_tool_turns` limits the tool loop.
     pub execution: ExecutionParams,
@@ -116,11 +116,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
             truncate_str(&input.query, 100)
         );
 
-        // Create session with the exploration model
-        let session = self
-            .gateway
-            .create_session(&input.models.exploration)
-            .await?;
+        // Create session with the ask model
+        let session = self.gateway.create_session(&input.models.ask).await?;
 
         // Build low-risk tools only
         let tools = self
@@ -129,7 +126,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
 
         debug!(
             "Ask: using model {}, {} low-risk tools available",
-            input.models.exploration,
+            input.models.ask,
             tools.len()
         );
 
@@ -241,7 +238,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
         self.conversation_logger.log(ConversationEvent::new(
             "ask_response",
             serde_json::json!({
-                "model": input.models.exploration.to_string(),
+                "model": input.models.ask.to_string(),
                 "bytes": answer.len(),
                 "text": answer,
             }),

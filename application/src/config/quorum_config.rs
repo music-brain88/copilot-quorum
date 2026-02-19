@@ -133,7 +133,7 @@ impl QuorumConfig {
 
     /// Build a [`RunAskInput`] for a lightweight Q&A interaction.
     ///
-    /// Uses `exploration` model and execution params (for `max_tool_turns`).
+    /// Uses `ask` model and execution params (for `max_tool_turns`).
     /// Ask is always Solo — no `SessionMode` or `AgentPolicy` needed.
     pub fn to_ask_input(&self, query: impl Into<String>) -> RunAskInput {
         RunAskInput::new(query, self.models.clone(), self.execution.clone())
@@ -141,14 +141,10 @@ impl QuorumConfig {
 
     /// Build a [`RunQuorumInput`] for an ad-hoc quorum discussion.
     ///
-    /// Uses review models as participants, with the first review model as moderator.
+    /// Uses `participants` models for discussion and `moderator` for synthesis.
     pub fn to_quorum_input(&self, question: impl Into<String>) -> RunQuorumInput {
         let question_str: String = question.into();
-        let mut input = RunQuorumInput::new(question_str, self.models.review.clone());
-        if let Some(moderator) = self.models.review.first() {
-            input = input.with_moderator(moderator.clone());
-        }
-        input
+        RunQuorumInput::new(question_str, self.models.clone())
     }
 }
 
@@ -219,7 +215,11 @@ mod tests {
         let config = QuorumConfig::default();
         let input = config.to_quorum_input("Best approach?");
         assert_eq!(input.question.content(), "Best approach?");
-        assert_eq!(input.models.len(), config.models().review.len());
+        assert_eq!(
+            input.models.participants.len(),
+            config.models().participants.len()
+        );
+        assert_eq!(input.models.moderator, config.models().moderator);
     }
 
     #[test]

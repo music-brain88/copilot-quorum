@@ -64,6 +64,9 @@ Project-level config: `quorum.toml` (or `~/.config/copilot-quorum/config.toml` f
 exploration = "gpt-5.2-codex"           # Context gathering + low-risk tools
 decision = "claude-sonnet-4.5"          # Planning + high-risk tools
 review = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+#participants = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]  # Quorum Discussion
+#moderator = "claude-opus-4.5"          # Quorum Synthesis
+#ask = "claude-sonnet-4.5"              # Ask (Q&A) interaction
 
 # Quorum consensus rules
 [quorum]
@@ -173,7 +176,7 @@ The agent system extends quorum to autonomous task execution with safety through
 - High-risk (write/command): Requires quorum review before execution
 
 **Key Components**:
-- `domain/agent/`: AgentState, Plan, Task, ModelConfig, AgentPolicy, HilAction
+- `domain/agent/`: AgentState, Plan, Task, ModelConfig (exploration/decision/review + participants/moderator/ask), AgentPolicy, HilAction
 - `domain/orchestration/session_mode.rs`: SessionMode (runtime-mutable: consensus_level, phase_scope, strategy)
 - `domain/tool/`: ToolDefinition, ToolCall (native_id), ToolResult, RiskLevel
 - `domain/session/response.rs`: LlmResponse, ContentBlock, StopReason

@@ -26,6 +26,9 @@ pub enum ConfigValidationError {
 /// exploration = "gpt-5.2-codex"           # Context gathering + low-risk tools
 /// decision = "claude-sonnet-4.5"          # Planning + high-risk tools
 /// review = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+/// participants = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+/// moderator = "claude-opus-4.5"           # Quorum Synthesis
+/// ask = "claude-sonnet-4.5"               # Ask (Q&A) interaction
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -36,6 +39,12 @@ pub struct FileModelsConfig {
     pub decision: Option<String>,
     /// Models for review phases
     pub review: Option<Vec<String>>,
+    /// Models for Quorum Discussion participants
+    pub participants: Option<Vec<String>>,
+    /// Model for Quorum Synthesis (moderator)
+    pub moderator: Option<String>,
+    /// Model for Ask (Q&A) interaction
+    pub ask: Option<String>,
 }
 
 impl FileModelsConfig {
@@ -54,6 +63,23 @@ impl FileModelsConfig {
         self.review
             .as_ref()
             .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
+    }
+
+    /// Parse participants model strings into `Vec<Model>`
+    pub fn parse_participants(&self) -> Option<Vec<Model>> {
+        self.participants
+            .as_ref()
+            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
+    }
+
+    /// Parse moderator model string into Model enum
+    pub fn parse_moderator(&self) -> Option<Model> {
+        self.moderator.as_ref().and_then(|s| s.parse().ok())
+    }
+
+    /// Parse ask model string into Model enum
+    pub fn parse_ask(&self) -> Option<Model> {
+        self.ask.as_ref().and_then(|s| s.parse().ok())
     }
 }
 
@@ -643,6 +669,15 @@ impl FileConfig {
             }
         }
 
+        // Check for empty model names in participants list
+        if let Some(ref models) = self.models.participants {
+            for model in models {
+                if model.trim().is_empty() {
+                    return Err(ConfigValidationError::EmptyModelName);
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -799,6 +834,9 @@ args = ["-y", "@anthropic/mcp-server-filesystem"]
         assert!(config.exploration.is_none());
         assert!(config.decision.is_none());
         assert!(config.review.is_none());
+        assert!(config.participants.is_none());
+        assert!(config.moderator.is_none());
+        assert!(config.ask.is_none());
     }
 
     #[test]
@@ -828,6 +866,39 @@ decision = "claude-opus-4.5"
         assert!(config.models.exploration.is_none());
         assert_eq!(config.models.parse_decision(), Some(Model::ClaudeOpus45));
         assert!(config.models.review.is_none());
+        assert!(config.models.participants.is_none());
+        assert!(config.models.moderator.is_none());
+        assert!(config.models.ask.is_none());
+    }
+
+    #[test]
+    fn test_models_config_interaction_roles() {
+        let toml_str = r#"
+[models]
+participants = ["claude-opus-4.5", "gpt-5.2-codex"]
+moderator = "claude-opus-4.5"
+ask = "claude-sonnet-4.5"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let participants = config.models.parse_participants().unwrap();
+        assert_eq!(participants.len(), 2);
+        assert!(participants.contains(&Model::ClaudeOpus45));
+        assert!(participants.contains(&Model::Gpt52Codex));
+        assert_eq!(config.models.parse_moderator(), Some(Model::ClaudeOpus45));
+        assert_eq!(config.models.parse_ask(), Some(Model::ClaudeSonnet45));
+    }
+
+    #[test]
+    fn test_validate_empty_participants_name() {
+        let toml_str = r#"
+[models]
+participants = ["gpt-5.2-codex", ""]
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigValidationError::EmptyModelName)
+        ));
     }
 
     #[test]
