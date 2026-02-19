@@ -77,7 +77,7 @@ graph TD
 ### From Source / ソースからビルド
 
 ```bash
-git clone https://github.com/archie/copilot-quorum
+git clone https://github.com/music-brain88/copilot-quorum
 cd copilot-quorum
 cargo install --path cli
 ```
