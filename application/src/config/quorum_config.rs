@@ -215,7 +215,8 @@ mod tests {
         let config = QuorumConfig::default();
         let input = config.to_quorum_input("Best approach?");
         assert_eq!(input.question.content(), "Best approach?");
-        assert_eq!(input.models.review.len(), config.models().review.len());
+        assert_eq!(input.models.participants.len(), config.models().participants.len());
+        assert_eq!(input.models.moderator, config.models().moderator);
     }
 
     #[test]
