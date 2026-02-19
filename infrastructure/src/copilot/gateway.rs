@@ -18,6 +18,7 @@
 use crate::copilot::router::MessageRouter;
 use crate::copilot::session::CopilotSession;
 use async_trait::async_trait;
+use quorum_application::ConversationLogger;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use quorum_domain::Model;
 use std::sync::Arc;
@@ -42,6 +43,23 @@ impl CopilotLlmGateway {
             .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
 
         info!("CopilotLlmGateway initialized");
+
+        Ok(Self { router })
+    }
+
+    /// Create a new gateway with a conversation logger for recording internal tool executions.
+    ///
+    /// Like [`new`](Self::new), but passes the logger through to the
+    /// [`MessageRouter`] so that Copilot CLI internal tool events
+    /// (e.g. `apply_patch`) are recorded in the conversation JSONL.
+    pub async fn new_with_logger(
+        logger: Arc<dyn ConversationLogger>,
+    ) -> Result<Self, GatewayError> {
+        let router = MessageRouter::spawn_with_logger(logger)
+            .await
+            .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+
+        info!("CopilotLlmGateway initialized (with conversation logger)");
 
         Ok(Self { router })
     }

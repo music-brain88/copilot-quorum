@@ -485,6 +485,8 @@ impl LlmSession for CopilotSession {
         // Wrap in { "result": ... } envelope per official Copilot SDK wire format
         let response = JsonRpcResponseOut::new(request_id, tool_result.into_rpc_value());
 
+        let response_json = serde_json::to_string(&response).unwrap_or_default();
+
         self.router
             .send_response(&response)
             .await
@@ -494,10 +496,14 @@ impl LlmSession for CopilotSession {
             "Tool result sent for request_id={}: tool={}, type={}, output_bytes={}",
             request_id, first_tool_name, result_type, first_output_bytes,
         );
+        debug!(
+            "Tool result JSON for request_id={} (truncated): {}",
+            request_id,
+            truncate_str(&response_json, 512),
+        );
         trace!(
             "Tool result payload for request_id={}: {}",
-            request_id,
-            serde_json::to_string(&response).unwrap_or_default(),
+            request_id, response_json,
         );
 
         // Read the next streaming response from the tool session channel

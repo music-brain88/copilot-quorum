@@ -255,7 +255,7 @@ async fn main() -> Result<()> {
 
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
-    let gateway = Arc::new(CopilotLlmGateway::new().await?);
+    let gateway = Arc::new(CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?);
 
     // Create tool executor
     let working_dir = cli
