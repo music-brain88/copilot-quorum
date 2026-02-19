@@ -10,43 +10,47 @@ template: |
   **Full Changelog:** https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
 
 categories:
-  - title: 'Features'
+  - title: '💥 Breaking Changes'
+    labels:
+      - 'breaking'
+      - 'major'
+  - title: '🚀 Features'
     labels:
       - 'feature'
       - 'enhancement'
     collapse-after: 10
-  - title: 'Bug Fixes'
+  - title: '🐛 Bug Fixes'
     labels:
       - 'fix'
       - 'bugfix'
       - 'bug'
     collapse-after: 10
-  - title: 'Performance'
+  - title: '⚡ Performance'
     labels:
       - 'performance'
       - 'perf'
     collapse-after: 5
-  - title: 'Refactoring'
+  - title: '♻️ Refactoring'
     labels:
       - 'refactor'
       - 'refactoring'
     collapse-after: 5
-  - title: 'Documentation'
+  - title: '📖 Documentation'
     labels:
       - 'documentation'
       - 'docs'
     collapse-after: 5
-  - title: 'CI/CD'
+  - title: '🔧 CI/CD'
     labels:
       - 'ci'
       - 'ci/cd'
     collapse-after: 5
-  - title: 'Dependencies'
+  - title: '📦 Dependencies'
     labels:
       - 'dependencies'
       - 'deps'
     collapse-after: 5
-  - title: 'Chores'
+  - title: '🧹 Chores'
     labels:
       - 'chore'
       - 'maintenance'
