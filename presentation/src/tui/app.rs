@@ -717,9 +717,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self.apply_tui_event(state, routed.event);
     }
 
-    /// Apply event to a specific interaction pane.
+    /// Apply event to a specific interaction pane — the single source of truth
+    /// for all TuiEvent → state mapping.
     ///
-    /// Caller must verify that the tab for `id` exists before calling.
+    /// Called directly by [`apply_routed_tui_event`] for targeted events, and
+    /// indirectly by [`apply_tui_event`] for untargeted (active-pane) events.
     fn apply_tui_event_to_interaction(
         &self,
         state: &mut TuiState,
@@ -1099,339 +1101,29 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         }
     }
 
-    /// Apply a TuiEvent (from progress bridge or presenter) to state
+    /// Apply a TuiEvent (from progress bridge or presenter) to state.
+    ///
+    /// Delegates to [`apply_tui_event_to_interaction`] when the active pane has an
+    /// interaction id. When no interaction is active, only global events are handled.
     fn apply_tui_event(&self, state: &mut TuiState, event: TuiEvent) {
+        if let Some(id) = Self::active_interaction_id(state) {
+            self.apply_tui_event_to_interaction(state, id, event);
+            return;
+        }
+        // No active interaction — handle global events only
         match event {
-            TuiEvent::StreamChunk(chunk) => {
-                let pane = state.tabs.active_pane_mut();
-                pane.streaming_text.push_str(&chunk);
-                if pane.auto_scroll {
-                    pane.scroll_offset = 0;
-                }
-            }
-            TuiEvent::StreamEnd => {
-                state.finalize_stream();
-            }
-            TuiEvent::PhaseChange { phase, name } => {
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                progress.current_phase = Some(phase);
-                progress.phase_name = name;
-                progress.current_tool = None;
-            }
-            TuiEvent::TaskStart {
-                description,
-                index,
-                total,
-            } => {
-                // Update progress pane
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                progress.task_progress = Some(TaskProgress {
-                    current_index: index,
-                    total,
-                    description: description.clone(),
-                    completed_tasks: progress
-                        .task_progress
-                        .as_ref()
-                        .map(|tp| tp.completed_tasks.clone())
-                        .unwrap_or_default(),
-                    active_tool_executions: Vec::new(),
-                });
-                // Add conversation message
-                state.push_message(DisplayMessage::system(format!(
-                    "Executing Task {}/{}: {}",
-                    index, total, description
-                )));
-            }
-            TuiEvent::TaskComplete {
-                description,
-                success,
-                index,
-                total: _,
-                output,
-            } => {
-                // Update progress pane — move active tool executions into the completed summary
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                let (active_execs, active_duration) =
-                    if let Some(ref mut tp) = progress.task_progress {
-                        (std::mem::take(&mut tp.active_tool_executions), None)
-                    } else {
-                        (Vec::new(), None)
-                    };
-                if let Some(ref mut tp) = progress.task_progress {
-                    tp.completed_tasks.push(TaskSummary {
-                        index,
-                        description: description.clone(),
-                        success,
-                        output: output.clone(),
-                        duration_ms: active_duration,
-                        tool_executions: active_execs,
-                    });
-                }
-                // Build tool execution summary lines for conversation message
-                let tool_exec_lines: String =
-                    if let Some(ref tp) = state.tabs.active_pane().progress.task_progress {
-                        tp.completed_tasks
-                            .last()
-                            .map(|summary| {
-                                summary
-                                    .tool_executions
-                                    .iter()
-                                    .map(|exec| {
-                                        let (icon, dur) = match &exec.state {
-                                            ToolExecutionDisplayStatus::Completed { .. } => {
-                                                let d = exec
-                                                    .duration_ms
-                                                    .map(|ms| {
-                                                        if ms < 1000 {
-                                                            format!("{}ms", ms)
-                                                        } else {
-                                                            format!("{:.1}s", ms as f64 / 1000.0)
-                                                        }
-                                                    })
-                                                    .unwrap_or_default();
-                                                ("✓", d)
-                                            }
-                                            ToolExecutionDisplayStatus::Error { message } => {
-                                                ("✗", truncate(message, 40))
-                                            }
-                                            _ => ("…", String::new()),
-                                        };
-                                        format!("  {} {} ({})", icon, exec.tool_name, dur)
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            })
-                            .unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
-
-                // Add conversation message with extracted output
-                let status = if success { "✓" } else { "✗" };
-                let mut msg = if let Some(ref out) = output {
-                    let extracted = extract_response_text(out);
-                    if extracted.is_empty() {
-                        format!("Task {} {} {}", index, status, description)
-                    } else {
-                        format!(
-                            "Task {} {} {}\n  Output: {}",
-                            index, status, description, extracted
-                        )
-                    }
-                } else {
-                    format!("Task {} {} {}", index, status, description)
-                };
-                if !tool_exec_lines.is_empty() {
-                    msg.push('\n');
-                    msg.push_str(&tool_exec_lines);
-                }
-                state.push_message(DisplayMessage::system(msg));
-            }
-            TuiEvent::ToolCall { tool_name, args: _ } => {
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                progress.current_tool = Some(tool_name.clone());
-                progress.tool_log.push(ToolLogEntry {
-                    tool_name,
-                    success: None,
-                });
-            }
-            TuiEvent::ToolResult { tool_name, success } => {
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                progress.current_tool = None;
-                if let Some(entry) = progress
-                    .tool_log
-                    .iter_mut()
-                    .rev()
-                    .find(|e| e.tool_name == tool_name && e.success.is_none())
-                {
-                    entry.success = Some(success);
-                }
-            }
-            TuiEvent::ToolError { tool_name, message } => {
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                progress.current_tool = None;
-                if let Some(entry) = progress
-                    .tool_log
-                    .iter_mut()
-                    .rev()
-                    .find(|e| e.tool_name == tool_name && e.success.is_none())
-                {
-                    entry.success = Some(false);
-                }
-                state.set_flash(format!("Tool error: {} - {}", tool_name, message));
-            }
-            TuiEvent::InteractionCompleted {
-                parent_id,
-                result_text,
-            } => {
-                if let Some(pid) = parent_id {
-                    state
-                        .tabs
-                        .push_message_to_interaction(pid, DisplayMessage::system(result_text));
-                }
-                state.set_flash("Child interaction completed");
-            }
-            TuiEvent::QuorumStart { phase, model_count } => {
-                state.tabs.active_pane_mut().progress.quorum_status = Some(QuorumStatus {
-                    phase,
-                    total: model_count,
-                    completed: 0,
-                    approved: 0,
-                });
-            }
-            TuiEvent::QuorumModelVote { model: _, approved } => {
-                if let Some(ref mut qs) = state.tabs.active_pane_mut().progress.quorum_status {
-                    qs.completed += 1;
-                    if approved {
-                        qs.approved += 1;
-                    }
-                }
-            }
-            TuiEvent::QuorumComplete {
-                phase,
-                approved,
-                feedback: _,
-            } => {
-                let status = if approved { "APPROVED" } else { "REJECTED" };
-                state.set_flash(format!("{}: {}", phase, status));
-                state.tabs.active_pane_mut().progress.quorum_status = None;
-            }
-            TuiEvent::PlanRevision { revision, feedback } => {
-                state.push_message(DisplayMessage::system(format!(
-                    "Plan revision #{}: {}",
-                    revision, feedback
-                )));
-            }
-            TuiEvent::EnsembleStart(count) => {
-                state.tabs.active_pane_mut().progress.ensemble_progress = Some(EnsembleProgress {
-                    total_models: count,
-                    plans_generated: 0,
-                    models_completed: Vec::new(),
-                    models_failed: Vec::new(),
-                    voting_started: false,
-                    plan_count: None,
-                    selected: None,
-                });
-            }
-            TuiEvent::EnsemblePlanGenerated(model) => {
-                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
-                    ep.plans_generated += 1;
-                    ep.models_completed.push(model);
-                }
-            }
-            TuiEvent::EnsembleVotingStart(plan_count) => {
-                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
-                    ep.voting_started = true;
-                    ep.plan_count = Some(plan_count);
-                }
-            }
-            TuiEvent::EnsembleModelFailed { model, error } => {
-                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
-                    ep.models_failed.push((model, error));
-                }
-            }
-            TuiEvent::EnsembleComplete {
-                selected_model,
-                score,
-            } => {
-                if let Some(ref mut ep) = state.tabs.active_pane_mut().progress.ensemble_progress {
-                    ep.selected = Some((selected_model.clone(), score));
-                }
-                state.push_message(DisplayMessage::system(format!(
-                    "Selected plan from {} (score: {:.1}/10)",
-                    selected_model, score
-                )));
-            }
-            TuiEvent::EnsembleFallback(reason) => {
-                state.push_message(DisplayMessage::system(format!(
-                    "Ensemble failed, solo fallback: {}",
-                    reason
-                )));
-                state.tabs.active_pane_mut().progress.ensemble_progress = None;
-            }
-            TuiEvent::AgentStarting => {
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                progress.is_running = true;
-                progress.tool_log.clear();
-                progress.quorum_status = None;
-                progress.task_progress = None;
-                progress.ensemble_progress = None;
-            }
-            TuiEvent::AgentResult {
-                success,
-                summary: _,
-            } => {
-                let progress = &mut state.tabs.active_pane_mut().progress;
-                progress.is_running = false;
-                progress.current_phase = None;
-                progress.current_tool = None;
-                // task_progress / ensemble_progress は保持 — 次の AgentStarting でクリア
-                if success {
-                    state.set_flash("Agent completed successfully");
-                } else {
-                    state.set_flash("Agent completed with issues");
-                }
-            }
-            TuiEvent::AgentError(msg) => {
-                state.tabs.active_pane_mut().progress.is_running = false;
-                state.set_flash(msg);
-            }
-            TuiEvent::Flash(msg) => {
-                state.set_flash(msg);
-            }
-            TuiEvent::HistoryCleared => {
-                // Already handled by presenter
-            }
+            TuiEvent::Flash(msg) => state.set_flash(msg),
             TuiEvent::Exit => {
                 state.should_quit = true;
             }
-            TuiEvent::ToolExecutionUpdate {
-                task_index: _,
-                execution_id,
-                tool_name,
-                state: exec_state,
-                duration_ms,
-            } => {
-                use super::event::ToolExecutionDisplayState;
-
-                if let Some(ref mut tp) = state.tabs.active_pane_mut().progress.task_progress {
-                    // Convert event state to display status
-                    let display_status = match exec_state {
-                        ToolExecutionDisplayState::Pending => ToolExecutionDisplayStatus::Pending,
-                        ToolExecutionDisplayState::Running => ToolExecutionDisplayStatus::Running,
-                        ToolExecutionDisplayState::Completed { preview } => {
-                            ToolExecutionDisplayStatus::Completed { preview }
-                        }
-                        ToolExecutionDisplayState::Error { message } => {
-                            ToolExecutionDisplayStatus::Error { message }
-                        }
-                    };
-
-                    // Find existing entry or create new one
-                    if let Some(existing) = tp
-                        .active_tool_executions
-                        .iter_mut()
-                        .find(|e| e.execution_id == execution_id)
-                    {
-                        existing.state = display_status;
-                        existing.duration_ms = duration_ms;
-                    } else {
-                        tp.active_tool_executions.push(ToolExecutionDisplay {
-                            execution_id,
-                            tool_name,
-                            state: display_status,
-                            duration_ms,
-                        });
-                    }
-                }
-            }
-            // Config/mode events handled by presenter already
+            TuiEvent::HistoryCleared => {}
             TuiEvent::Welcome { .. }
             | TuiEvent::ConfigDisplay(_)
             | TuiEvent::ModeChanged { .. }
             | TuiEvent::ScopeChanged(_)
             | TuiEvent::StrategyChanged(_)
             | TuiEvent::CommandError(_) => {}
+            _ => { /* dropped — no active interaction to target */ }
         }
     }
 
