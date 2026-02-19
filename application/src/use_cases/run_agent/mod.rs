@@ -37,7 +37,8 @@ use crate::use_cases::gather_context::GatherContextUseCase;
 use crate::use_cases::shared::check_cancelled;
 use quorum_domain::core::string::truncate;
 use quorum_domain::{
-    AgentPhase, AgentPromptTemplate, HumanDecision, ModelVote, ReviewRound, StreamEvent, Thought,
+    AgentPhase, AgentPromptTemplate, AgentState, HumanDecision, ModelVote, ReviewRound,
+    StreamEvent, Thought,
 };
 use review::QuorumActionReviewer;
 use std::path::Path;
@@ -162,6 +163,28 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     pub fn with_conversation_logger(mut self, logger: Arc<dyn ConversationLogger>) -> Self {
         self.conversation_logger = logger;
         self
+    }
+
+    /// Log `agent_complete` event to the conversation logger.
+    ///
+    /// Called from the normal completion path and all early-return paths
+    /// so that every agent run produces a JSONL record with the final summary.
+    fn log_agent_complete(&self, state: &AgentState, summary: &str, success: bool) {
+        let (completed, total) = state
+            .plan
+            .as_ref()
+            .map(|p: &quorum_domain::Plan| p.progress())
+            .unwrap_or((0, 0));
+        self.conversation_logger.log(ConversationEvent::new(
+            "agent_complete",
+            serde_json::json!({
+                "total_tasks": total,
+                "completed": completed,
+                "failed": total - completed,
+                "success": success,
+                "summary": summary,
+            }),
+        ));
     }
 
     /// Send a prompt to LLM with cancellation support and streaming.
@@ -380,6 +403,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             "No plan needed — ensemble text responses synthesized",
                         ));
                         state.complete();
+                        self.log_agent_complete(&state, &text, true);
                         return Ok(RunAgentOutput {
                             summary: text,
                             success: true,
@@ -430,6 +454,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     // LLM determined no plan is needed — return text response directly
                     state.add_thought(Thought::observation("No plan needed for this request"));
                     state.complete();
+                    self.log_agent_complete(&state, &text, true);
                     return Ok(RunAgentOutput {
                         summary: text,
                         success: true,
@@ -437,9 +462,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     });
                 }
                 Err(e) => {
+                    let summary = format!("Agent failed during planning: {}", e);
                     state.fail(format!("Planning failed: {}", e));
+                    self.log_agent_complete(&state, &summary, false);
                     return Ok(RunAgentOutput {
-                        summary: format!("Agent failed during planning: {}", e),
+                        summary,
                         success: false,
                         state,
                     });
@@ -540,12 +567,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
             // Check iteration limit before retrying
             if !state.increment_iteration() {
+                let summary = format!(
+                    "Plan rejected after {} attempts. Last feedback: {}",
+                    state.iteration_count, feedback
+                );
                 state.fail("Max plan retries exceeded");
+                self.log_agent_complete(&state, &summary, false);
                 return Ok(RunAgentOutput {
-                    summary: format!(
-                        "Plan rejected after {} attempts. Last feedback: {}",
-                        state.iteration_count, feedback
-                    ),
+                    summary,
                     success: false,
                     state,
                 });
@@ -574,9 +603,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 .map(|p| p.objective.clone())
                 .unwrap_or_default();
             state.complete();
+            let summary = format!("Plan created (plan-only mode): {}", plan_summary);
             info!("PlanOnly scope: skipping execution, returning plan");
+            self.log_agent_complete(&state, &summary, true);
             return Ok(RunAgentOutput {
-                summary: format!("Plan created (plan-only mode): {}", plan_summary),
+                summary,
                 success: true,
                 state,
             });
@@ -595,9 +626,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     // Reject or Edit — stop execution gracefully
                     info!("Execution confirmation: rejected, stopping");
                     state.complete();
+                    let summary = "Plan approved but not executed (user declined execution)";
+                    self.log_agent_complete(&state, summary, true);
                     return Ok(RunAgentOutput {
-                        summary: "Plan approved but not executed (user declined execution)"
-                            .to_string(),
+                        summary: summary.to_string(),
                         success: true,
                         state,
                     });
@@ -631,9 +663,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         let summary = match execution_result {
             Ok(summary) => summary,
             Err(e) => {
+                let summary = format!("Agent failed during execution: {}", e);
                 state.fail(e.to_string());
+                self.log_agent_complete(&state, &summary, false);
                 return Ok(RunAgentOutput {
-                    summary: format!("Agent failed during execution: {}", e),
+                    summary,
                     success: false,
                     state,
                 });
@@ -669,15 +703,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         state.complete();
 
-        let (completed, total) = state.plan.as_ref().map(|p| p.progress()).unwrap_or((0, 0));
-        self.conversation_logger.log(ConversationEvent::new(
-            "agent_complete",
-            serde_json::json!({
-                "total_tasks": total,
-                "completed": completed,
-                "failed": total - completed,
-            }),
-        ));
+        self.log_agent_complete(&state, &summary, true);
 
         Ok(RunAgentOutput {
             summary,
