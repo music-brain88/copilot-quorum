@@ -159,10 +159,7 @@ impl TaskResultBuffer {
 
     fn format_entry(&self, entry: &TaskResultEntry) -> String {
         let truncation_note = if entry.is_truncated {
-            format!(
-                " [truncated from {} bytes]",
-                entry.original_bytes
-            )
+            format!(" [truncated from {} bytes]", entry.original_bytes)
         } else {
             String::new()
         };

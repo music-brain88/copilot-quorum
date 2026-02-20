@@ -170,7 +170,12 @@ mod tests {
         // Should have more H's than T's (60/40 split)
         let h_count = result.chars().filter(|&c| c == 'H').count();
         let t_count = result.chars().filter(|&c| c == 'T').count();
-        assert!(h_count > t_count, "Head ({}) should be larger than tail ({})", h_count, t_count);
+        assert!(
+            h_count > t_count,
+            "Head ({}) should be larger than tail ({})",
+            h_count,
+            t_count
+        );
     }
 
     // ==================== find_char_boundary_forward tests ====================

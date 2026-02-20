@@ -143,9 +143,7 @@ impl ContextBudget {
             ));
         }
         if self.recent_full_count < 1 {
-            issues.push(
-                "context_budget: recent_full_count must be >= 1".to_string(),
-            );
+            issues.push("context_budget: recent_full_count must be >= 1".to_string());
         }
         issues
     }
