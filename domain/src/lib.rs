@@ -41,7 +41,7 @@ pub use agent::{
     validation::{ConfigIssue, ConfigIssueCode, Severity},
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
-pub use config::OutputFormat;
+pub use config::{ConfigKeyInfo, Mutability, OutputFormat, known_keys, lookup_key};
 pub use context::{
     ContextMode, KnownContextFile, LoadedContextFile, ProjectContext, ResourceReference,
     extract_references,

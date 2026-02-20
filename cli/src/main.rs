@@ -205,9 +205,19 @@ async fn main() -> Result<()> {
         })
     };
 
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        bail!("Invalid configuration: {}", e);
+    // Validate configuration (unified: file-level parse + enum + dead section checks)
+    let config_issues = config.validate();
+    for issue in &config_issues {
+        match issue.severity {
+            quorum_domain::Severity::Warning => eprintln!("Warning: {}", issue.message),
+            quorum_domain::Severity::Error => eprintln!("Error: {}", issue.message),
+        }
+    }
+    if config_issues
+        .iter()
+        .any(|i| i.severity == quorum_domain::Severity::Error)
+    {
+        bail!("Invalid configuration");
     }
 
     // Determine TUI mode before initializing logging so we can suppress console output
@@ -288,24 +298,24 @@ async fn main() -> Result<()> {
 
     // === Build QuorumConfig from split types ===
 
-    // Build ModelConfig
+    // Build ModelConfig (issues already collected by config.validate() above)
     let mut models = ModelConfig::default();
-    if let Some(model) = config.models.parse_exploration() {
+    if let Some(model) = config.models.parse_exploration().0 {
         models = models.with_exploration(model);
     }
-    if let Some(model) = config.models.parse_decision() {
+    if let Some(model) = config.models.parse_decision().0 {
         models = models.with_decision(model);
     }
-    if let Some(review) = config.models.parse_review() {
+    if let Some(review) = config.models.parse_review().0 {
         models = models.with_review(review);
     }
-    if let Some(participants) = config.models.parse_participants() {
+    if let Some(participants) = config.models.parse_participants().0 {
         models = models.with_participants(participants);
     }
-    if let Some(moderator) = config.models.parse_moderator() {
+    if let Some(moderator) = config.models.parse_moderator().0 {
         models = models.with_moderator(moderator);
     }
-    if let Some(ask) = config.models.parse_ask() {
+    if let Some(ask) = config.models.parse_ask().0 {
         models = models.with_ask(ask);
     }
 
@@ -321,7 +331,7 @@ async fn main() -> Result<()> {
     // Build AgentPolicy
     let mut policy = AgentPolicy::default()
         .with_max_plan_revisions(config.agent.max_plan_revisions)
-        .with_hil_mode(config.agent.parse_hil_mode());
+        .with_hil_mode(config.agent.parse_hil_mode().0);
 
     // Apply --no-quorum flag
     if cli.no_quorum {
@@ -329,10 +339,18 @@ async fn main() -> Result<()> {
         policy = policy.with_require_plan_review(false);
     }
 
-    // Build SessionMode
+    // Build SessionMode (strategy is also parsed and wired here)
+    let (strategy_name, _) = config.agent.parse_strategy();
+    let strategy = match strategy_name {
+        "debate" => {
+            quorum_domain::OrchestrationStrategy::Debate(quorum_domain::DebateConfig::default())
+        }
+        _ => quorum_domain::OrchestrationStrategy::default(),
+    };
     let mut mode = SessionMode::default()
-        .with_consensus_level(config.agent.parse_consensus_level())
-        .with_phase_scope(config.agent.parse_phase_scope());
+        .with_consensus_level(config.agent.parse_consensus_level().0)
+        .with_phase_scope(config.agent.parse_phase_scope().0)
+        .with_strategy(strategy);
 
     // --ensemble flag overrides config file setting
     if cli.ensemble {
