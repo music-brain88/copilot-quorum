@@ -727,26 +727,30 @@ impl Default for FileContextBudgetConfig {
 
 impl FileContextBudgetConfig {
     /// Convert to domain `ContextBudget`, returning validation issues.
+    ///
+    /// If the values violate constraints, falls back to `ContextBudget::default()`
+    /// and returns warnings describing the issues.
     pub fn to_context_budget(&self) -> (ContextBudget, Vec<ConfigIssue>) {
-        let budget = ContextBudget::new(
+        match ContextBudget::try_new(
             self.max_entry_bytes,
             self.max_total_bytes,
             self.recent_full_count,
-        );
-        let validation_errors = budget.validate();
-        let issues: Vec<ConfigIssue> = validation_errors
-            .into_iter()
-            .map(|msg| ConfigIssue {
-                severity: Severity::Warning,
-                code: ConfigIssueCode::InvalidEnumValue {
-                    field: "context_budget".to_string(),
-                    value: String::new(),
-                    valid_values: vec![],
-                },
-                message: msg,
-            })
-            .collect();
-        (budget, issues)
+        ) {
+            Ok(budget) => (budget, vec![]),
+            Err(errors) => {
+                let issues = errors
+                    .into_iter()
+                    .map(|msg| ConfigIssue {
+                        severity: Severity::Warning,
+                        code: ConfigIssueCode::InvalidConstraint {
+                            field: "context_budget".to_string(),
+                        },
+                        message: msg,
+                    })
+                    .collect();
+                (ContextBudget::default(), issues)
+            }
+        }
     }
 }
 
@@ -1445,14 +1449,19 @@ recent_full_count = 2
     }
 
     #[test]
-    fn test_context_budget_config_validation() {
+    fn test_context_budget_config_validation_falls_back_to_default() {
         let config = FileContextBudgetConfig {
             max_entry_bytes: 50_000,
             max_total_bytes: 10_000, // Less than entry — invalid
             recent_full_count: 0,    // Less than 1 — invalid
         };
-        let (_, issues) = config.to_context_budget();
+        let (budget, issues) = config.to_context_budget();
         assert_eq!(issues.len(), 2);
+        assert!(issues
+            .iter()
+            .all(|i| matches!(&i.code, ConfigIssueCode::InvalidConstraint { .. })));
+        // Should fall back to default
+        assert_eq!(budget, ContextBudget::default());
     }
 
     #[test]

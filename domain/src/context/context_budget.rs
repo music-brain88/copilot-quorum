@@ -16,6 +16,21 @@
 //! - **Codex CLI**: 10KiB/256-line hard limit (head+tail)
 //! - **OpenCode**: 2-stage (rule-based pruning → LLM compaction)
 //! - **Claude Code**: `clear_tool_uses` for 84% reduction
+//!
+//! # Future Direction
+//!
+//! `ContextBudget` is the quantitative axis of [`ContextMode`]'s qualitative
+//! projection. The current design keeps them as separate types, but the
+//! natural evolution is to embed the budget into the mode itself:
+//!
+//! ```text
+//! // Today:  ContextMode + ContextBudget (separate)
+//! // Future: ContextMode::Full(ContextBudget) | Projected(budget) | Fresh
+//! ```
+//!
+//! This eliminates the `for_context_mode()` mapping and makes each mode
+//! carry its own default budget, turning the pair into a single domain
+//! value object.
 
 use crate::context::ContextMode;
 use serde::{Deserialize, Serialize};
@@ -36,11 +51,49 @@ pub struct ContextBudget {
 
 impl ContextBudget {
     /// Create a new budget with explicit values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if invariants are violated:
+    /// - `max_total_bytes` must be >= `max_entry_bytes`
+    /// - `recent_full_count` must be >= 1
     pub fn new(max_entry_bytes: usize, max_total_bytes: usize, recent_full_count: usize) -> Self {
+        assert!(
+            max_total_bytes >= max_entry_bytes,
+            "context_budget: max_total_bytes ({}) must be >= max_entry_bytes ({})",
+            max_total_bytes,
+            max_entry_bytes
+        );
+        assert!(
+            recent_full_count >= 1,
+            "context_budget: recent_full_count must be >= 1, got {}",
+            recent_full_count
+        );
         Self {
             max_entry_bytes,
             max_total_bytes,
             recent_full_count,
+        }
+    }
+
+    /// Try to create a budget, returning validation errors instead of panicking.
+    ///
+    /// Use this for user-supplied config values where panicking is undesirable.
+    pub fn try_new(
+        max_entry_bytes: usize,
+        max_total_bytes: usize,
+        recent_full_count: usize,
+    ) -> Result<Self, Vec<String>> {
+        let candidate = Self {
+            max_entry_bytes,
+            max_total_bytes,
+            recent_full_count,
+        };
+        let issues = candidate.validate();
+        if issues.is_empty() {
+            Ok(candidate)
+        } else {
+            Err(issues)
         }
     }
 
@@ -221,19 +274,40 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_total_less_than_entry() {
-        let budget = ContextBudget::new(50_000, 10_000, 3);
-        let issues = budget.validate();
+    #[should_panic(expected = "max_total_bytes")]
+    fn test_new_panics_on_total_less_than_entry() {
+        ContextBudget::new(50_000, 10_000, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "recent_full_count")]
+    fn test_new_panics_on_zero_recent() {
+        ContextBudget::new(20_000, 60_000, 0);
+    }
+
+    #[test]
+    fn test_try_new_total_less_than_entry() {
+        let result = ContextBudget::try_new(50_000, 10_000, 3);
+        assert!(result.is_err());
+        let issues = result.unwrap_err();
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("max_total_bytes"));
     }
 
     #[test]
-    fn test_validate_zero_recent() {
-        let budget = ContextBudget::new(20_000, 60_000, 0);
-        let issues = budget.validate();
+    fn test_try_new_zero_recent() {
+        let result = ContextBudget::try_new(20_000, 60_000, 0);
+        assert!(result.is_err());
+        let issues = result.unwrap_err();
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("recent_full_count"));
+    }
+
+    #[test]
+    fn test_try_new_valid() {
+        let result = ContextBudget::try_new(20_000, 60_000, 3);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), ContextBudget::default());
     }
 
     #[test]

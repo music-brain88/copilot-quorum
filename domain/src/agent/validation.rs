@@ -47,6 +47,9 @@ pub enum ConfigIssueCode {
     DeadSection { section: String },
     /// Attempted to mutate a read-only config key (Phase 2).
     ReadOnlyField { key: String },
+    /// A numeric constraint between config fields is violated
+    /// (e.g. max_total_bytes < max_entry_bytes).
+    InvalidConstraint { field: String },
 }
 
 /// A detected issue in the configuration combination.

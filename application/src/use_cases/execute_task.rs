@@ -132,7 +132,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     .map(ContextBudget::for_context_mode);
 
                 let context_with_feedback = match &action_feedback {
-                    Some(feedback) => result_buffer.render_with_feedback(feedback),
+                    Some(feedback) => {
+                        result_buffer.render_with_feedback(feedback, task_budget.as_ref())
+                    }
                     None => result_buffer.render_with_budget(task_budget.as_ref()),
                 };
 

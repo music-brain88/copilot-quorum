@@ -73,8 +73,15 @@ impl TaskResultBuffer {
     }
 
     /// Render the buffer and append action-retry feedback.
-    pub fn render_with_feedback(&self, feedback: &str) -> String {
-        let base = self.render();
+    ///
+    /// Accepts an optional budget override so that per-task `ContextMode`
+    /// budgets are respected even during action retries.
+    pub fn render_with_feedback(
+        &self,
+        feedback: &str,
+        override_budget: Option<&ContextBudget>,
+    ) -> String {
+        let base = self.render_with_budget(override_budget);
         if base.is_empty() {
             format!(
                 "\n---\n[Previous action was rejected]\nFeedback: {}\nPlease try a different approach.",
@@ -258,7 +265,7 @@ mod tests {
         let mut buf = TaskResultBuffer::new(ContextBudget::default());
         buf.push("1", "some output");
 
-        let rendered = buf.render_with_feedback("Try using a different API");
+        let rendered = buf.render_with_feedback("Try using a different API", None);
         assert!(rendered.contains("some output"));
         assert!(rendered.contains("Previous action was rejected"));
         assert!(rendered.contains("Try using a different API"));
@@ -267,9 +274,25 @@ mod tests {
     #[test]
     fn test_render_with_feedback_empty_buffer() {
         let buf = TaskResultBuffer::new(ContextBudget::default());
-        let rendered = buf.render_with_feedback("feedback");
+        let rendered = buf.render_with_feedback("feedback", None);
         assert!(rendered.contains("Previous action was rejected"));
         assert!(rendered.contains("feedback"));
+    }
+
+    #[test]
+    fn test_render_with_feedback_respects_budget_override() {
+        let mut buf = TaskResultBuffer::new(ContextBudget::new(1000, 5000, 3));
+        buf.push("1", "first");
+        buf.push("2", "second");
+        buf.push("3", "third");
+        buf.push("4", "fourth");
+
+        // Override with recent_full_count=1 — entries 1-3 should be summarized
+        let tight = ContextBudget::new(1000, 5000, 1);
+        let rendered = buf.render_with_feedback("rejected", Some(&tight));
+        assert!(rendered.contains("fourth"));
+        assert!(rendered.contains("Task 3: [result truncated"));
+        assert!(rendered.contains("Previous action was rejected"));
     }
 
     #[test]
