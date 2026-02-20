@@ -1144,6 +1144,7 @@ mod tests {
                 max_tool_retries: 2,
                 working_dir: None,
                 ensemble_session_timeout: None,
+                context_budget: quorum_domain::ContextBudget::default(),
             };
             let mut gateway = ScriptedGateway::new();
 
@@ -1230,6 +1231,7 @@ mod tests {
                 max_tool_retries: 2,
                 working_dir: None,
                 ensemble_session_timeout: None,
+                context_budget: quorum_domain::ContextBudget::default(),
             };
             let mut gateway = ScriptedGateway::new();
 

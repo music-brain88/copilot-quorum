@@ -4,6 +4,7 @@
 //! execution loop in [`RunAgentUseCase`](crate::use_cases::run_agent::RunAgentUseCase).
 //! These are application-layer concerns, not domain policy.
 
+use quorum_domain::ContextBudget;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -31,6 +32,8 @@ pub struct ExecutionParams {
     pub working_dir: Option<String>,
     /// Timeout for each ensemble session's plan generation.
     pub ensemble_session_timeout: Option<Duration>,
+    /// Budget for task result context accumulation.
+    pub context_budget: ContextBudget,
 }
 
 impl Default for ExecutionParams {
@@ -41,6 +44,7 @@ impl Default for ExecutionParams {
             max_tool_retries: 2,
             working_dir: None,
             ensemble_session_timeout: Some(Duration::from_secs(180)),
+            context_budget: ContextBudget::default(),
         }
     }
 }
@@ -72,6 +76,11 @@ impl ExecutionParams {
         self.ensemble_session_timeout = timeout;
         self
     }
+
+    pub fn with_context_budget(mut self, budget: ContextBudget) -> Self {
+        self.context_budget = budget;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +95,7 @@ mod tests {
         assert_eq!(params.max_tool_retries, 2);
         assert!(params.working_dir.is_none());
         assert!(params.ensemble_session_timeout.is_some());
+        assert_eq!(params.context_budget, ContextBudget::default());
     }
 
     #[test]

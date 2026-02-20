@@ -3,6 +3,7 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
+use quorum_domain::ContextBudget;
 use quorum_domain::agent::validation::{ConfigIssue, ConfigIssueCode, Severity};
 use quorum_domain::{ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, QuorumRule};
 use serde::{Deserialize, Serialize};
@@ -688,6 +689,67 @@ impl Default for FileToolsConfig {
     }
 }
 
+// ==================== Context Budget Configuration ====================
+
+/// Context budget configuration from TOML.
+///
+/// Controls how much task result context is retained between task executions.
+///
+/// # Example
+///
+/// ```toml
+/// [context_budget]
+/// max_entry_bytes = 20000
+/// max_total_bytes = 60000
+/// recent_full_count = 3
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileContextBudgetConfig {
+    /// Maximum bytes for a single task result (head+tail truncated).
+    pub max_entry_bytes: usize,
+    /// Maximum bytes for the entire previous_results buffer.
+    pub max_total_bytes: usize,
+    /// Number of recent task results to keep in full (older are summarized).
+    pub recent_full_count: usize,
+}
+
+impl Default for FileContextBudgetConfig {
+    fn default() -> Self {
+        let budget = ContextBudget::default();
+        Self {
+            max_entry_bytes: budget.max_entry_bytes(),
+            max_total_bytes: budget.max_total_bytes(),
+            recent_full_count: budget.recent_full_count(),
+        }
+    }
+}
+
+impl FileContextBudgetConfig {
+    /// Convert to domain `ContextBudget`, returning validation issues.
+    pub fn to_context_budget(&self) -> (ContextBudget, Vec<ConfigIssue>) {
+        let budget = ContextBudget::new(
+            self.max_entry_bytes,
+            self.max_total_bytes,
+            self.recent_full_count,
+        );
+        let validation_errors = budget.validate();
+        let issues: Vec<ConfigIssue> = validation_errors
+            .into_iter()
+            .map(|msg| ConfigIssue {
+                severity: Severity::Warning,
+                code: ConfigIssueCode::InvalidEnumValue {
+                    field: "context_budget".to_string(),
+                    value: String::new(),
+                    valid_values: vec![],
+                },
+                message: msg,
+            })
+            .collect();
+        (budget, issues)
+    }
+}
+
 // ==================== TUI Configuration ====================
 
 /// TUI input configuration
@@ -776,6 +838,8 @@ pub struct FileConfig {
     pub tools: FileToolsConfig,
     /// TUI settings
     pub tui: FileTuiConfig,
+    /// Context budget settings
+    pub context_budget: FileContextBudgetConfig,
 }
 
 impl FileConfig {
@@ -802,7 +866,10 @@ impl FileConfig {
         issues.extend(self.agent.parse_phase_scope().1);
         issues.extend(self.agent.parse_strategy().1);
 
-        // 3. Dead [quorum] section detection
+        // 3. Context budget validation
+        issues.extend(self.context_budget.to_context_budget().1);
+
+        // 4. Dead [quorum] section detection
         if self.quorum != FileQuorumConfig::default() {
             issues.push(ConfigIssue {
                 severity: Severity::Warning,
@@ -1343,5 +1410,55 @@ min_models = 3
                 .iter()
                 .any(|i| matches!(&i.code, ConfigIssueCode::DeadSection { .. }))
         );
+    }
+
+    // ==================== Context Budget Tests ====================
+
+    #[test]
+    fn test_context_budget_config_default() {
+        let config = FileContextBudgetConfig::default();
+        assert_eq!(config.max_entry_bytes, 20_000);
+        assert_eq!(config.max_total_bytes, 60_000);
+        assert_eq!(config.recent_full_count, 3);
+    }
+
+    #[test]
+    fn test_context_budget_config_deserialize() {
+        let toml_str = r#"
+[context_budget]
+max_entry_bytes = 10000
+max_total_bytes = 30000
+recent_full_count = 2
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.context_budget.max_entry_bytes, 10_000);
+        assert_eq!(config.context_budget.max_total_bytes, 30_000);
+        assert_eq!(config.context_budget.recent_full_count, 2);
+    }
+
+    #[test]
+    fn test_context_budget_config_to_domain() {
+        let config = FileContextBudgetConfig::default();
+        let (budget, issues) = config.to_context_budget();
+        assert!(issues.is_empty());
+        assert_eq!(budget.max_entry_bytes(), 20_000);
+    }
+
+    #[test]
+    fn test_context_budget_config_validation() {
+        let config = FileContextBudgetConfig {
+            max_entry_bytes: 50_000,
+            max_total_bytes: 10_000, // Less than entry — invalid
+            recent_full_count: 0,    // Less than 1 — invalid
+        };
+        let (_, issues) = config.to_context_budget();
+        assert_eq!(issues.len(), 2);
+    }
+
+    #[test]
+    fn test_context_budget_missing_uses_defaults() {
+        // Empty config should use defaults
+        let config: FileConfig = toml::from_str("").unwrap();
+        assert_eq!(config.context_budget.max_entry_bytes, 20_000);
     }
 }
