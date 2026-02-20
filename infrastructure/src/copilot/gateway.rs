@@ -110,6 +110,22 @@ impl LlmGateway for CopilotLlmGateway {
         Ok(Box::new(session))
     }
 
+    async fn create_text_only_session(
+        &self,
+        model: &Model,
+        system_prompt: &str,
+    ) -> Result<Box<dyn LlmSession>, GatewayError> {
+        let session = CopilotSession::new_text_only(
+            Arc::clone(&self.router),
+            model.clone(),
+            Some(system_prompt.to_string()),
+        )
+        .await
+        .map_err(|e| GatewayError::SessionError(e.to_string()))?;
+
+        Ok(Box::new(session))
+    }
+
     async fn available_models(&self) -> Result<Vec<Model>, GatewayError> {
         // Copilot CLI doesn't have a model listing endpoint,
         // so we return the known available models

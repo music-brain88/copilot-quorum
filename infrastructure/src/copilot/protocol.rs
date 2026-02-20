@@ -136,6 +136,11 @@ pub struct CreateSessionParams {
     pub system_message: Option<SystemMessageConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<CopilotToolDefinition>>,
+    /// Whitelist of built-in tool names allowed in this session.
+    /// `Some(vec![])` = disable ALL built-in tools.
+    /// `None` = use CLI defaults (all built-in tools available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_tools: Option<Vec<String>>,
 }
 
 /// System message configuration matching the official Copilot SDK format.
@@ -364,6 +369,7 @@ mod tests {
                     "required": ["path"]
                 }),
             }]),
+            available_tools: None,
         };
 
         let json = serde_json::to_value(&params).unwrap();
@@ -386,6 +392,7 @@ mod tests {
             system_prompt: None,
             system_message: None,
             tools: None,
+            available_tools: None,
         };
 
         let json = serde_json::to_value(&params).unwrap();
@@ -402,6 +409,7 @@ mod tests {
                 content: "test prompt".to_string(),
             }),
             tools: None,
+            available_tools: None,
         };
 
         let json = serde_json::to_value(&params).unwrap();
@@ -487,6 +495,35 @@ mod tests {
             result.text_result_for_llm,
             "Action rejected by quorum review"
         );
+    }
+
+    #[test]
+    fn create_session_params_available_tools_empty_disables_builtins() {
+        let params = CreateSessionParams {
+            model: Some("gpt-4".to_string()),
+            system_prompt: None,
+            system_message: None,
+            tools: None,
+            available_tools: Some(vec![]),
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        let available = json["availableTools"].as_array().unwrap();
+        assert!(available.is_empty(), "empty array disables all built-in tools");
+    }
+
+    #[test]
+    fn create_session_params_available_tools_none_omits_field() {
+        let params = CreateSessionParams {
+            model: Some("gpt-4".to_string()),
+            system_prompt: None,
+            system_message: None,
+            tools: None,
+            available_tools: None,
+        };
+
+        let json = serde_json::to_value(&params).unwrap();
+        assert!(json.get("availableTools").is_none(), "None should omit the field entirely");
     }
 
     #[test]

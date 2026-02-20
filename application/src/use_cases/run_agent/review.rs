@@ -34,7 +34,7 @@ pub(crate) async fn query_model_for_review(
         Provide your assessment with a clear APPROVE or REJECT/REVISE recommendation.";
 
     let session = gateway
-        .create_session_with_system_prompt(model, system_prompt)
+        .create_text_only_session(model, system_prompt)
         .await?;
 
     session.send(prompt).await

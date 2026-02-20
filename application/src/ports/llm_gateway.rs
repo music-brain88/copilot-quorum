@@ -49,6 +49,23 @@ pub trait LlmGateway: Send + Sync {
         system_prompt: &str,
     ) -> Result<Box<dyn LlmSession>, GatewayError>;
 
+    /// Create a text-only session that cannot execute any tools.
+    ///
+    /// Used for review sessions where the model should only produce text
+    /// and must not trigger any side-effects (file writes, commands, etc.).
+    ///
+    /// Default implementation delegates to `create_session_with_system_prompt`.
+    /// The Copilot adapter overrides this to send `availableTools: []`,
+    /// disabling CLI built-in tools.
+    async fn create_text_only_session(
+        &self,
+        model: &Model,
+        system_prompt: &str,
+    ) -> Result<Box<dyn LlmSession>, GatewayError> {
+        self.create_session_with_system_prompt(model, system_prompt)
+            .await
+    }
+
     /// Get available models
     async fn available_models(&self) -> Result<Vec<Model>, GatewayError>;
 }
