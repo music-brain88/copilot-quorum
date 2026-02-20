@@ -509,7 +509,10 @@ mod tests {
 
         let json = serde_json::to_value(&params).unwrap();
         let available = json["availableTools"].as_array().unwrap();
-        assert!(available.is_empty(), "empty array disables all built-in tools");
+        assert!(
+            available.is_empty(),
+            "empty array disables all built-in tools"
+        );
     }
 
     #[test]
@@ -523,7 +526,10 @@ mod tests {
         };
 
         let json = serde_json::to_value(&params).unwrap();
-        assert!(json.get("availableTools").is_none(), "None should omit the field entirely");
+        assert!(
+            json.get("availableTools").is_none(),
+            "None should omit the field entirely"
+        );
     }
 
     #[test]
