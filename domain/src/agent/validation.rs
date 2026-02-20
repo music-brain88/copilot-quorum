@@ -27,7 +27,7 @@ pub enum Severity {
 }
 
 /// Identifies a specific configuration issue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigIssueCode {
     /// Solo + Debate: a single model cannot debate with itself.
     SoloWithDebate,
@@ -35,6 +35,18 @@ pub enum ConfigIssueCode {
     DebateNotImplemented,
     /// Ensemble + Fast: review phases are skipped, reducing Ensemble's value.
     EnsembleWithFast,
+    /// An enum field has an unrecognized value (typo or unsupported).
+    InvalidEnumValue {
+        field: String,
+        value: String,
+        valid_values: Vec<String>,
+    },
+    /// A model name string is empty.
+    EmptyModelName { field: String },
+    /// A config section is present but not wired into the application.
+    DeadSection { section: String },
+    /// Attempted to mutate a read-only config key (Phase 2).
+    ReadOnlyField { key: String },
 }
 
 /// A detected issue in the configuration combination.
@@ -147,7 +159,7 @@ mod tests {
         let issues =
             make_mode(ConsensusLevel::Ensemble, PhaseScope::Fast, debate()).validate_combination();
         assert_eq!(issues.len(), 2);
-        let codes: Vec<_> = issues.iter().map(|i| i.code).collect();
+        let codes: Vec<_> = issues.iter().map(|i| i.code.clone()).collect();
         assert!(codes.contains(&ConfigIssueCode::DebateNotImplemented));
         assert!(codes.contains(&ConfigIssueCode::EnsembleWithFast));
         // Both are warnings

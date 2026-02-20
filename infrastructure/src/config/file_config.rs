@@ -3,19 +3,12 @@
 //! These structs represent the exact structure of the TOML config file.
 //! They are deserialized directly and use domain types where appropriate.
 
+use quorum_domain::agent::validation::{ConfigIssue, ConfigIssueCode, Severity};
 use quorum_domain::{ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, QuorumRule};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 // Re-export OutputFormat from domain for convenience
 pub use quorum_domain::OutputFormat as FileOutputFormat;
-
-/// Configuration validation errors
-#[derive(Debug, Error)]
-pub enum ConfigValidationError {
-    #[error("model name cannot be empty")]
-    EmptyModelName,
-}
 
 /// Role-based model configuration from TOML
 ///
@@ -48,38 +41,92 @@ pub struct FileModelsConfig {
 }
 
 impl FileModelsConfig {
+    /// Parse a single model string, collecting issues for empty names.
+    fn parse_single_model(
+        field: &str,
+        value: Option<&String>,
+    ) -> (Option<Model>, Vec<ConfigIssue>) {
+        let mut issues = Vec::new();
+        match value {
+            None => (None, issues),
+            Some(s) if s.trim().is_empty() => {
+                issues.push(ConfigIssue {
+                    severity: Severity::Error,
+                    code: ConfigIssueCode::EmptyModelName {
+                        field: field.to_string(),
+                    },
+                    message: format!("models.{}: model name cannot be empty", field),
+                });
+                (None, issues)
+            }
+            Some(s) => {
+                // Model::from_str is infallible; unknown names become Custom(...)
+                let model: Model = s.parse().unwrap();
+                (Some(model), issues)
+            }
+        }
+    }
+
+    /// Parse a model list, collecting issues for empty names.
+    fn parse_model_list(
+        field: &str,
+        values: Option<&Vec<String>>,
+    ) -> (Option<Vec<Model>>, Vec<ConfigIssue>) {
+        let mut issues = Vec::new();
+        match values {
+            None => (None, issues),
+            Some(strings) => {
+                let mut models = Vec::new();
+                for s in strings {
+                    if s.trim().is_empty() {
+                        issues.push(ConfigIssue {
+                            severity: Severity::Error,
+                            code: ConfigIssueCode::EmptyModelName {
+                                field: field.to_string(),
+                            },
+                            message: format!(
+                                "models.{}: model name cannot be empty in list",
+                                field
+                            ),
+                        });
+                    } else {
+                        let model: Model = s.parse().unwrap();
+                        models.push(model);
+                    }
+                }
+                (Some(models), issues)
+            }
+        }
+    }
+
     /// Parse exploration model string into Model enum
-    pub fn parse_exploration(&self) -> Option<Model> {
-        self.exploration.as_ref().and_then(|s| s.parse().ok())
+    pub fn parse_exploration(&self) -> (Option<Model>, Vec<ConfigIssue>) {
+        Self::parse_single_model("exploration", self.exploration.as_ref())
     }
 
     /// Parse decision model string into Model enum
-    pub fn parse_decision(&self) -> Option<Model> {
-        self.decision.as_ref().and_then(|s| s.parse().ok())
+    pub fn parse_decision(&self) -> (Option<Model>, Vec<ConfigIssue>) {
+        Self::parse_single_model("decision", self.decision.as_ref())
     }
 
     /// Parse review model strings into `Vec<Model>`
-    pub fn parse_review(&self) -> Option<Vec<Model>> {
-        self.review
-            .as_ref()
-            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
+    pub fn parse_review(&self) -> (Option<Vec<Model>>, Vec<ConfigIssue>) {
+        Self::parse_model_list("review", self.review.as_ref())
     }
 
     /// Parse participants model strings into `Vec<Model>`
-    pub fn parse_participants(&self) -> Option<Vec<Model>> {
-        self.participants
-            .as_ref()
-            .map(|models| models.iter().filter_map(|s| s.parse().ok()).collect())
+    pub fn parse_participants(&self) -> (Option<Vec<Model>>, Vec<ConfigIssue>) {
+        Self::parse_model_list("participants", self.participants.as_ref())
     }
 
     /// Parse moderator model string into Model enum
-    pub fn parse_moderator(&self) -> Option<Model> {
-        self.moderator.as_ref().and_then(|s| s.parse().ok())
+    pub fn parse_moderator(&self) -> (Option<Model>, Vec<ConfigIssue>) {
+        Self::parse_single_model("moderator", self.moderator.as_ref())
     }
 
     /// Parse ask model string into Model enum
-    pub fn parse_ask(&self) -> Option<Model> {
-        self.ask.as_ref().and_then(|s| s.parse().ok())
+    pub fn parse_ask(&self) -> (Option<Model>, Vec<ConfigIssue>) {
+        Self::parse_single_model("ask", self.ask.as_ref())
     }
 }
 
@@ -163,32 +210,106 @@ impl Default for FileAgentConfig {
 }
 
 impl FileAgentConfig {
-    /// Parse hil_mode string into HilMode enum
-    pub fn parse_hil_mode(&self) -> HilMode {
-        self.hil_mode.parse().unwrap_or_default()
+    /// Parse hil_mode string into HilMode enum, returning warnings on failure.
+    pub fn parse_hil_mode(&self) -> (HilMode, Vec<ConfigIssue>) {
+        match self.hil_mode.parse::<HilMode>() {
+            Ok(mode) => (mode, vec![]),
+            Err(_) => {
+                let issue = ConfigIssue {
+                    severity: Severity::Warning,
+                    code: ConfigIssueCode::InvalidEnumValue {
+                        field: "agent.hil_mode".to_string(),
+                        value: self.hil_mode.clone(),
+                        valid_values: vec![
+                            "interactive".to_string(),
+                            "auto_reject".to_string(),
+                            "auto_approve".to_string(),
+                        ],
+                    },
+                    message: format!(
+                        "agent.hil_mode: unknown value '{}', falling back to 'interactive'",
+                        self.hil_mode
+                    ),
+                };
+                (HilMode::default(), vec![issue])
+            }
+        }
     }
 
     /// Parse consensus_level string into ConsensusLevel enum
     ///
     /// Accepts: "solo", "s", "ensemble", "ens", "e"
-    pub fn parse_consensus_level(&self) -> ConsensusLevel {
-        self.consensus_level.parse().unwrap_or_default()
+    pub fn parse_consensus_level(&self) -> (ConsensusLevel, Vec<ConfigIssue>) {
+        match self.consensus_level.parse::<ConsensusLevel>() {
+            Ok(level) => (level, vec![]),
+            Err(_) => {
+                let issue = ConfigIssue {
+                    severity: Severity::Warning,
+                    code: ConfigIssueCode::InvalidEnumValue {
+                        field: "agent.consensus_level".to_string(),
+                        value: self.consensus_level.clone(),
+                        valid_values: vec!["solo".to_string(), "ensemble".to_string()],
+                    },
+                    message: format!(
+                        "agent.consensus_level: unknown value '{}', falling back to 'solo'",
+                        self.consensus_level
+                    ),
+                };
+                (ConsensusLevel::default(), vec![issue])
+            }
+        }
     }
 
     /// Parse phase_scope string into PhaseScope enum
     ///
     /// Accepts: "full", "fast", "plan-only", "plan"
-    pub fn parse_phase_scope(&self) -> PhaseScope {
-        self.phase_scope.parse().unwrap_or_default()
+    pub fn parse_phase_scope(&self) -> (PhaseScope, Vec<ConfigIssue>) {
+        match self.phase_scope.parse::<PhaseScope>() {
+            Ok(scope) => (scope, vec![]),
+            Err(_) => {
+                let issue = ConfigIssue {
+                    severity: Severity::Warning,
+                    code: ConfigIssueCode::InvalidEnumValue {
+                        field: "agent.phase_scope".to_string(),
+                        value: self.phase_scope.clone(),
+                        valid_values: vec![
+                            "full".to_string(),
+                            "fast".to_string(),
+                            "plan-only".to_string(),
+                        ],
+                    },
+                    message: format!(
+                        "agent.phase_scope: unknown value '{}', falling back to 'full'",
+                        self.phase_scope
+                    ),
+                };
+                (PhaseScope::default(), vec![issue])
+            }
+        }
     }
 
-    /// Parse strategy string into strategy name
+    /// Parse strategy string into strategy name, returning warnings on failure.
     ///
     /// Returns "quorum" or "debate". Used by CLI to configure OrchestrationStrategy.
-    pub fn parse_strategy(&self) -> &str {
+    pub fn parse_strategy(&self) -> (&str, Vec<ConfigIssue>) {
         match self.strategy.to_lowercase().as_str() {
-            "debate" => "debate",
-            _ => "quorum",
+            "quorum" => ("quorum", vec![]),
+            "debate" => ("debate", vec![]),
+            _ => {
+                let issue = ConfigIssue {
+                    severity: Severity::Warning,
+                    code: ConfigIssueCode::InvalidEnumValue {
+                        field: "agent.strategy".to_string(),
+                        value: self.strategy.clone(),
+                        valid_values: vec!["quorum".to_string(), "debate".to_string()],
+                    },
+                    message: format!(
+                        "agent.strategy: unknown value '{}', falling back to 'quorum'",
+                        self.strategy
+                    ),
+                };
+                ("quorum", vec![issue])
+            }
         }
     }
 }
@@ -225,7 +346,7 @@ impl FileAgentConfig {
 /// moderator = "claude-opus-4.5"
 /// enable_peer_review = true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileQuorumConfig {
     /// Consensus rule: "majority", "unanimous", "atleast:N", "N%"
@@ -658,27 +779,42 @@ pub struct FileConfig {
 }
 
 impl FileConfig {
-    /// Validate the configuration
-    pub fn validate(&self) -> Result<(), ConfigValidationError> {
-        // Check for empty model names in review list
-        if let Some(ref models) = self.models.review {
-            for model in models {
-                if model.trim().is_empty() {
-                    return Err(ConfigValidationError::EmptyModelName);
-                }
-            }
+    /// Validate the entire configuration, returning all detected issues.
+    ///
+    /// This is the single entry point for config validation. It checks:
+    /// 1. Empty model names across all model fields
+    /// 2. Enum parse failures for agent fields (hil_mode, consensus_level, etc.)
+    /// 3. Dead sections that are not wired into the application
+    pub fn validate(&self) -> Vec<ConfigIssue> {
+        let mut issues = Vec::new();
+
+        // 1. Model parse validation (catches empty names)
+        issues.extend(self.models.parse_exploration().1);
+        issues.extend(self.models.parse_decision().1);
+        issues.extend(self.models.parse_review().1);
+        issues.extend(self.models.parse_participants().1);
+        issues.extend(self.models.parse_moderator().1);
+        issues.extend(self.models.parse_ask().1);
+
+        // 2. Enum parse validation
+        issues.extend(self.agent.parse_hil_mode().1);
+        issues.extend(self.agent.parse_consensus_level().1);
+        issues.extend(self.agent.parse_phase_scope().1);
+        issues.extend(self.agent.parse_strategy().1);
+
+        // 3. Dead [quorum] section detection
+        if self.quorum != FileQuorumConfig::default() {
+            issues.push(ConfigIssue {
+                severity: Severity::Warning,
+                code: ConfigIssueCode::DeadSection {
+                    section: "quorum".to_string(),
+                },
+                message: "[quorum] section is configured but not currently used by the application"
+                    .to_string(),
+            });
         }
 
-        // Check for empty model names in participants list
-        if let Some(ref models) = self.models.participants {
-            for model in models {
-                if model.trim().is_empty() {
-                    return Err(ConfigValidationError::EmptyModelName);
-                }
-            }
-        }
-
-        Ok(())
+        issues
     }
 }
 
@@ -723,7 +859,7 @@ decision = "gpt-5.2-codex"
 "#;
 
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.models.parse_decision(), Some(Model::Gpt52Codex));
+        assert_eq!(config.models.parse_decision().0, Some(Model::Gpt52Codex));
         // Defaults should apply
         assert!(config.models.exploration.is_none());
         assert!(config.output.color);
@@ -743,7 +879,7 @@ decision = "gpt-5.2-codex"
     #[test]
     fn test_validate_valid_config() {
         let config = FileConfig::default();
-        assert!(config.validate().is_ok());
+        assert!(config.validate().is_empty());
     }
 
     #[test]
@@ -753,10 +889,12 @@ decision = "gpt-5.2-codex"
 review = ["gpt-5.2-codex", ""]
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigValidationError::EmptyModelName)
-        ));
+        let issues = config.validate();
+        assert!(!issues.is_empty());
+        assert!(issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::EmptyModelName { field } if field == "review"
+        )));
     }
 
     #[test]
@@ -848,9 +986,12 @@ decision = "claude-sonnet-4.5"
 review = ["claude-sonnet-4.5", "gpt-5.2-codex"]
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.models.parse_exploration(), Some(Model::Gpt52Codex));
-        assert_eq!(config.models.parse_decision(), Some(Model::ClaudeSonnet45));
-        let review = config.models.parse_review().unwrap();
+        assert_eq!(config.models.parse_exploration().0, Some(Model::Gpt52Codex));
+        assert_eq!(
+            config.models.parse_decision().0,
+            Some(Model::ClaudeSonnet45)
+        );
+        let review = config.models.parse_review().0.unwrap();
         assert_eq!(review.len(), 2);
         assert!(review.contains(&Model::ClaudeSonnet45));
         assert!(review.contains(&Model::Gpt52Codex));
@@ -864,7 +1005,7 @@ decision = "claude-opus-4.5"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert!(config.models.exploration.is_none());
-        assert_eq!(config.models.parse_decision(), Some(Model::ClaudeOpus45));
+        assert_eq!(config.models.parse_decision().0, Some(Model::ClaudeOpus45));
         assert!(config.models.review.is_none());
         assert!(config.models.participants.is_none());
         assert!(config.models.moderator.is_none());
@@ -880,12 +1021,12 @@ moderator = "claude-opus-4.5"
 ask = "claude-sonnet-4.5"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        let participants = config.models.parse_participants().unwrap();
+        let participants = config.models.parse_participants().0.unwrap();
         assert_eq!(participants.len(), 2);
         assert!(participants.contains(&Model::ClaudeOpus45));
         assert!(participants.contains(&Model::Gpt52Codex));
-        assert_eq!(config.models.parse_moderator(), Some(Model::ClaudeOpus45));
-        assert_eq!(config.models.parse_ask(), Some(Model::ClaudeSonnet45));
+        assert_eq!(config.models.parse_moderator().0, Some(Model::ClaudeOpus45));
+        assert_eq!(config.models.parse_ask().0, Some(Model::ClaudeSonnet45));
     }
 
     #[test]
@@ -895,10 +1036,12 @@ ask = "claude-sonnet-4.5"
 participants = ["gpt-5.2-codex", ""]
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigValidationError::EmptyModelName)
-        ));
+        let issues = config.validate();
+        assert!(!issues.is_empty());
+        assert!(issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::EmptyModelName { field } if field == "participants"
+        )));
     }
 
     #[test]
@@ -916,12 +1059,12 @@ strategy = "debate"
         assert_eq!(config.agent.hil_mode, "auto_reject");
         assert_eq!(config.agent.consensus_level, "ensemble");
         assert_eq!(
-            config.agent.parse_consensus_level(),
+            config.agent.parse_consensus_level().0,
             ConsensusLevel::Ensemble
         );
         assert_eq!(config.agent.phase_scope, "fast");
-        assert_eq!(config.agent.parse_phase_scope(), PhaseScope::Fast);
-        assert_eq!(config.agent.parse_strategy(), "debate");
+        assert_eq!(config.agent.parse_phase_scope().0, PhaseScope::Fast);
+        assert_eq!(config.agent.parse_strategy().0, "debate");
     }
 
     #[test]
@@ -933,7 +1076,7 @@ consensus_level = "solo"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agent.consensus_level, "solo");
-        assert_eq!(config.agent.parse_consensus_level(), ConsensusLevel::Solo);
+        assert_eq!(config.agent.parse_consensus_level().0, ConsensusLevel::Solo);
 
         // Test "ensemble"
         let toml_str = r#"
@@ -943,7 +1086,7 @@ consensus_level = "ensemble"
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agent.consensus_level, "ensemble");
         assert_eq!(
-            config.agent.parse_consensus_level(),
+            config.agent.parse_consensus_level().0,
             ConsensusLevel::Ensemble
         );
 
@@ -954,7 +1097,7 @@ consensus_level = "ens"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(
-            config.agent.parse_consensus_level(),
+            config.agent.parse_consensus_level().0,
             ConsensusLevel::Ensemble
         );
     }
@@ -966,7 +1109,7 @@ consensus_level = "ens"
 phase_scope = "plan-only"
 "#;
         let config: FileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agent.parse_phase_scope(), PhaseScope::PlanOnly);
+        assert_eq!(config.agent.parse_phase_scope().0, PhaseScope::PlanOnly);
     }
 
     #[test]
@@ -1127,5 +1270,78 @@ max_height = 20
         // All other fields use defaults
         assert_eq!(config.tui.input.submit_key, "enter");
         assert!(config.tui.input.dynamic_height);
+    }
+
+    // ==================== Validation Tests ====================
+
+    #[test]
+    fn test_validate_typo_hil_mode_warns() {
+        let toml_str = r#"
+[agent]
+hil_mode = "typo"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let issues = config.validate();
+        assert!(issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::InvalidEnumValue { field, .. } if field == "agent.hil_mode"
+        )));
+        // Typo should be a warning, not an error
+        assert!(issues.iter().all(|i| i.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn test_validate_typo_consensus_level_warns() {
+        let toml_str = r#"
+[agent]
+consensus_level = "typo"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let issues = config.validate();
+        assert!(issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::InvalidEnumValue { field, .. } if field == "agent.consensus_level"
+        )));
+    }
+
+    #[test]
+    fn test_validate_typo_strategy_warns() {
+        let toml_str = r#"
+[agent]
+strategy = "typo"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let issues = config.validate();
+        assert!(issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::InvalidEnumValue { field, .. } if field == "agent.strategy"
+        )));
+    }
+
+    #[test]
+    fn test_validate_dead_quorum_section() {
+        let toml_str = r#"
+[quorum]
+rule = "unanimous"
+min_models = 3
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let issues = config.validate();
+        assert!(issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::DeadSection { section } if section == "quorum"
+        )));
+    }
+
+    #[test]
+    fn test_validate_default_quorum_no_dead_warning() {
+        // Default [quorum] values should NOT trigger a dead section warning
+        let config = FileConfig::default();
+        let issues = config.validate();
+        assert!(
+            !issues
+                .iter()
+                .any(|i| matches!(&i.code, ConfigIssueCode::DeadSection { .. }))
+        );
     }
 }
