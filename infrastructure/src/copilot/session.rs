@@ -116,10 +116,49 @@ impl CopilotSession {
             system_prompt: system_prompt.clone(),
             system_message,
             tools: None,
+            available_tools: None,
         };
 
         let (session_id, channel) = router.create_session(params).await?;
         debug!("Session created: {}", session_id);
+
+        Ok(Self {
+            router,
+            session_id,
+            channel: Mutex::new(channel),
+            model,
+            system_prompt,
+            tool_session: Mutex::new(None),
+        })
+    }
+
+    /// Create a text-only session that disables all Copilot CLI built-in tools.
+    ///
+    /// Sends `availableTools: []` to the CLI, preventing the model from
+    /// executing any tools (file operations, `gh` commands, subagents, etc.).
+    /// Used for review sessions where the model should only produce text.
+    pub async fn new_text_only(
+        router: Arc<MessageRouter>,
+        model: Model,
+        system_prompt: Option<String>,
+    ) -> Result<Self> {
+        info!("Creating text-only session with model: {}", model);
+
+        let system_message = system_prompt.as_ref().map(|content| SystemMessageConfig {
+            mode: "append".to_string(),
+            content: content.clone(),
+        });
+
+        let params = CreateSessionParams {
+            model: Some(model.to_string()),
+            system_prompt: system_prompt.clone(),
+            system_message,
+            tools: None,
+            available_tools: Some(vec![]),
+        };
+
+        let (session_id, channel) = router.create_session(params).await?;
+        debug!("Text-only session created: {}", session_id);
 
         Ok(Self {
             router,
@@ -293,6 +332,7 @@ impl CopilotSession {
             system_prompt: self.system_prompt.clone(),
             system_message,
             tools: Some(copilot_tools),
+            available_tools: None,
         };
 
         let payload_size = serde_json::to_string(&params).map(|s| s.len()).unwrap_or(0);
