@@ -237,6 +237,19 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             working_dir: self.config.execution().working_dir.clone(),
             consensus_level: self.config.mode().consensus_level,
         }));
+
+        // Emit InteractionSpawned for the initial root interaction so the TUI
+        // can bind its placeholder tab to this interaction ID.  Without this,
+        // the initial tab stays PaneKind::Interaction(Agent, None) and all
+        // progress events routed by interaction_id are silently dropped.
+        let _ = self
+            .tx
+            .send(UiEvent::InteractionSpawned(InteractionSpawnedEvent {
+                id: self.active_interaction_id,
+                form: InteractionForm::Agent,
+                parent_id: None,
+                query: String::new(),
+            }));
     }
 
     /// Handle a slash command. Returns whether to continue or exit the REPL.
@@ -1468,6 +1481,17 @@ mod tests {
 
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, UiEvent::Welcome(_)));
+
+        // send_welcome also emits InteractionSpawned for the initial root
+        // interaction so the TUI can bind tab 0 to an interaction ID.
+        let event = rx.try_recv().unwrap();
+        match event {
+            UiEvent::InteractionSpawned(spawned) => {
+                assert_eq!(spawned.form, InteractionForm::Agent);
+                assert!(spawned.parent_id.is_none());
+            }
+            other => panic!("Expected InteractionSpawned, got {:?}", other),
+        }
     }
 
     // === parse_spawn_flags tests ===
