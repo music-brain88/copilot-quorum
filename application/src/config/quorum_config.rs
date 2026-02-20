@@ -156,9 +156,9 @@ impl ConfigAccessorPort for QuorumConfig {
     fn config_get(&self, key: &str) -> Result<ConfigValue, ConfigAccessError> {
         match key {
             // ---- Mutable (SessionMode) ----
-            "agent.consensus_level" => Ok(ConfigValue::String(
-                self.mode.consensus_level.to_string(),
-            )),
+            "agent.consensus_level" => {
+                Ok(ConfigValue::String(self.mode.consensus_level.to_string()))
+            }
             "agent.phase_scope" => Ok(ConfigValue::String(self.mode.phase_scope.to_string())),
             "agent.strategy" => {
                 let name = match &self.mode.strategy {
@@ -219,21 +219,21 @@ impl ConfigAccessorPort for QuorumConfig {
 
         match key {
             "agent.consensus_level" => {
-                let level = s
-                    .parse::<ConsensusLevel>()
-                    .map_err(|e| ConfigAccessError::InvalidValue {
-                        key: key.to_string(),
-                        message: e,
-                    })?;
+                let level =
+                    s.parse::<ConsensusLevel>()
+                        .map_err(|e| ConfigAccessError::InvalidValue {
+                            key: key.to_string(),
+                            message: e,
+                        })?;
                 self.mode_mut().consensus_level = level;
             }
             "agent.phase_scope" => {
-                let scope = s
-                    .parse::<PhaseScope>()
-                    .map_err(|e| ConfigAccessError::InvalidValue {
-                        key: key.to_string(),
-                        message: e,
-                    })?;
+                let scope =
+                    s.parse::<PhaseScope>()
+                        .map_err(|e| ConfigAccessError::InvalidValue {
+                            key: key.to_string(),
+                            message: e,
+                        })?;
                 self.mode_mut().phase_scope = scope;
             }
             "agent.strategy" => match s.to_lowercase().as_str() {
@@ -241,17 +241,13 @@ impl ConfigAccessorPort for QuorumConfig {
                     self.mode_mut().strategy = OrchestrationStrategy::default();
                 }
                 "debate" => {
-                    self.mode_mut().strategy = OrchestrationStrategy::Debate(
-                        quorum_domain::DebateConfig::default(),
-                    );
+                    self.mode_mut().strategy =
+                        OrchestrationStrategy::Debate(quorum_domain::DebateConfig::default());
                 }
                 _ => {
                     return Err(ConfigAccessError::InvalidValue {
                         key: key.to_string(),
-                        message: format!(
-                            "unknown strategy '{}', valid: quorum, debate",
-                            s
-                        ),
+                        message: format!("unknown strategy '{}', valid: quorum, debate", s),
                     });
                 }
             },
@@ -403,10 +399,7 @@ mod tests {
     fn test_config_set_phase_scope() {
         let mut config = QuorumConfig::default();
         config
-            .config_set(
-                "agent.phase_scope",
-                ConfigValue::String("fast".to_string()),
-            )
+            .config_set("agent.phase_scope", ConfigValue::String("fast".to_string()))
             .unwrap();
         assert_eq!(config.mode().phase_scope, PhaseScope::Fast);
     }
@@ -415,10 +408,7 @@ mod tests {
     fn test_config_set_strategy() {
         let mut config = QuorumConfig::default();
         config
-            .config_set(
-                "agent.strategy",
-                ConfigValue::String("debate".to_string()),
-            )
+            .config_set("agent.strategy", ConfigValue::String("debate".to_string()))
             .unwrap();
         assert!(matches!(
             config.mode().strategy,
@@ -470,15 +460,14 @@ mod tests {
             )
             .unwrap();
         let issues = config
-            .config_set(
-                "agent.phase_scope",
-                ConfigValue::String("fast".to_string()),
-            )
+            .config_set("agent.phase_scope", ConfigValue::String("fast".to_string()))
             .unwrap();
         assert!(!issues.is_empty());
-        assert!(issues
-            .iter()
-            .any(|i| i.code == ConfigIssueCode::EnsembleWithFast));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.code == ConfigIssueCode::EnsembleWithFast)
+        );
     }
 
     #[test]

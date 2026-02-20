@@ -1338,9 +1338,10 @@ min_models = 3
         // Default [quorum] values should NOT trigger a dead section warning
         let config = FileConfig::default();
         let issues = config.validate();
-        assert!(!issues.iter().any(|i| matches!(
-            &i.code,
-            ConfigIssueCode::DeadSection { .. }
-        )));
+        assert!(
+            !issues
+                .iter()
+                .any(|i| matches!(&i.code, ConfigIssueCode::DeadSection { .. }))
+        );
     }
 }

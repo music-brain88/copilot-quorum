@@ -342,9 +342,9 @@ async fn main() -> Result<()> {
     // Build SessionMode (strategy is also parsed and wired here)
     let (strategy_name, _) = config.agent.parse_strategy();
     let strategy = match strategy_name {
-        "debate" => quorum_domain::OrchestrationStrategy::Debate(
-            quorum_domain::DebateConfig::default(),
-        ),
+        "debate" => {
+            quorum_domain::OrchestrationStrategy::Debate(quorum_domain::DebateConfig::default())
+        }
         _ => quorum_domain::OrchestrationStrategy::default(),
     };
     let mut mode = SessionMode::default()
