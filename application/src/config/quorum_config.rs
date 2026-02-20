@@ -21,11 +21,15 @@
 //! | `ExecutionParams` | Yes | Yes | No |
 
 use crate::config::ExecutionParams;
+use crate::ports::config_accessor::{ConfigAccessError, ConfigAccessorPort, ConfigValue};
 use crate::use_cases::run_agent::RunAgentInput;
 use crate::use_cases::run_ask::RunAskInput;
 use crate::use_cases::run_quorum::RunQuorumInput;
 use quorum_domain::agent::validation::{ConfigIssue, Severity};
-use quorum_domain::{AgentPolicy, ConsensusLevel, ModelConfig, SessionMode};
+use quorum_domain::config::config_key::{Mutability, lookup_key};
+use quorum_domain::{
+    AgentPolicy, ConsensusLevel, ModelConfig, OrchestrationStrategy, PhaseScope, SessionMode,
+};
 
 /// Configuration container for buffer controllers.
 ///
@@ -148,9 +152,135 @@ impl QuorumConfig {
     }
 }
 
+impl ConfigAccessorPort for QuorumConfig {
+    fn config_get(&self, key: &str) -> Result<ConfigValue, ConfigAccessError> {
+        match key {
+            // ---- Mutable (SessionMode) ----
+            "agent.consensus_level" => Ok(ConfigValue::String(
+                self.mode.consensus_level.to_string(),
+            )),
+            "agent.phase_scope" => Ok(ConfigValue::String(self.mode.phase_scope.to_string())),
+            "agent.strategy" => {
+                let name = match &self.mode.strategy {
+                    OrchestrationStrategy::Quorum(_) => "quorum",
+                    OrchestrationStrategy::Debate(_) => "debate",
+                };
+                Ok(ConfigValue::String(name.to_string()))
+            }
+            // ---- ReadOnly ----
+            "agent.hil_mode" => Ok(ConfigValue::String(self.policy.hil_mode.to_string())),
+            "agent.max_plan_revisions" => {
+                Ok(ConfigValue::Integer(self.policy.max_plan_revisions as i64))
+            }
+            "models.exploration" => Ok(ConfigValue::String(self.models.exploration.to_string())),
+            "models.decision" => Ok(ConfigValue::String(self.models.decision.to_string())),
+            "models.review" => Ok(ConfigValue::StringList(
+                self.models.review.iter().map(|m| m.to_string()).collect(),
+            )),
+            "execution.max_iterations" => {
+                Ok(ConfigValue::Integer(self.execution.max_iterations as i64))
+            }
+            "execution.max_tool_turns" => {
+                Ok(ConfigValue::Integer(self.execution.max_tool_turns as i64))
+            }
+            _ => Err(ConfigAccessError::UnknownKey {
+                key: key.to_string(),
+            }),
+        }
+    }
+
+    fn config_set(
+        &mut self,
+        key: &str,
+        value: ConfigValue,
+    ) -> Result<Vec<ConfigIssue>, ConfigAccessError> {
+        // Check key exists
+        let info = lookup_key(key).ok_or_else(|| ConfigAccessError::UnknownKey {
+            key: key.to_string(),
+        })?;
+
+        // Check mutability
+        if info.mutability == Mutability::ReadOnly {
+            return Err(ConfigAccessError::ReadOnly {
+                key: key.to_string(),
+            });
+        }
+
+        // Extract string value (mutable keys are all string-typed)
+        let s = match &value {
+            ConfigValue::String(s) => s.clone(),
+            _ => {
+                return Err(ConfigAccessError::InvalidValue {
+                    key: key.to_string(),
+                    message: "expected a string value".to_string(),
+                });
+            }
+        };
+
+        match key {
+            "agent.consensus_level" => {
+                let level = s
+                    .parse::<ConsensusLevel>()
+                    .map_err(|e| ConfigAccessError::InvalidValue {
+                        key: key.to_string(),
+                        message: e,
+                    })?;
+                self.mode_mut().consensus_level = level;
+            }
+            "agent.phase_scope" => {
+                let scope = s
+                    .parse::<PhaseScope>()
+                    .map_err(|e| ConfigAccessError::InvalidValue {
+                        key: key.to_string(),
+                        message: e,
+                    })?;
+                self.mode_mut().phase_scope = scope;
+            }
+            "agent.strategy" => match s.to_lowercase().as_str() {
+                "quorum" => {
+                    self.mode_mut().strategy = OrchestrationStrategy::default();
+                }
+                "debate" => {
+                    self.mode_mut().strategy = OrchestrationStrategy::Debate(
+                        quorum_domain::DebateConfig::default(),
+                    );
+                }
+                _ => {
+                    return Err(ConfigAccessError::InvalidValue {
+                        key: key.to_string(),
+                        message: format!(
+                            "unknown strategy '{}', valid: quorum, debate",
+                            s
+                        ),
+                    });
+                }
+            },
+            _ => {
+                return Err(ConfigAccessError::UnknownKey {
+                    key: key.to_string(),
+                });
+            }
+        }
+
+        // Re-validate after mutation
+        let issues = self.mode.validate_combination();
+
+        // Tag any warnings with ReadOnlyField code if relevant
+        Ok(issues)
+    }
+
+    fn config_keys(&self) -> Vec<String> {
+        quorum_domain::known_keys()
+            .iter()
+            .map(|k| k.key.to_string())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quorum_domain::agent::validation::ConfigIssueCode;
     use quorum_domain::{ConsensusLevel, Model, PhaseScope};
 
     #[test]
@@ -237,5 +367,126 @@ mod tests {
         let issues = config.validate();
         assert!(!issues.is_empty());
         assert!(!QuorumConfig::has_errors(&issues)); // Warning only
+    }
+
+    // ==================== ConfigAccessorPort Tests ====================
+
+    #[test]
+    fn test_config_get_consensus_level() {
+        let config = QuorumConfig::default();
+        let val = config.config_get("agent.consensus_level").unwrap();
+        assert_eq!(val, ConfigValue::String("solo".to_string()));
+    }
+
+    #[test]
+    fn test_config_get_unknown_key() {
+        let config = QuorumConfig::default();
+        let err = config.config_get("nonexistent").unwrap_err();
+        assert!(matches!(err, ConfigAccessError::UnknownKey { .. }));
+    }
+
+    #[test]
+    fn test_config_set_consensus_level() {
+        let mut config = QuorumConfig::default();
+        let issues = config
+            .config_set(
+                "agent.consensus_level",
+                ConfigValue::String("ensemble".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.mode().consensus_level, ConsensusLevel::Ensemble);
+        // Solo→Ensemble with Full+Quorum is valid, no issues
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_config_set_phase_scope() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set(
+                "agent.phase_scope",
+                ConfigValue::String("fast".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.mode().phase_scope, PhaseScope::Fast);
+    }
+
+    #[test]
+    fn test_config_set_strategy() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set(
+                "agent.strategy",
+                ConfigValue::String("debate".to_string()),
+            )
+            .unwrap();
+        assert!(matches!(
+            config.mode().strategy,
+            OrchestrationStrategy::Debate(_)
+        ));
+    }
+
+    #[test]
+    fn test_config_set_readonly_rejected() {
+        let mut config = QuorumConfig::default();
+        let err = config
+            .config_set(
+                "agent.hil_mode",
+                ConfigValue::String("auto_approve".to_string()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConfigAccessError::ReadOnly { .. }));
+    }
+
+    #[test]
+    fn test_config_set_invalid_value() {
+        let mut config = QuorumConfig::default();
+        let err = config
+            .config_set(
+                "agent.consensus_level",
+                ConfigValue::String("typo".to_string()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConfigAccessError::InvalidValue { .. }));
+    }
+
+    #[test]
+    fn test_config_set_wrong_type() {
+        let mut config = QuorumConfig::default();
+        let err = config
+            .config_set("agent.consensus_level", ConfigValue::Integer(42))
+            .unwrap_err();
+        assert!(matches!(err, ConfigAccessError::InvalidValue { .. }));
+    }
+
+    #[test]
+    fn test_config_set_returns_validation_warnings() {
+        let mut config = QuorumConfig::default();
+        // Set Ensemble + Fast → should produce EnsembleWithFast warning
+        config
+            .config_set(
+                "agent.consensus_level",
+                ConfigValue::String("ensemble".to_string()),
+            )
+            .unwrap();
+        let issues = config
+            .config_set(
+                "agent.phase_scope",
+                ConfigValue::String("fast".to_string()),
+            )
+            .unwrap();
+        assert!(!issues.is_empty());
+        assert!(issues
+            .iter()
+            .any(|i| i.code == ConfigIssueCode::EnsembleWithFast));
+    }
+
+    #[test]
+    fn test_config_keys_returns_all() {
+        let config = QuorumConfig::default();
+        let keys = config.config_keys();
+        assert!(keys.contains(&"agent.consensus_level".to_string()));
+        assert!(keys.contains(&"models.decision".to_string()));
+        assert!(keys.contains(&"execution.max_iterations".to_string()));
     }
 }
