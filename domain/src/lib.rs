@@ -43,8 +43,8 @@ pub use agent::{
 };
 pub use config::{ConfigKeyInfo, Mutability, OutputFormat, known_keys, lookup_key};
 pub use context::{
-    ContextMode, KnownContextFile, LoadedContextFile, ProjectContext, ResourceReference,
-    extract_references,
+    ContextBudget, ContextMode, KnownContextFile, LoadedContextFile, ProjectContext,
+    ResourceReference, TaskResultBuffer, extract_references,
 };
 pub use core::{error::DomainError, model::Model, question::Question};
 pub use interaction::{

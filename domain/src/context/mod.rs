@@ -56,12 +56,16 @@
 //! assert_eq!(ctx.source_description(), "CLAUDE.md");
 //! ```
 
+pub mod context_budget;
 pub mod context_mode;
 pub mod entities;
 pub mod reference;
+pub mod task_result_buffer;
 pub mod value_objects;
 
+pub use context_budget::ContextBudget;
 pub use context_mode::ContextMode;
 pub use entities::ProjectContext;
 pub use reference::{ResourceReference, extract_references};
+pub use task_result_buffer::TaskResultBuffer;
 pub use value_objects::{KnownContextFile, LoadedContextFile};
