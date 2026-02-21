@@ -12,6 +12,8 @@ use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use quorum_domain::agent::model_config::ModelConfig;
+use quorum_domain::context::context_budget::ContextBudget;
+use quorum_domain::context::task_result_buffer::TaskResultBuffer;
 use quorum_domain::util::truncate_str;
 use quorum_domain::{AgentPromptTemplate, AgentState, Model, Task, TaskId, ToolExecution};
 use std::sync::Arc;
@@ -62,7 +64,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
         progress: &dyn AgentProgressNotifier,
     ) -> Result<String, RunAgentError> {
         let mut results = Vec::new();
-        let mut previous_results = String::new();
+        let mut result_buffer = TaskResultBuffer::new(input.execution.context_budget.clone());
 
         loop {
             // Check for cancellation at the start of each task
@@ -120,14 +122,20 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
             let mut action_feedback: Option<String> = None;
 
             let task_result = loop {
-                // Build context including any rejection feedback
-                let context_with_feedback = if let Some(ref feedback) = action_feedback {
-                    format!(
-                        "{}\n\n---\n[Previous action was rejected]\nFeedback: {}\nPlease try a different approach.",
-                        previous_results, feedback
-                    )
-                } else {
-                    previous_results.clone()
+                // Build context including any rejection feedback,
+                // with optional per-task ContextMode budget override
+                let task_budget = state
+                    .plan
+                    .as_ref()
+                    .and_then(|p| p.tasks.iter().find(|t| t.id == task_id))
+                    .and_then(|t| t.context_mode)
+                    .map(ContextBudget::for_context_mode);
+
+                let context_with_feedback = match &action_feedback {
+                    Some(feedback) => {
+                        result_buffer.render_with_feedback(feedback, task_budget.as_ref())
+                    }
+                    None => result_buffer.render_with_budget(task_budget.as_ref()),
                 };
 
                 match self
@@ -198,7 +206,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 task_id,
                 if success { "OK" } else { "FAILED" }
             ));
-            previous_results.push_str(&format!("\n---\nTask {}: {}\n", task_id, output));
+            result_buffer.push(task_id.as_str(), &output);
         }
 
         // Generate summary

@@ -50,6 +50,15 @@ max_plan_revisions = 3
 # - auto_approve: Automatically approve last plan (use with caution!)
 hil_mode = "interactive"
 
+# Context budget - controls previous task results size (prevents prompt bloat)
+#[context_budget]
+# Max bytes per single task result (default: 20000)
+#max_entry_bytes = 20000
+# Max total bytes for all previous results combined (default: 60000)
+#max_total_bytes = 60000
+# Number of most recent results kept in full without truncation (default: 3)
+#recent_full_count = 3
+
 # Integration settings - external service connections
 [integrations.github]
 # Enable GitHub Discussions integration for escalations (default: false)

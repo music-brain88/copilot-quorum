@@ -358,7 +358,11 @@ async fn main() -> Result<()> {
     }
 
     // Build ExecutionParams
-    let mut execution = ExecutionParams::default();
+    let (context_budget, budget_issues) = config.context_budget.to_context_budget();
+    for issue in &budget_issues {
+        eprintln!("Warning: {}", issue.message);
+    }
+    let mut execution = ExecutionParams::default().with_context_budget(context_budget);
 
     // Validate configuration combination
     let issues = mode.validate_combination();
