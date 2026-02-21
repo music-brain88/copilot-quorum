@@ -3,54 +3,94 @@
 #   - ./quorum.toml (project-level)
 #   - ~/.config/copilot-quorum/config.toml (global)
 #
-# CLI arguments always take precedence over config file values.
+# Priority: CLI flags > project (./quorum.toml) > global (~/.config/copilot-quorum/config.toml)
 
-# Council settings - which models participate in discussions
-[council]
-# Models to include in the council (default: gpt-5.2-codex, claude-sonnet-4.5, gemini-3-pro-preview)
-models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
+# ==================== Model Selection ====================
+# Role-based model configuration for different phases of execution.
 
-# Model to use as moderator for final synthesis (optional)
-# If not specified, the first model in the list is used
-moderator = "claude-opus-4.5"
+[models]
+# Agent roles (used in Solo/Agent mode)
+#exploration = "gpt-5.2-codex"           # Context gathering + low-risk tools
+#decision = "claude-sonnet-4.5"          # Planning + high-risk tools
+#review = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]  # Review phase models
 
-# Behavior settings - how the council operates
-[behavior]
+# Interaction roles (used in Ensemble/Quorum mode)
+#participants = ["claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]  # Quorum Discussion
+#moderator = "claude-opus-4.5"           # Quorum Synthesis
+#ask = "claude-sonnet-4.5"               # Ask (Q&A) interaction
+
+# ==================== Quorum Consensus ====================
+# Controls how multi-model consensus works in Ensemble mode.
+# Note: This section is not currently wired into the application.
+
+[quorum]
+# Consensus rule: "majority", "unanimous", "atleast:N", "N%" (default: majority)
+rule = "majority"
+# Minimum number of models required for valid consensus (default: 2)
+min_models = 2
+# Moderator model for synthesis (optional, overrides models.moderator)
+#moderator = "claude-opus-4.5"
 # Enable peer review phase where models critique each other (default: true)
-enable_review = true
+enable_peer_review = true
 
-# Timeout in seconds for API calls (optional)
-# timeout_seconds = 120
+# ==================== Agent Behavior ====================
+# Controls autonomous agent execution behavior.
 
-# Output settings - how results are displayed
-[output]
-# Default output format: "full", "synthesis", or "json" (default: synthesis)
-format = "synthesis"
-
-# Enable colored terminal output (default: true)
-color = true
-
-# REPL settings - interactive chat mode configuration
-[repl]
-# Show progress indicators during processing (default: true)
-show_progress = true
-
-# Path to history file for command history (optional)
-# Default: ~/.local/share/copilot-quorum/history.txt
-# history_file = "~/.local/share/copilot-quorum/history.txt"
-
-# Agent settings - autonomous agent behavior
 [agent]
+# Consensus level: "solo" or "ensemble" (default: solo)
+consensus_level = "solo"
+# Phase scope: "full", "fast", or "plan-only" (default: full)
+phase_scope = "full"
+# Orchestration strategy: "quorum" or "debate" (default: quorum)
+strategy = "quorum"
+# Human-in-the-loop mode (default: interactive)
+#   - interactive: Prompt user for decisions
+#   - auto_reject: Automatically abort if revision limit exceeded
+#   - auto_approve: Automatically approve last plan (use with caution!)
+hil_mode = "interactive"
 # Maximum plan revisions before human intervention (default: 3)
 max_plan_revisions = 3
 
-# Human-in-the-loop mode: "interactive", "auto_reject", or "auto_approve" (default: interactive)
-# - interactive: Prompt user for decision when limit is exceeded
-# - auto_reject: Automatically abort if revision limit exceeded
-# - auto_approve: Automatically approve last plan (use with caution!)
-hil_mode = "interactive"
+# ==================== Output ====================
 
-# Context budget - controls previous task results size (prevents prompt bloat)
+[output]
+# Output format: "full", "synthesis", or "json" (default: synthesis)
+format = "synthesis"
+# Enable colored terminal output (default: true)
+color = true
+
+# ==================== REPL ====================
+
+[repl]
+# Show progress indicators during processing (default: true)
+show_progress = true
+# Path to history file (optional)
+# Default: ~/.local/share/copilot-quorum/history.txt
+#history_file = "~/.local/share/copilot-quorum/history.txt"
+
+# ==================== TUI ====================
+# Terminal user interface settings for the modal input system.
+
+[tui.input]
+# Key to submit input (default: "enter")
+submit_key = "enter"
+# Key to insert a newline in multiline mode (default: "shift+enter")
+newline_key = "shift+enter"
+# Key to launch $EDITOR from Normal mode (default: "I")
+editor_key = "I"
+# What happens after editor saves: "return_to_insert" or "submit" (default: "return_to_insert")
+editor_action = "return_to_insert"
+# Maximum height for the input area in lines (default: 10)
+max_height = 10
+# Whether input area grows dynamically with content (default: true)
+dynamic_height = true
+# Whether to show context header in $EDITOR temp file (default: true)
+context_header = true
+
+# ==================== Context Budget ====================
+# Controls how much task result context is retained between executions.
+# Prevents prompt bloat by truncating/summarizing older results.
+
 #[context_budget]
 # Max bytes per single task result (default: 20000)
 #max_entry_bytes = 20000
@@ -59,13 +99,16 @@ hil_mode = "interactive"
 # Number of most recent results kept in full without truncation (default: 3)
 #recent_full_count = 3
 
-# Integration settings - external service connections
-[integrations.github]
-# Enable GitHub Discussions integration for escalations (default: false)
-enabled = false
+# ==================== Custom Tools ====================
+# Define external CLI commands as first-class tools.
+# Parameter values are shell-escaped to prevent command injection.
+# Default risk_level is "high" (safe by default).
 
-# Repository (owner/name) - auto-detected from git remote if not set
-# repo = "owner/repo"
-
-# Discussion category for escalations (optional)
-# category = "Agent Escalations"
+# [tools.custom.my_tool]
+# description = "My custom tool"
+# command = "echo {input}"
+# risk_level = "high"
+# [tools.custom.my_tool.parameters.input]
+# type = "string"
+# description = "Input text"
+# required = true
