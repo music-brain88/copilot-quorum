@@ -1457,9 +1457,11 @@ recent_full_count = 2
         };
         let (budget, issues) = config.to_context_budget();
         assert_eq!(issues.len(), 2);
-        assert!(issues
-            .iter()
-            .all(|i| matches!(&i.code, ConfigIssueCode::InvalidConstraint { .. })));
+        assert!(
+            issues
+                .iter()
+                .all(|i| matches!(&i.code, ConfigIssueCode::InvalidConstraint { .. }))
+        );
         // Should fall back to default
         assert_eq!(budget, ContextBudget::default());
     }
