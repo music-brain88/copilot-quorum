@@ -14,6 +14,7 @@ use crate::ports::conversation_logger::{
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, ToolResultMessage};
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
+use crate::use_cases::tool_helpers::tool_args_preview;
 use quorum_domain::agent::model_config::ModelConfig;
 use quorum_domain::interaction::InteractionResult;
 use quorum_domain::util::truncate_str;
@@ -166,16 +167,28 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
             }
 
             // All tools are low-risk — execute in parallel
+            let mut exec_counter = 0usize;
+            let mut exec_ids = Vec::new();
             let mut futures = Vec::new();
             for call in &tool_calls {
-                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+                exec_counter += 1;
+                let exec_id = format!("ask-exec-{}", exec_counter);
+                progress.on_tool_execution_created(
+                    "ask",
+                    &exec_id,
+                    &call.tool_name,
+                    turn_count,
+                    &tool_args_preview(call),
+                );
+                progress.on_tool_execution_started("ask", &exec_id, &call.tool_name);
+                exec_ids.push(exec_id);
                 futures.push(self.tool_executor.execute(call));
             }
 
             let results: Vec<_> = futures::future::join_all(futures).await;
 
             let mut tool_result_messages = Vec::new();
-            for (call, result) in tool_calls.iter().zip(results) {
+            for ((call, result), exec_id) in tool_calls.iter().zip(results).zip(&exec_ids) {
                 let is_error = !result.is_success();
                 let output = if is_error {
                     result
@@ -186,7 +199,24 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
                     result.output().unwrap_or("").to_string()
                 };
 
-                progress.on_tool_result(&call.tool_name, !is_error);
+                if is_error {
+                    progress.on_tool_execution_failed("ask", exec_id, &call.tool_name, &output);
+                } else {
+                    let duration = result.metadata.duration_ms.unwrap_or(0);
+                    let preview = result
+                        .output()
+                        .unwrap_or("")
+                        .chars()
+                        .take(100)
+                        .collect::<String>();
+                    progress.on_tool_execution_completed(
+                        "ask",
+                        exec_id,
+                        &call.tool_name,
+                        duration,
+                        &preview,
+                    );
+                }
 
                 if let Some(native_id) = call.native_id.clone() {
                     tool_result_messages.push(ToolResultMessage {

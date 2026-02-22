@@ -6,6 +6,17 @@
 
 use std::process::Command;
 
+/// RAII guard that removes a temporary file on drop.
+///
+/// Ensures cleanup even on panic or early return.
+struct TempFileGuard(std::path::PathBuf);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Result of an $EDITOR invocation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorResult {
@@ -69,6 +80,9 @@ pub fn launch_editor_with_options(
         return EditorResult::Cancelled;
     }
 
+    // RAII guard ensures cleanup even on panic
+    let _guard = TempFileGuard(temp_path.clone());
+
     // 3. Detect editor: $VISUAL → $EDITOR → vi
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
@@ -82,8 +96,8 @@ pub fn launch_editor_with_options(
         .stderr(std::process::Stdio::inherit())
         .status();
 
-    // 5. Read back file content
-    let result = match status {
+    // 5. Read back file content (guard drops and cleans up on return)
+    match status {
         Ok(exit_status) if exit_status.success() => match std::fs::read_to_string(&temp_path) {
             Ok(raw) => {
                 let filtered = filter_comments(&raw);
@@ -96,12 +110,7 @@ pub fn launch_editor_with_options(
             Err(_) => EditorResult::Cancelled,
         },
         _ => EditorResult::Cancelled,
-    };
-
-    // 6. Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
-
-    result
+    }
 }
 
 /// Strip lines starting with `#` (comment lines) and trim the result
@@ -165,6 +174,27 @@ mod tests {
                       Line 3";
         let result = filter_comments(input);
         assert_eq!(result, "Line 1\nLine 2\nLine 3");
+    }
+
+    #[test]
+    fn test_temp_file_guard_removes_on_drop() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(".quorum-test-guard.tmp");
+        std::fs::write(&path, "test").unwrap();
+        assert!(path.exists());
+
+        {
+            let _guard = TempFileGuard(path.clone());
+        } // guard drops here
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_temp_file_guard_no_panic_on_missing_file() {
+        let path = std::path::PathBuf::from("/tmp/.quorum-nonexistent-guard.tmp");
+        let _guard = TempFileGuard(path);
+        // Should not panic on drop
     }
 
     #[test]
