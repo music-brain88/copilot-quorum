@@ -206,48 +206,48 @@ fn build_tui_layout_config(config: &FileConfig) -> TuiLayoutConfig {
 
     // Build route overrides from [tui.routes]
     let mut route_overrides = Vec::new();
-    if let Some(ref target) = config.tui.routes.tool_log {
-        if let Some(surface) = parse_route_target(target) {
-            route_overrides.push(RouteOverride {
-                content: ContentSlot::ToolLog,
-                surface,
-            });
-        }
+    if let Some(ref target) = config.tui.routes.tool_log
+        && let Some(surface) = parse_route_target(target)
+    {
+        route_overrides.push(RouteOverride {
+            content: ContentSlot::ToolLog,
+            surface,
+        });
     }
-    if let Some(ref target) = config.tui.routes.notification {
-        if let Some(surface) = parse_route_target(target) {
-            route_overrides.push(RouteOverride {
-                content: ContentSlot::Notification,
-                surface,
-            });
-        }
+    if let Some(ref target) = config.tui.routes.notification
+        && let Some(surface) = parse_route_target(target)
+    {
+        route_overrides.push(RouteOverride {
+            content: ContentSlot::Notification,
+            surface,
+        });
     }
-    if let Some(ref target) = config.tui.routes.hil_prompt {
-        if let Some(surface) = parse_route_target(target) {
-            route_overrides.push(RouteOverride {
-                content: ContentSlot::HilPrompt,
-                surface,
-            });
-        }
+    if let Some(ref target) = config.tui.routes.hil_prompt
+        && let Some(surface) = parse_route_target(target)
+    {
+        route_overrides.push(RouteOverride {
+            content: ContentSlot::HilPrompt,
+            surface,
+        });
     }
 
     // Build surface config from [tui.surfaces.progress_pane]
     let mut surface_config = SurfaceConfig::default();
     if let Some(ref progress) = config.tui.surfaces.progress_pane {
-        if let Some(ref pos) = progress.position {
-            if let Ok(p) = pos.parse::<SurfacePosition>() {
-                surface_config.position = p;
-            }
+        if let Some(ref pos) = progress.position
+            && let Ok(p) = pos.parse::<SurfacePosition>()
+        {
+            surface_config.position = p;
         }
-        if let Some(ref width) = progress.width {
-            if let Some(pct) = width.strip_suffix('%').and_then(|s| s.parse::<u16>().ok()) {
-                surface_config.width_percent = pct;
-            }
+        if let Some(ref width) = progress.width
+            && let Some(pct) = width.strip_suffix('%').and_then(|s| s.parse::<u16>().ok())
+        {
+            surface_config.width_percent = pct;
         }
-        if let Some(ref border) = progress.border {
-            if let Ok(b) = border.parse::<BorderStyle>() {
-                surface_config.border = b;
-            }
+        if let Some(ref border) = progress.border
+            && let Ok(b) = border.parse::<BorderStyle>()
+        {
+            surface_config.border = b;
         }
     }
 
