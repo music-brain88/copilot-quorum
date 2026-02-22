@@ -294,6 +294,21 @@ impl AgentProgressNotifier for TuiProgressBridge {
     fn on_ensemble_fallback(&self, reason: &str) {
         self.emit(TuiEvent::EnsembleFallback(reason.to_string()));
     }
+
+    fn on_ensemble_model_stream_start(&self, model: &str) {
+        self.emit(TuiEvent::EnsembleModelStreamStart(model.to_string()));
+    }
+
+    fn on_ensemble_model_stream_chunk(&self, model: &str, chunk: &str) {
+        self.emit(TuiEvent::EnsembleModelStreamChunk {
+            model: model.to_string(),
+            chunk: chunk.to_string(),
+        });
+    }
+
+    fn on_ensemble_model_stream_end(&self, model: &str) {
+        self.emit(TuiEvent::EnsembleModelStreamEnd(model.to_string()));
+    }
 }
 
 #[cfg(test)]

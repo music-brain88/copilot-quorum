@@ -413,6 +413,27 @@ pub struct EnsembleProgress {
     pub voting_started: bool,
     pub plan_count: Option<usize>,
     pub selected: Option<(String, f64)>,
+    /// Per-model streaming state for live output display.
+    pub model_streams: std::collections::HashMap<String, ModelStreamState>,
+}
+
+/// Per-model streaming state during Ensemble planning.
+#[derive(Debug, Clone)]
+pub struct ModelStreamState {
+    pub model_name: String,
+    pub streaming_text: String,
+    pub status: ModelStreamStatus,
+    pub score: Option<f64>,
+    pub duration_ms: Option<u64>,
+}
+
+/// Status of a model stream during Ensemble planning.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelStreamStatus {
+    Pending,
+    Streaming,
+    Complete,
+    Error(String),
 }
 
 /// TUI input configuration (presentation-layer view)

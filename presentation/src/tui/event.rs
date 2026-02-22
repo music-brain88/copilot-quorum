@@ -151,6 +151,18 @@ pub enum TuiEvent {
     },
     EnsembleFallback(String),
 
+    // -- Ensemble model stream (per-model live output) --
+    EnsembleModelStreamStart(String),
+    EnsembleModelStreamChunk {
+        model: String,
+        chunk: String,
+    },
+    EnsembleModelStreamEnd(String),
+    EnsembleVoteScore {
+        model: String,
+        score: f64,
+    },
+
     // -- Tool execution lifecycle --
     ToolExecutionUpdate {
         task_index: usize,

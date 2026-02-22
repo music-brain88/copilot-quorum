@@ -123,6 +123,8 @@ where
             let system_prompt = system_prompt.to_string();
             let feedback = previous_feedback.map(|s| s.to_string());
 
+            progress.on_ensemble_model_stream_start(&model.to_string());
+
             join_set.spawn(async move {
                 let plan_future = async {
                     let session = gateway
@@ -181,10 +183,23 @@ where
             match result {
                 Ok((model, Ok(PlanningResult::Plan(plan)))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
+                    // Emit plan text as a stream chunk for live display
+                    let model_str = model.to_string();
+                    let summary = format!(
+                        "Objective: {}\nTasks: {}",
+                        plan.objective,
+                        plan.tasks
+                            .iter()
+                            .map(|t| t.description.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    progress.on_ensemble_model_stream_chunk(&model_str, &summary);
+                    progress.on_ensemble_model_stream_end(&model_str);
                     self.conversation_logger.log(ConversationEvent::new(
                         "plan_generated",
                         serde_json::json!({
-                            "model": model.to_string(),
+                            "model": model_str,
                             "objective": plan.objective,
                             "task_count": plan.tasks.len(),
                         }),
@@ -193,21 +208,27 @@ where
                     candidates.push(PlanCandidate::new(model, plan));
                 }
                 Ok((model, Ok(PlanningResult::TextResponse(text)))) => {
+                    let model_str = model.to_string();
                     if text.trim().is_empty() {
                         warn!("Model {} returned empty text response, discarding", model);
+                        progress.on_ensemble_model_stream_end(&model_str);
                         progress.on_ensemble_model_failed(&model, "empty response");
                         failed_count += 1;
                     } else {
                         info!("Model {} returned text response (no plan)", model);
+                        progress.on_ensemble_model_stream_chunk(&model_str, &text);
+                        progress.on_ensemble_model_stream_end(&model_str);
                         progress.on_ensemble_plan_generated(&model);
-                        text_responses.push((model.to_string(), text));
+                        text_responses.push((model_str, text));
                     }
                 }
                 Ok((model, Err(e))) => {
                     // All errors are retryable (timeout, transport close, router stopped, etc.)
                     // since the Copilot CLI may serialize session.send internally, causing
                     // later sessions to fail when earlier ones complete and close the transport.
+                    let model_str = model.to_string();
                     warn!("Model {} failed (will retry after backoff): {}", model, e);
+                    progress.on_ensemble_model_stream_end(&model_str);
                     progress.on_ensemble_model_failed(&model, &e);
                     retryable_models.push(model);
                 }
