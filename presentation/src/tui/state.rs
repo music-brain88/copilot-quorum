@@ -337,18 +337,10 @@ impl MessageRole {
 pub struct ProgressState {
     pub current_phase: Option<AgentPhase>,
     pub phase_name: String,
-    pub current_tool: Option<String>,
-    pub tool_log: Vec<ToolLogEntry>,
     pub quorum_status: Option<QuorumStatus>,
     pub task_progress: Option<TaskProgress>,
     pub ensemble_progress: Option<EnsembleProgress>,
     pub is_running: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ToolLogEntry {
-    pub tool_name: String,
-    pub success: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -390,6 +382,7 @@ pub struct ToolExecutionDisplay {
     pub tool_name: String,
     pub state: ToolExecutionDisplayStatus,
     pub duration_ms: Option<u64>,
+    pub args_preview: Option<String>,
 }
 
 /// Status of a tool execution for display

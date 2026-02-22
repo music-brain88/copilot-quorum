@@ -118,19 +118,6 @@ pub enum TuiEvent {
         total: usize,
         output: Option<String>,
     },
-    ToolCall {
-        tool_name: String,
-        args: String,
-    },
-    ToolResult {
-        tool_name: String,
-        success: bool,
-    },
-    ToolError {
-        tool_name: String,
-        message: String,
-    },
-
     // -- Quorum --
     QuorumStart {
         phase: String,
@@ -171,6 +158,7 @@ pub enum TuiEvent {
         tool_name: String,
         state: ToolExecutionDisplayState,
         duration_ms: Option<u64>,
+        args_preview: Option<String>,
     },
 
     // -- Other --

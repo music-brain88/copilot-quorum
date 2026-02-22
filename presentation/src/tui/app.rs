@@ -18,7 +18,7 @@ use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
 use super::state::{
     DisplayMessage, EnsembleProgress, HilPrompt, QuorumStatus, TaskProgress, TaskSummary,
-    ToolExecutionDisplay, ToolExecutionDisplayStatus, ToolLogEntry, TuiInputConfig, TuiState,
+    ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiInputConfig, TuiState,
 };
 use super::tab::PaneKind;
 use super::widgets::{
@@ -745,7 +745,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     let progress = &mut pane.progress;
                     progress.current_phase = Some(phase);
                     progress.phase_name = name;
-                    progress.current_tool = None;
                 }
             }
             TuiEvent::TaskStart {
@@ -866,45 +865,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 }
                 state.push_message_to(id, DisplayMessage::system(msg));
             }
-            TuiEvent::ToolCall { tool_name, args: _ } => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    let progress = &mut pane.progress;
-                    progress.current_tool = Some(tool_name.clone());
-                    progress.tool_log.push(ToolLogEntry {
-                        tool_name,
-                        success: None,
-                    });
-                }
-            }
-            TuiEvent::ToolResult { tool_name, success } => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    let progress = &mut pane.progress;
-                    progress.current_tool = None;
-                    if let Some(entry) = progress
-                        .tool_log
-                        .iter_mut()
-                        .rev()
-                        .find(|e| e.tool_name == tool_name && e.success.is_none())
-                    {
-                        entry.success = Some(success);
-                    }
-                }
-            }
-            TuiEvent::ToolError { tool_name, message } => {
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    let progress = &mut pane.progress;
-                    progress.current_tool = None;
-                    if let Some(entry) = progress
-                        .tool_log
-                        .iter_mut()
-                        .rev()
-                        .find(|e| e.tool_name == tool_name && e.success.is_none())
-                    {
-                        entry.success = Some(false);
-                    }
-                }
-                state.set_flash(format!("Tool error: {} - {}", tool_name, message));
-            }
             TuiEvent::InteractionCompleted {
                 parent_id,
                 result_text,
@@ -1016,7 +976,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
                     let progress = &mut pane.progress;
                     progress.is_running = true;
-                    progress.tool_log.clear();
                     progress.quorum_status = None;
                     progress.task_progress = None;
                     progress.ensemble_progress = None;
@@ -1030,7 +989,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                     let progress = &mut pane.progress;
                     progress.is_running = false;
                     progress.current_phase = None;
-                    progress.current_tool = None;
                 }
                 if success {
                     state.set_flash("Agent completed successfully");
@@ -1057,12 +1015,33 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 tool_name,
                 state: exec_state,
                 duration_ms,
+                args_preview,
             } => {
                 use super::event::ToolExecutionDisplayState;
 
-                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
-                    && let Some(ref mut tp) = pane.progress.task_progress
+                // Build flash message outside the mutable borrow scope
+                let flash_msg = if let ToolExecutionDisplayState::Error { ref message } =
+                    exec_state
                 {
+                    Some(format!("Tool error: {} - {}", tool_name, message))
+                } else {
+                    None
+                };
+
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
+                    // Auto-initialize task_progress for non-agent contexts
+                    // (gather_context, run_ask) that don't emit TaskStart
+                    let tp = pane
+                        .progress
+                        .task_progress
+                        .get_or_insert_with(|| TaskProgress {
+                            current_index: 0,
+                            total: 0,
+                            description: String::new(),
+                            completed_tasks: Vec::new(),
+                            active_tool_executions: Vec::new(),
+                        });
+
                     let display_status = match exec_state {
                         ToolExecutionDisplayState::Pending => ToolExecutionDisplayStatus::Pending,
                         ToolExecutionDisplayState::Running => ToolExecutionDisplayStatus::Running,
@@ -1087,8 +1066,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                             tool_name,
                             state: display_status,
                             duration_ms,
+                            args_preview,
                         });
                     }
+                }
+
+                if let Some(msg) = flash_msg {
+                    state.set_flash(msg);
                 }
             }
             // Config/mode events handled by presenter already

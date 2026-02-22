@@ -10,3 +10,4 @@ pub mod run_agent;
 pub mod run_ask;
 pub mod run_quorum;
 pub(crate) mod shared;
+pub(crate) mod tool_helpers;

@@ -16,6 +16,7 @@ use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::run_agent::RunAgentError;
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
+use crate::use_cases::tool_helpers::tool_args_preview;
 use quorum_domain::core::string::truncate;
 use quorum_domain::{AgentContext, AgentPromptTemplate, ProjectContext, extract_references};
 use std::path::Path;
@@ -237,13 +238,50 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
             check_cancelled(&self.cancellation_token)?;
 
             let mut tool_result_messages = Vec::new();
+            let mut exec_counter = 0usize;
 
             for call in &tool_calls {
-                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
+                exec_counter += 1;
+                let exec_id = format!("ctx-exec-{}", exec_counter);
+                progress.on_tool_execution_created(
+                    "context",
+                    &exec_id,
+                    &call.tool_name,
+                    turn_count,
+                    &tool_args_preview(call),
+                );
+                progress.on_tool_execution_started("context", &exec_id, &call.tool_name);
 
                 let result = self.tool_executor.execute(call).await;
                 let success = result.is_success();
-                progress.on_tool_result(&call.tool_name, success);
+
+                if success {
+                    let duration = result.metadata.duration_ms.unwrap_or(0);
+                    let preview = result
+                        .output()
+                        .unwrap_or("")
+                        .chars()
+                        .take(100)
+                        .collect::<String>();
+                    progress.on_tool_execution_completed(
+                        "context",
+                        &exec_id,
+                        &call.tool_name,
+                        duration,
+                        &preview,
+                    );
+                } else {
+                    let error = result
+                        .error()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_default();
+                    progress.on_tool_execution_failed(
+                        "context",
+                        &exec_id,
+                        &call.tool_name,
+                        &error,
+                    );
+                }
 
                 let (is_error, output) = if success {
                     let output = result.output().unwrap_or("").to_string();

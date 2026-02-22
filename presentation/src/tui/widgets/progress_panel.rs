@@ -212,47 +212,6 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
             lines.push(Line::from(""));
         }
 
-        // Current tool
-        if let Some(ref tool) = progress.current_tool {
-            lines.push(Line::from(vec![
-                Span::styled("Tool: ", Style::default().fg(Color::White)),
-                Span::styled(format!("🔧 {}", tool), Style::default().fg(Color::Cyan)),
-            ]));
-        }
-
-        // Recent tool log (last 5)
-        let recent_tools: Vec<_> = progress
-            .tool_log
-            .iter()
-            .rev()
-            .take(5)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-
-        if !recent_tools.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Recent:",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for entry in recent_tools {
-                let icon = match entry.success {
-                    Some(true) => Span::styled("✓ ", Style::default().fg(Color::Green)),
-                    Some(false) => Span::styled("✗ ", Style::default().fg(Color::Red)),
-                    None => Span::styled("… ", Style::default().fg(Color::Yellow)),
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    icon,
-                    Span::styled(&entry.tool_name, Style::default().fg(Color::DarkGray)),
-                ]));
-            }
-        }
-
         // Quorum status
         if let Some(ref quorum) = progress.quorum_status {
             lines.push(Line::from(""));
@@ -289,6 +248,9 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
 }
 
 /// Render a single tool execution line in the progress panel.
+///
+/// Format: `    ▸ read_file  src/main.rs`
+///         `    ✓ run_command  cargo test (1.2s)`
 fn render_tool_execution_line<'a>(lines: &mut Vec<Line<'a>>, exec: &ToolExecutionDisplay) {
     let (icon, color, suffix) = match &exec.state {
         ToolExecutionDisplayStatus::Pending => ("…", Color::DarkGray, String::new()),
@@ -303,12 +265,22 @@ fn render_tool_execution_line<'a>(lines: &mut Vec<Line<'a>>, exec: &ToolExecutio
         }
     };
 
-    lines.push(Line::from(vec![
+    let mut spans = vec![
         Span::raw("    "),
         Span::styled(format!("{} ", icon), Style::default().fg(color)),
         Span::styled(exec.tool_name.clone(), Style::default().fg(Color::DarkGray)),
-        Span::styled(suffix, Style::default().fg(Color::DarkGray)),
-    ]));
+    ];
+
+    // Show args preview after tool name (e.g., "  src/main.rs")
+    if let Some(ref preview) = exec.args_preview {
+        spans.push(Span::styled(
+            format!("  {}", preview),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
+    lines.push(Line::from(spans));
 }
 
 /// Format a duration in milliseconds to a human-readable string.
