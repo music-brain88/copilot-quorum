@@ -7,7 +7,8 @@
 //!
 //! Phase 1: each Tab contains exactly one Pane (no splits).
 
-use super::state::{DisplayMessage, ProgressState};
+use super::content::{ConversationContent, ProgressContent};
+use super::state::DisplayMessage;
 use quorum_domain::core::string::truncate;
 use quorum_domain::interaction::{InteractionForm, InteractionId};
 
@@ -45,18 +46,15 @@ pub struct Pane {
     // -- Tab title (auto-generated from first user message) --
     pub title: Option<String>,
 
-    // -- Conversation --
-    pub messages: Vec<DisplayMessage>,
-    pub streaming_text: String,
-    pub scroll_offset: usize,
-    pub auto_scroll: bool,
+    // -- Conversation (messages + streaming + scroll) --
+    pub conversation: ConversationContent,
 
     // -- Input buffer (per-pane, preserves drafts across tab switches) --
     pub input: String,
     pub cursor_pos: usize,
 
     // -- Progress (per-pane, ready for future parallel execution) --
-    pub progress: ProgressState,
+    pub progress: ProgressContent,
 }
 
 impl Pane {
@@ -65,13 +63,10 @@ impl Pane {
             id,
             kind,
             title: None,
-            messages: Vec::new(),
-            streaming_text: String::new(),
-            scroll_offset: 0,
-            auto_scroll: true,
+            conversation: ConversationContent::default(),
             input: String::new(),
             cursor_pos: 0,
-            progress: ProgressState::default(),
+            progress: ProgressContent::default(),
         }
     }
 
@@ -232,9 +227,9 @@ impl TabManager {
     ) -> bool {
         if let Some(index) = self.find_tab_index_by_interaction(interaction_id) {
             let pane = &mut self.tabs[index].pane;
-            pane.messages.push(msg);
-            if pane.auto_scroll {
-                pane.scroll_offset = 0;
+            pane.conversation.messages.push(msg);
+            if pane.conversation.auto_scroll {
+                pane.conversation.scroll_offset = 0;
             }
             true
         } else {
@@ -415,8 +410,8 @@ mod tests {
         let pushed =
             mgr.push_message_to_interaction(interaction_id, DisplayMessage::system("hello"));
         assert!(pushed);
-        assert_eq!(mgr.tabs()[1].pane.messages.len(), 1);
-        assert_eq!(mgr.tabs()[1].pane.messages[0].content, "hello");
+        assert_eq!(mgr.tabs()[1].pane.conversation.messages.len(), 1);
+        assert_eq!(mgr.tabs()[1].pane.conversation.messages[0].content, "hello");
 
         let missing =
             mgr.push_message_to_interaction(InteractionId(999), DisplayMessage::system("nope"));

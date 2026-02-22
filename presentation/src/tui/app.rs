@@ -374,6 +374,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Render all widgets
     fn render(&self, frame: &mut ratatui::Frame, state: &TuiState) {
+        use super::content::ContentSlot;
+        use super::surface::{SurfaceId, SurfaceLayout};
+
         let show_tab_bar = state.tabs.len() > 1;
         let layout = MainLayout::compute_with_input_config(
             frame.area(),
@@ -382,12 +385,30 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             show_tab_bar,
         );
 
+        // Build surface layout from the computed main layout
+        let surfaces = SurfaceLayout::from_main_layout(&layout);
+
+        // Render via route table: look up surface for each content slot
         frame.render_widget(HeaderWidget::new(state), layout.header);
-        if let Some(tab_bar_area) = layout.tab_bar {
+        if let Some(tab_bar_area) = surfaces.area_for(SurfaceId::TabBar) {
             frame.render_widget(TabBarWidget::new(&state.tabs), tab_bar_area);
         }
-        frame.render_widget(ConversationWidget::new(state), layout.conversation);
-        frame.render_widget(ProgressPanelWidget::new(state), layout.progress);
+        if let Some(area) = surfaces.area_for(
+            state
+                .route
+                .surface_for(ContentSlot::Conversation)
+                .unwrap_or(SurfaceId::MainPane),
+        ) {
+            frame.render_widget(ConversationWidget::new(state), area);
+        }
+        if let Some(area) = surfaces.area_for(
+            state
+                .route
+                .surface_for(ContentSlot::Progress)
+                .unwrap_or(SurfaceId::Sidebar),
+        ) {
+            frame.render_widget(ProgressPanelWidget::new(state), area);
+        }
         frame.render_widget(InputWidget::new(state), layout.input);
         frame.render_widget(StatusBarWidget::new(state), layout.status_bar);
 
@@ -731,9 +752,9 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         match event {
             TuiEvent::StreamChunk(chunk) => {
                 if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-                    pane.streaming_text.push_str(&chunk);
-                    if pane.auto_scroll {
-                        pane.scroll_offset = 0;
+                    pane.conversation.streaming_text.push_str(&chunk);
+                    if pane.conversation.auto_scroll {
+                        pane.conversation.scroll_offset = 0;
                     }
                 }
             }

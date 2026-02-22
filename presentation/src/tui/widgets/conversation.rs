@@ -22,7 +22,7 @@ impl<'a> ConversationWidget<'a> {
         let mut lines: Vec<Line> = Vec::new();
 
         let pane = self.state.tabs.active_pane();
-        for msg in &pane.messages {
+        for msg in &pane.conversation.messages {
             let role_style = Style::default()
                 .fg(msg.role.color())
                 .add_modifier(Modifier::BOLD);
@@ -39,14 +39,14 @@ impl<'a> ConversationWidget<'a> {
         }
 
         // Append streaming text if present
-        if !pane.streaming_text.is_empty() {
+        if !pane.conversation.streaming_text.is_empty() {
             lines.push(Line::from(Span::styled(
                 "Agent: ",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             )));
-            for content_line in pane.streaming_text.lines() {
+            for content_line in pane.conversation.streaming_text.lines() {
                 lines.push(Line::from(format!("  {}", content_line)));
             }
             lines.push(Line::from(Span::styled(
@@ -70,7 +70,7 @@ impl<'a> Widget for ConversationWidget<'a> {
         let pane = self.state.tabs.active_pane();
         let scroll = if total_lines > visible_height {
             let max_scroll = total_lines - visible_height;
-            let offset = (pane.scroll_offset as u16).min(max_scroll);
+            let offset = (pane.conversation.scroll_offset as u16).min(max_scroll);
             max_scroll - offset
         } else {
             0
