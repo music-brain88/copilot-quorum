@@ -509,9 +509,19 @@ mod tests {
         state.tabs.active_pane_mut().conversation.streaming_text = "Hello world".into();
 
         state.finalize_stream();
-        assert!(state.tabs.active_pane().conversation.streaming_text.is_empty());
+        assert!(
+            state
+                .tabs
+                .active_pane()
+                .conversation
+                .streaming_text
+                .is_empty()
+        );
         assert_eq!(state.tabs.active_pane().conversation.messages.len(), 1);
-        assert_eq!(state.tabs.active_pane().conversation.messages[0].content, "Hello world");
+        assert_eq!(
+            state.tabs.active_pane().conversation.messages[0].content,
+            "Hello world"
+        );
         assert_eq!(
             state.tabs.active_pane().conversation.messages[0].role,
             MessageRole::Assistant
@@ -531,7 +541,10 @@ mod tests {
 
         let index = state.tabs.find_tab_index_by_interaction(id).unwrap();
         assert_eq!(state.tabs.tabs()[index].pane.conversation.messages.len(), 1);
-        assert_eq!(state.tabs.tabs()[index].pane.conversation.messages[0].content, "hello");
+        assert_eq!(
+            state.tabs.tabs()[index].pane.conversation.messages[0].content,
+            "hello"
+        );
     }
 
     #[test]

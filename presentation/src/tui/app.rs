@@ -394,12 +394,18 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             frame.render_widget(TabBarWidget::new(&state.tabs), tab_bar_area);
         }
         if let Some(area) = surfaces.area_for(
-            state.route.surface_for(ContentSlot::Conversation).unwrap_or(SurfaceId::MainPane),
+            state
+                .route
+                .surface_for(ContentSlot::Conversation)
+                .unwrap_or(SurfaceId::MainPane),
         ) {
             frame.render_widget(ConversationWidget::new(state), area);
         }
         if let Some(area) = surfaces.area_for(
-            state.route.surface_for(ContentSlot::Progress).unwrap_or(SurfaceId::Sidebar),
+            state
+                .route
+                .surface_for(ContentSlot::Progress)
+                .unwrap_or(SurfaceId::Sidebar),
         ) {
             frame.render_widget(ProgressPanelWidget::new(state), area);
         }

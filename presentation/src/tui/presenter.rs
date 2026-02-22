@@ -319,7 +319,14 @@ mod tests {
 
         presenter.apply(&mut state, &UiEvent::HistoryCleared);
         assert!(state.tabs.active_pane().conversation.messages.is_empty());
-        assert!(state.tabs.active_pane().conversation.streaming_text.is_empty());
+        assert!(
+            state
+                .tabs
+                .active_pane()
+                .conversation
+                .streaming_text
+                .is_empty()
+        );
     }
 
     #[test]
