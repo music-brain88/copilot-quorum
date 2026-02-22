@@ -15,6 +15,8 @@ pub mod tab_bar;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+use super::layout::LayoutPreset;
+
 /// Compute the main layout regions from a terminal area
 pub struct MainLayout {
     pub header: Rect,
@@ -23,6 +25,8 @@ pub struct MainLayout {
     pub progress: Rect,
     pub input: Rect,
     pub status_bar: Rect,
+    /// Third pane for Wide layout (tool log display). None for other presets.
+    pub tool_pane: Option<Rect>,
 }
 
 impl MainLayout {
@@ -33,72 +37,208 @@ impl MainLayout {
     /// `show_tab_bar` adds a 1-row tab bar between header and main area.
     /// The input area grows from 3 (1 line + borders) up to max_input_height + 2 (borders),
     /// but is capped to prevent pushing other widgets out of the terminal.
+    ///
+    /// Delegates to `compute_with_layout()` with `LayoutPreset::Default` and threshold=0.
+    #[allow(dead_code)]
     pub fn compute_with_input_config(
         area: Rect,
         input_lines: u16,
         max_input_height: u16,
         show_tab_bar: bool,
     ) -> Self {
+        Self::compute_with_layout(
+            area,
+            input_lines,
+            max_input_height,
+            show_tab_bar,
+            LayoutPreset::Default,
+            0,
+        )
+    }
+
+    /// Compute layout with a preset and flex threshold.
+    ///
+    /// If `area.width < flex_threshold`, the preset falls back to Minimal.
+    pub fn compute_with_layout(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+        show_tab_bar: bool,
+        preset: LayoutPreset,
+        flex_threshold: u16,
+    ) -> Self {
+        // Responsive fallback: narrow terminal → Minimal
+        let effective_preset = if flex_threshold > 0 && area.width < flex_threshold {
+            LayoutPreset::Minimal
+        } else {
+            preset
+        };
+
+        match effective_preset {
+            LayoutPreset::Default => {
+                Self::compute_default(area, input_lines, max_input_height, show_tab_bar)
+            }
+            LayoutPreset::Minimal => {
+                Self::compute_minimal(area, input_lines, max_input_height, show_tab_bar)
+            }
+            LayoutPreset::Wide => {
+                Self::compute_wide(area, input_lines, max_input_height, show_tab_bar)
+            }
+            LayoutPreset::Stacked => {
+                Self::compute_stacked(area, input_lines, max_input_height, show_tab_bar)
+            }
+        }
+    }
+
+    /// Default: 70/30 horizontal split (conversation + sidebar).
+    fn compute_default(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+        show_tab_bar: bool,
+    ) -> Self {
+        let (header, tab_bar, main_area, input, status_bar) =
+            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
+
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(main_area);
+
+        Self {
+            header,
+            tab_bar,
+            conversation: horizontal[0],
+            progress: horizontal[1],
+            input,
+            status_bar,
+            tool_pane: None,
+        }
+    }
+
+    /// Minimal: full-width conversation, no sidebar.
+    fn compute_minimal(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+        show_tab_bar: bool,
+    ) -> Self {
+        let (header, tab_bar, main_area, input, status_bar) =
+            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
+
+        Self {
+            header,
+            tab_bar,
+            conversation: main_area,
+            progress: Rect::ZERO,
+            input,
+            status_bar,
+            tool_pane: None,
+        }
+    }
+
+    /// Wide: 60/20/20 three-pane horizontal split.
+    fn compute_wide(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+        show_tab_bar: bool,
+    ) -> Self {
+        let (header, tab_bar, main_area, input, status_bar) =
+            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
+
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(60),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
+            ])
+            .split(main_area);
+
+        Self {
+            header,
+            tab_bar,
+            conversation: horizontal[0],
+            progress: horizontal[1],
+            input,
+            status_bar,
+            tool_pane: Some(horizontal[2]),
+        }
+    }
+
+    /// Stacked: vertical split (conversation 70% top, progress 30% bottom).
+    fn compute_stacked(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+        show_tab_bar: bool,
+    ) -> Self {
+        let (header, tab_bar, main_area, input, status_bar) =
+            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
+
+        let vertical = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(main_area);
+
+        Self {
+            header,
+            tab_bar,
+            conversation: vertical[0],
+            progress: vertical[1],
+            input,
+            status_bar,
+            tool_pane: None,
+        }
+    }
+
+    /// Shared outer region computation: header, optional tab_bar, main fill, input, status bar.
+    fn compute_outer_regions(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+        show_tab_bar: bool,
+    ) -> (Rect, Option<Rect>, Rect, Rect, Rect) {
         let header_h: u16 = 3;
         let tab_bar_h: u16 = if show_tab_bar { 1 } else { 0 };
         let status_h: u16 = 1;
 
-        // Cap input height so header + tab_bar + input + status never exceeds terminal height.
         let max_for_input = area.height.saturating_sub(header_h + tab_bar_h + status_h);
         let desired_h = (input_lines + 2).clamp(3, max_input_height + 2);
         let input_h = desired_h.min(max_for_input).max(1);
 
         if show_tab_bar {
-            // Vertical split: header | tab_bar | main | input | status_bar
             let vertical = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(header_h),  // Header
-                    Constraint::Length(tab_bar_h), // Tab bar
-                    Constraint::Fill(1),           // Main (conversation + progress)
-                    Constraint::Length(input_h),   // Input (dynamic)
-                    Constraint::Length(status_h),  // Status bar
+                    Constraint::Length(header_h),
+                    Constraint::Length(tab_bar_h),
+                    Constraint::Fill(1),
+                    Constraint::Length(input_h),
+                    Constraint::Length(status_h),
                 ])
                 .split(area);
 
-            let horizontal = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .split(vertical[2]);
-
-            Self {
-                header: vertical[0],
-                tab_bar: Some(vertical[1]),
-                conversation: horizontal[0],
-                progress: horizontal[1],
-                input: vertical[3],
-                status_bar: vertical[4],
-            }
+            (
+                vertical[0],
+                Some(vertical[1]),
+                vertical[2],
+                vertical[3],
+                vertical[4],
+            )
         } else {
-            // Vertical split: header | main | input | status_bar (no tab bar)
             let vertical = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(header_h), // Header
-                    Constraint::Fill(1),          // Main (conversation + progress)
-                    Constraint::Length(input_h),  // Input (dynamic)
-                    Constraint::Length(status_h), // Status bar
+                    Constraint::Length(header_h),
+                    Constraint::Fill(1),
+                    Constraint::Length(input_h),
+                    Constraint::Length(status_h),
                 ])
                 .split(area);
 
-            let horizontal = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .split(vertical[1]);
-
-            Self {
-                header: vertical[0],
-                tab_bar: None,
-                conversation: horizontal[0],
-                progress: horizontal[1],
-                input: vertical[2],
-                status_bar: vertical[3],
-            }
+            (vertical[0], None, vertical[1], vertical[2], vertical[3])
         }
     }
 

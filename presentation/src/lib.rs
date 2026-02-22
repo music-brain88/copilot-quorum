@@ -23,9 +23,11 @@ pub use agent::progress::{AgentProgressReporter, SimpleAgentProgress};
 pub use agent::thought::{ThoughtStream, format_thoughts, summarize_thoughts};
 
 // TUI exports
+pub use tui::LayoutPreset;
 pub use tui::TuiApp;
 pub use tui::TuiHumanIntervention;
 pub use tui::TuiInputConfig;
+pub use tui::TuiLayoutConfig;
 pub use tui::TuiPresenter;
 pub use tui::TuiProgressBridge;
 

@@ -13,8 +13,8 @@ use quorum_infrastructure::{
     JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
 };
 use quorum_presentation::{
-    AgentProgressReporter, Cli, InteractiveHumanIntervention, OutputConfig, ReplConfig, TuiApp,
-    TuiInputConfig,
+    AgentProgressReporter, Cli, InteractiveHumanIntervention, LayoutPreset, OutputConfig,
+    ReplConfig, TuiApp, TuiInputConfig, TuiLayoutConfig,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -183,6 +183,80 @@ fn build_configs(cli: &Cli, file: &FileConfig) -> (OutputConfig, ReplConfig) {
     );
 
     (output, repl)
+}
+
+/// Build `TuiLayoutConfig` from TOML `FileConfig`.
+///
+/// Parses preset, flex_threshold, route overrides, and surface config.
+/// Invalid values fall back to defaults (warnings are already emitted by `validate()`).
+fn build_tui_layout_config(config: &FileConfig) -> TuiLayoutConfig {
+    use quorum_presentation::tui::content::ContentSlot;
+    use quorum_presentation::tui::layout::{
+        BorderStyle, RouteOverride, SurfaceConfig, SurfacePosition, parse_route_target,
+    };
+
+    let preset = config
+        .tui
+        .layout
+        .preset
+        .parse::<LayoutPreset>()
+        .unwrap_or_default();
+
+    let flex_threshold = config.tui.layout.flex_threshold;
+
+    // Build route overrides from [tui.routes]
+    let mut route_overrides = Vec::new();
+    if let Some(ref target) = config.tui.routes.tool_log {
+        if let Some(surface) = parse_route_target(target) {
+            route_overrides.push(RouteOverride {
+                content: ContentSlot::ToolLog,
+                surface,
+            });
+        }
+    }
+    if let Some(ref target) = config.tui.routes.notification {
+        if let Some(surface) = parse_route_target(target) {
+            route_overrides.push(RouteOverride {
+                content: ContentSlot::Notification,
+                surface,
+            });
+        }
+    }
+    if let Some(ref target) = config.tui.routes.hil_prompt {
+        if let Some(surface) = parse_route_target(target) {
+            route_overrides.push(RouteOverride {
+                content: ContentSlot::HilPrompt,
+                surface,
+            });
+        }
+    }
+
+    // Build surface config from [tui.surfaces.progress_pane]
+    let mut surface_config = SurfaceConfig::default();
+    if let Some(ref progress) = config.tui.surfaces.progress_pane {
+        if let Some(ref pos) = progress.position {
+            if let Ok(p) = pos.parse::<SurfacePosition>() {
+                surface_config.position = p;
+            }
+        }
+        if let Some(ref width) = progress.width {
+            if let Some(pct) = width.strip_suffix('%').and_then(|s| s.parse::<u16>().ok()) {
+                surface_config.width_percent = pct;
+            }
+        }
+        if let Some(ref border) = progress.border {
+            if let Ok(b) = border.parse::<BorderStyle>() {
+                surface_config.border = b;
+            }
+        }
+    }
+
+    TuiLayoutConfig {
+        preset,
+        flex_threshold,
+        surface_config,
+        route_overrides,
+    }
 }
 
 #[tokio::main]
@@ -392,6 +466,9 @@ async fn main() -> Result<()> {
             context_header: config.tui.input.context_header,
         };
 
+        // Build TUI layout config from TOML
+        let tui_layout_config = build_tui_layout_config(&config);
+
         // Create reference resolver (graceful: None if gh CLI not available)
         let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
@@ -403,7 +480,8 @@ async fn main() -> Result<()> {
             quorum_config,
             conversation_logger.clone(),
         )
-        .with_tui_config(tui_input_config);
+        .with_tui_config(tui_input_config)
+        .with_layout_config(tui_layout_config);
         if let Some(resolver) = reference_resolver {
             tui_app = tui_app.with_reference_resolver(Arc::new(resolver));
         }
