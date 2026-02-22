@@ -188,7 +188,6 @@ impl TuiPresenter {
             let progress = &mut state.tabs.active_pane_mut().progress;
             progress.is_running = false;
             progress.current_phase = None;
-            progress.current_tool = None;
         }
 
         let status = if result.success {

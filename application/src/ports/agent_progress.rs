@@ -91,6 +91,7 @@ pub trait AgentProgressNotifier: Send + Sync {
         _execution_id: &str,
         _tool_name: &str,
         _turn: usize,
+        _args_preview: &str,
     ) {
     }
 

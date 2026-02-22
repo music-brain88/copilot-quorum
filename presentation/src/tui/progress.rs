@@ -5,7 +5,7 @@
 //! everything goes through the channel for ratatui rendering.
 
 use super::event::{RoutedTuiEvent, TuiEvent};
-use quorum_application::{AgentProgressNotifier, ErrorCategory};
+use quorum_application::AgentProgressNotifier;
 use quorum_domain::{AgentPhase, InteractionId, Model, Plan, ReviewRound, Task, Thought};
 use tokio::sync::mpsc;
 
@@ -93,6 +93,7 @@ impl AgentProgressNotifier for TuiProgressBridge {
         execution_id: &str,
         tool_name: &str,
         _turn: usize,
+        args_preview: &str,
     ) {
         self.emit(TuiEvent::ToolExecutionUpdate {
             task_index: 0, // Will be overridden by current task progress
@@ -100,6 +101,11 @@ impl AgentProgressNotifier for TuiProgressBridge {
             tool_name: tool_name.to_string(),
             state: super::event::ToolExecutionDisplayState::Pending,
             duration_ms: None,
+            args_preview: if args_preview.is_empty() {
+                None
+            } else {
+                Some(args_preview.to_string())
+            },
         });
     }
 
@@ -110,6 +116,7 @@ impl AgentProgressNotifier for TuiProgressBridge {
             tool_name: tool_name.to_string(),
             state: super::event::ToolExecutionDisplayState::Running,
             duration_ms: None,
+            args_preview: None,
         });
     }
 
@@ -129,6 +136,7 @@ impl AgentProgressNotifier for TuiProgressBridge {
                 preview: output_preview.to_string(),
             },
             duration_ms: Some(duration_ms),
+            args_preview: None,
         });
     }
 
@@ -147,27 +155,7 @@ impl AgentProgressNotifier for TuiProgressBridge {
                 message: error.to_string(),
             },
             duration_ms: None,
-        });
-    }
-
-    fn on_tool_call(&self, tool_name: &str, args: &str) {
-        self.emit(TuiEvent::ToolCall {
-            tool_name: tool_name.to_string(),
-            args: args.to_string(),
-        });
-    }
-
-    fn on_tool_result(&self, tool_name: &str, success: bool) {
-        self.emit(TuiEvent::ToolResult {
-            tool_name: tool_name.to_string(),
-            success,
-        });
-    }
-
-    fn on_tool_error(&self, tool_name: &str, _category: ErrorCategory, message: &str) {
-        self.emit(TuiEvent::ToolError {
-            tool_name: tool_name.to_string(),
-            message: message.to_string(),
+            args_preview: None,
         });
     }
 
@@ -326,18 +314,40 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_call_emits_event() {
+    fn test_tool_execution_created_emits_event() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let bridge = TuiProgressBridge::new(tx);
 
-        bridge.on_tool_call("read_file", "/test.rs");
+        bridge.on_tool_execution_created("task-1", "exec-1", "read_file", 1, "src/main.rs");
 
         let event = rx.try_recv().unwrap().event;
-        if let TuiEvent::ToolCall { tool_name, args } = event {
+        if let TuiEvent::ToolExecutionUpdate {
+            execution_id,
+            tool_name,
+            args_preview,
+            ..
+        } = event
+        {
+            assert_eq!(execution_id, "exec-1");
             assert_eq!(tool_name, "read_file");
-            assert_eq!(args, "/test.rs");
+            assert_eq!(args_preview, Some("src/main.rs".to_string()));
         } else {
-            panic!("Expected ToolCall event");
+            panic!("Expected ToolExecutionUpdate event");
+        }
+    }
+
+    #[test]
+    fn test_tool_execution_created_empty_preview() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let bridge = TuiProgressBridge::new(tx);
+
+        bridge.on_tool_execution_created("task-1", "exec-1", "read_file", 1, "");
+
+        let event = rx.try_recv().unwrap().event;
+        if let TuiEvent::ToolExecutionUpdate { args_preview, .. } = event {
+            assert_eq!(args_preview, None);
+        } else {
+            panic!("Expected ToolExecutionUpdate event");
         }
     }
 

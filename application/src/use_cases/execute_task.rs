@@ -11,6 +11,7 @@ use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
+use crate::use_cases::tool_helpers::tool_args_preview;
 use quorum_domain::agent::model_config::ModelConfig;
 use quorum_domain::context::context_budget::ContextBudget;
 use quorum_domain::context::task_result_buffer::TaskResultBuffer;
@@ -428,6 +429,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                         &exec_id,
                         &call.tool_name,
                         turn_count,
+                        &tool_args_preview(call),
                     );
 
                     // Transition to Running
@@ -437,7 +439,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     all_executions.push(exec);
                     exec_indices.push(all_executions.len() - 1);
 
-                    progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
                     self.conversation_logger.log(ConversationEvent::new(
                         "tool_call",
                         serde_json::json!({
@@ -507,8 +508,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                         );
                     }
 
-                    progress.on_tool_result(&call.tool_name, !is_error);
-
                     if !is_error {
                         all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
                     }
@@ -546,6 +545,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     &exec_id,
                     &call.tool_name,
                     turn_count,
+                    &tool_args_preview(call),
                 );
 
                 // Action review for high-risk operations
@@ -620,7 +620,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                 exec.mark_running();
                 progress.on_tool_execution_started(task_id_str, &exec_id, &call.tool_name);
 
-                progress.on_tool_call(&call.tool_name, &format!("{:?}", call.arguments));
                 self.conversation_logger.log(ConversationEvent::new(
                     "tool_call",
                     serde_json::json!({
@@ -682,8 +681,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<
                     );
                 }
                 all_executions.push(exec);
-
-                progress.on_tool_result(&call.tool_name, !is_error);
 
                 if !is_error {
                     all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
