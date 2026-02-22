@@ -92,6 +92,20 @@ editor_action = "return_to_insert"  # "return_to_insert" or "submit"
 max_height = 10                # Max input area height in lines
 dynamic_height = true          # Input area grows with content
 context_header = true          # Show context header in $EDITOR
+
+[tui.layout]
+preset = "default"             # "default", "minimal", "wide", "stacked"
+# flex_threshold = 120         # Responsive Minimal fallback width threshold
+
+# [tui.routes]
+# tool_log = "sidebar"         # Route target for tool logs
+# notification = "status_bar"  # Route target for notifications
+# hil_prompt = "overlay"       # Route target for HiL prompts
+
+# [tui.surfaces.progress_pane]
+# position = "right"           # "right", "left", "bottom"
+# width = "30%"                # Width as percentage
+# border = "rounded"           # "rounded", "plain", "none", "double"
 ```
 
 ## Architecture

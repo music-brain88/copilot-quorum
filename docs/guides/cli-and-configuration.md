@@ -234,6 +234,20 @@ editor_action = "return_to_insert"  # $EDITOR 保存後の動作: "return_to_ins
 max_height = 10                # INSERT モード入力エリアの最大行数
 dynamic_height = true          # 入力内容に応じた動的リサイズ
 context_header = true          # $EDITOR 起動時のコンテキストヘッダー表示
+
+[tui.layout]
+preset = "default"             # レイアウトプリセット: "default", "minimal", "wide", "stacked"
+flex_threshold = 120           # レスポンシブ Minimal フォールバックの端末幅閾値
+
+# [tui.routes]
+# tool_log = "sidebar"         # ツールログの表示先
+# notification = "status_bar"  # 通知の表示先
+# hil_prompt = "overlay"       # HiL プロンプトの表示先
+
+# [tui.surfaces.progress_pane]
+# position = "right"           # "right", "left", "bottom"
+# width = "30%"                # 幅（パーセント）
+# border = "rounded"           # "rounded", "plain", "none", "double"
 ```
 
 ---

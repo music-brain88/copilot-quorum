@@ -13,6 +13,8 @@ pub enum ContentSlot {
     Notification,
     HilPrompt,
     Help,
+    /// Tool execution log — separable from Progress for independent routing.
+    ToolLog,
 }
 
 /// Conversation content — messages, streaming text, and scroll state.

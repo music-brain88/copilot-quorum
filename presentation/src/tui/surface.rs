@@ -17,6 +17,10 @@ pub enum SurfaceId {
     Input,
     StatusBar,
     TabBar,
+    /// Third pane for Wide layout (tool log display).
+    ToolPane,
+    /// Floating overlay for tool display.
+    ToolFloat,
 }
 
 /// A surface with its resolved screen area.
@@ -38,8 +42,11 @@ impl SurfaceLayout {
     }
 
     /// Build from the existing `MainLayout`.
+    ///
+    /// Zero-size Rects (width=0 or height=0) are filtered out so that
+    /// `area_for()` returns `None` for surfaces not present in the current preset.
     pub fn from_main_layout(layout: &MainLayout) -> Self {
-        let mut surfaces = vec![
+        let mut candidates = vec![
             ResolvedSurface {
                 id: SurfaceId::Header,
                 area: layout.header,
@@ -62,11 +69,24 @@ impl SurfaceLayout {
             },
         ];
         if let Some(tab_bar) = layout.tab_bar {
-            surfaces.push(ResolvedSurface {
+            candidates.push(ResolvedSurface {
                 id: SurfaceId::TabBar,
                 area: tab_bar,
             });
         }
+        if let Some(tool_pane) = layout.tool_pane {
+            candidates.push(ResolvedSurface {
+                id: SurfaceId::ToolPane,
+                area: tool_pane,
+            });
+        }
+
+        // Filter out zero-size surfaces (e.g. Minimal preset sets progress to ZERO)
+        let surfaces = candidates
+            .into_iter()
+            .filter(|s| s.area.width > 0 && s.area.height > 0)
+            .collect();
+
         Self { surfaces }
     }
 }
@@ -84,6 +104,7 @@ mod tests {
             progress: Rect::new(56, 3, 24, 17),
             input: Rect::new(0, 20, 80, 3),
             status_bar: Rect::new(0, 23, 80, 1),
+            tool_pane: None,
         };
 
         let surface = SurfaceLayout::from_main_layout(&layout);
@@ -121,6 +142,7 @@ mod tests {
             progress: Rect::new(56, 4, 24, 16),
             input: Rect::new(0, 20, 80, 3),
             status_bar: Rect::new(0, 23, 80, 1),
+            tool_pane: None,
         };
 
         let surface = SurfaceLayout::from_main_layout(&layout);
@@ -128,6 +150,42 @@ mod tests {
         assert_eq!(
             surface.area_for(SurfaceId::TabBar),
             Some(Rect::new(0, 3, 80, 1))
+        );
+    }
+
+    #[test]
+    fn test_zero_size_rect_filtered_out() {
+        let layout = MainLayout {
+            header: Rect::new(0, 0, 80, 3),
+            tab_bar: None,
+            conversation: Rect::new(0, 3, 80, 17),
+            progress: Rect::ZERO, // Minimal preset sets this to ZERO
+            input: Rect::new(0, 20, 80, 3),
+            status_bar: Rect::new(0, 23, 80, 1),
+            tool_pane: None,
+        };
+
+        let surface = SurfaceLayout::from_main_layout(&layout);
+        assert_eq!(surface.area_for(SurfaceId::Sidebar), None);
+        assert!(surface.area_for(SurfaceId::MainPane).is_some());
+    }
+
+    #[test]
+    fn test_tool_pane_surface() {
+        let layout = MainLayout {
+            header: Rect::new(0, 0, 120, 3),
+            tab_bar: None,
+            conversation: Rect::new(0, 3, 72, 17),
+            progress: Rect::new(72, 3, 24, 17),
+            input: Rect::new(0, 20, 120, 3),
+            status_bar: Rect::new(0, 23, 120, 1),
+            tool_pane: Some(Rect::new(96, 3, 24, 17)),
+        };
+
+        let surface = SurfaceLayout::from_main_layout(&layout);
+        assert_eq!(
+            surface.area_for(SurfaceId::ToolPane),
+            Some(Rect::new(96, 3, 24, 17))
         );
     }
 }

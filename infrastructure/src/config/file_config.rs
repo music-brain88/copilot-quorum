@@ -805,6 +805,94 @@ impl Default for FileTuiInputConfig {
     }
 }
 
+/// TUI layout configuration from TOML
+///
+/// # Example
+///
+/// ```toml
+/// [tui.layout]
+/// preset = "default"
+/// flex_threshold = 120
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileTuiLayoutConfig {
+    /// Layout preset: "default", "minimal", "wide", "stacked"
+    pub preset: String,
+    /// Terminal width threshold for responsive fallback to Minimal
+    pub flex_threshold: u16,
+}
+
+impl Default for FileTuiLayoutConfig {
+    fn default() -> Self {
+        Self {
+            preset: "default".to_string(),
+            flex_threshold: 120,
+        }
+    }
+}
+
+/// TUI route customization from TOML
+///
+/// # Example
+///
+/// ```toml
+/// [tui.routes]
+/// tool_log = "sidebar"
+/// notification = "flash"
+/// hil_prompt = "overlay"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileTuiRoutesConfig {
+    /// Route target for tool_log: "sidebar", "float", "notification"
+    pub tool_log: Option<String>,
+    /// Route target for notification
+    pub notification: Option<String>,
+    /// Route target for hil_prompt
+    pub hil_prompt: Option<String>,
+}
+
+/// Per-surface configuration from TOML
+///
+/// # Example
+///
+/// ```toml
+/// [tui.surfaces.progress_pane]
+/// position = "right"
+/// width = "30%"
+/// border = "rounded"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileTuiSurfaceConfig {
+    /// Surface position: "right", "left", "bottom"
+    pub position: Option<String>,
+    /// Width as percentage string, e.g. "30%"
+    pub width: Option<String>,
+    /// Border style: "rounded", "plain", "none", "double"
+    pub border: Option<String>,
+}
+
+/// TUI surfaces configuration from TOML
+///
+/// # Example
+///
+/// ```toml
+/// [tui.surfaces.progress_pane]
+/// position = "right"
+/// width = "30%"
+/// border = "rounded"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileTuiSurfacesConfig {
+    /// Progress pane configuration
+    pub progress_pane: Option<FileTuiSurfaceConfig>,
+    /// Tool float configuration
+    pub tool_float: Option<FileTuiSurfaceConfig>,
+}
+
 /// TUI configuration
 ///
 /// Controls the terminal user interface behavior.
@@ -816,12 +904,22 @@ impl Default for FileTuiInputConfig {
 /// [tui.input]
 /// max_height = 12
 /// editor_action = "submit"
+///
+/// [tui.layout]
+/// preset = "default"
+/// flex_threshold = 120
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileTuiConfig {
     /// Input area configuration
     pub input: FileTuiInputConfig,
+    /// Layout configuration
+    pub layout: FileTuiLayoutConfig,
+    /// Route overrides
+    pub routes: FileTuiRoutesConfig,
+    /// Surface configuration
+    pub surfaces: FileTuiSurfacesConfig,
 }
 
 /// Complete file configuration (raw TOML structure)
@@ -873,7 +971,31 @@ impl FileConfig {
         // 3. Context budget validation
         issues.extend(self.context_budget.to_context_budget().1);
 
-        // 4. Dead [quorum] section detection
+        // 4. TUI layout preset validation
+        {
+            let valid = ["default", "minimal", "min", "wide", "stacked", "stack"];
+            if !valid.contains(&self.tui.layout.preset.to_lowercase().as_str()) {
+                issues.push(ConfigIssue {
+                    severity: Severity::Warning,
+                    code: ConfigIssueCode::InvalidEnumValue {
+                        field: "tui.layout.preset".to_string(),
+                        value: self.tui.layout.preset.clone(),
+                        valid_values: vec![
+                            "default".to_string(),
+                            "minimal".to_string(),
+                            "wide".to_string(),
+                            "stacked".to_string(),
+                        ],
+                    },
+                    message: format!(
+                        "tui.layout.preset: unknown value '{}', falling back to 'default'",
+                        self.tui.layout.preset
+                    ),
+                });
+            }
+        }
+
+        // 5. Dead [quorum] section detection
         if self.quorum != FileQuorumConfig::default() {
             issues.push(ConfigIssue {
                 severity: Severity::Warning,
@@ -1471,5 +1593,88 @@ recent_full_count = 2
         // Empty config should use defaults
         let config: FileConfig = toml::from_str("").unwrap();
         assert_eq!(config.context_budget.max_entry_bytes, 20_000);
+    }
+
+    // ==================== TUI Layout Tests ====================
+
+    #[test]
+    fn test_tui_layout_config_default() {
+        let config = FileTuiLayoutConfig::default();
+        assert_eq!(config.preset, "default");
+        assert_eq!(config.flex_threshold, 120);
+    }
+
+    #[test]
+    fn test_tui_layout_config_deserialize() {
+        let toml_str = r#"
+[tui.layout]
+preset = "wide"
+flex_threshold = 100
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.tui.layout.preset, "wide");
+        assert_eq!(config.tui.layout.flex_threshold, 100);
+    }
+
+    #[test]
+    fn test_tui_routes_config_deserialize() {
+        let toml_str = r#"
+[tui.routes]
+tool_log = "sidebar"
+notification = "flash"
+hil_prompt = "overlay"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.tui.routes.tool_log, Some("sidebar".to_string()));
+        assert_eq!(config.tui.routes.notification, Some("flash".to_string()));
+        assert_eq!(config.tui.routes.hil_prompt, Some("overlay".to_string()));
+    }
+
+    #[test]
+    fn test_tui_surfaces_config_deserialize() {
+        let toml_str = r#"
+[tui.surfaces.progress_pane]
+position = "right"
+width = "30%"
+border = "rounded"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let progress = config.tui.surfaces.progress_pane.unwrap();
+        assert_eq!(progress.position, Some("right".to_string()));
+        assert_eq!(progress.width, Some("30%".to_string()));
+        assert_eq!(progress.border, Some("rounded".to_string()));
+    }
+
+    #[test]
+    fn test_validate_invalid_layout_preset() {
+        let toml_str = r#"
+[tui.layout]
+preset = "invalid_preset"
+"#;
+        let config: FileConfig = toml::from_str(toml_str).unwrap();
+        let issues = config.validate();
+        assert!(issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::InvalidEnumValue { field, .. } if field == "tui.layout.preset"
+        )));
+    }
+
+    #[test]
+    fn test_validate_default_layout_no_warning() {
+        let config = FileConfig::default();
+        let issues = config.validate();
+        assert!(!issues.iter().any(|i| matches!(
+            &i.code,
+            ConfigIssueCode::InvalidEnumValue { field, .. } if field == "tui.layout.preset"
+        )));
+    }
+
+    #[test]
+    fn test_tui_layout_missing_uses_defaults() {
+        let config: FileConfig = toml::from_str("").unwrap();
+        assert_eq!(config.tui.layout.preset, "default");
+        assert_eq!(config.tui.layout.flex_threshold, 120);
+        assert!(config.tui.routes.tool_log.is_none());
+        assert!(config.tui.surfaces.progress_pane.is_none());
     }
 }
