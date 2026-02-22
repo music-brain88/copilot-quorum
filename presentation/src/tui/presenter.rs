@@ -54,8 +54,8 @@ impl TuiPresenter {
             }
             UiEvent::HistoryCleared => {
                 let pane = state.tabs.active_pane_mut();
-                pane.messages.clear();
-                pane.streaming_text.clear();
+                pane.conversation.messages.clear();
+                pane.conversation.streaming_text.clear();
                 self.emit(TuiEvent::HistoryCleared);
                 state.set_flash("History cleared");
             }
@@ -283,7 +283,7 @@ mod tests {
         presenter.apply(&mut state, &UiEvent::Welcome(info));
         assert_eq!(state.consensus_level, ConsensusLevel::Solo);
         assert!(!state.model_name.is_empty());
-        assert_eq!(state.tabs.active_pane().messages.len(), 1);
+        assert_eq!(state.tabs.active_pane().conversation.messages.len(), 1);
     }
 
     #[test]
@@ -298,9 +298,9 @@ mod tests {
         );
         assert_eq!(state.consensus_level, ConsensusLevel::Ensemble);
         assert!(state.flash_message.is_some());
-        assert_eq!(state.tabs.active_pane().messages.len(), 1);
+        assert_eq!(state.tabs.active_pane().conversation.messages.len(), 1);
         assert!(
-            state.tabs.active_pane().messages[0]
+            state.tabs.active_pane().conversation.messages[0]
                 .content
                 .contains("ensemble")
         );
@@ -312,13 +312,14 @@ mod tests {
         state
             .tabs
             .active_pane_mut()
+            .conversation
             .messages
             .push(DisplayMessage::user("test"));
-        state.tabs.active_pane_mut().streaming_text = "streaming".into();
+        state.tabs.active_pane_mut().conversation.streaming_text = "streaming".into();
 
         presenter.apply(&mut state, &UiEvent::HistoryCleared);
-        assert!(state.tabs.active_pane().messages.is_empty());
-        assert!(state.tabs.active_pane().streaming_text.is_empty());
+        assert!(state.tabs.active_pane().conversation.messages.is_empty());
+        assert!(state.tabs.active_pane().conversation.streaming_text.is_empty());
     }
 
     #[test]
@@ -331,7 +332,7 @@ mod tests {
     #[test]
     fn test_agent_error_finalizes_stream() {
         let (presenter, _rx, mut state) = setup();
-        state.tabs.active_pane_mut().streaming_text = "partial".into();
+        state.tabs.active_pane_mut().conversation.streaming_text = "partial".into();
         state.tabs.active_pane_mut().progress.is_running = true;
 
         presenter.apply(
@@ -344,6 +345,6 @@ mod tests {
 
         assert!(!state.tabs.active_pane().progress.is_running);
         // streaming text finalized + error message
-        assert!(state.tabs.active_pane().messages.len() >= 2);
+        assert!(state.tabs.active_pane().conversation.messages.len() >= 2);
     }
 }

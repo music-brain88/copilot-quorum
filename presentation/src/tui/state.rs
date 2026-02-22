@@ -4,6 +4,7 @@
 //! Updated by TuiPresenter (UiEvent → state) and TuiProgressBridge (progress → state).
 
 use super::mode::InputMode;
+use super::route::RouteTable;
 use super::tab::TabManager;
 use quorum_domain::{AgentPhase, ConsensusLevel, PhaseScope};
 
@@ -18,6 +19,9 @@ pub struct TuiState {
 
     // -- Tabs (own per-pane input, messages, streaming, scroll, progress) --
     pub tabs: TabManager,
+
+    // -- Route (content → surface mapping) --
+    pub route: RouteTable,
 
     // -- Pending key (for g prefix in Normal mode) --
     pub pending_key: Option<char>,
@@ -48,6 +52,7 @@ impl Default for TuiState {
             command_input: String::new(),
             command_cursor: 0,
             tabs: TabManager::new(),
+            route: RouteTable::default(),
             pending_key: None,
             consensus_level: ConsensusLevel::Solo,
             phase_scope: PhaseScope::Full,
@@ -187,19 +192,18 @@ impl TuiState {
 
     pub fn push_message(&mut self, msg: DisplayMessage) {
         let pane = self.tabs.active_pane_mut();
-        pane.messages.push(msg);
-        if pane.auto_scroll {
-            pane.scroll_offset = 0;
-            // auto_scroll stays true
+        pane.conversation.messages.push(msg);
+        if pane.conversation.auto_scroll {
+            pane.conversation.scroll_offset = 0;
         }
     }
 
     /// Push a message to a specific interaction pane
     pub fn push_message_to(&mut self, id: quorum_domain::InteractionId, msg: DisplayMessage) {
         if let Some(pane) = self.tabs.pane_for_interaction_mut(id) {
-            pane.messages.push(msg);
-            if pane.auto_scroll {
-                pane.scroll_offset = 0;
+            pane.conversation.messages.push(msg);
+            if pane.conversation.auto_scroll {
+                pane.conversation.scroll_offset = 0;
             }
         }
     }
@@ -207,12 +211,12 @@ impl TuiState {
     /// Finalize streaming text into a message
     pub fn finalize_stream(&mut self) {
         let pane = self.tabs.active_pane_mut();
-        if !pane.streaming_text.is_empty() {
-            let text = std::mem::take(&mut pane.streaming_text);
+        if !pane.conversation.streaming_text.is_empty() {
+            let text = std::mem::take(&mut pane.conversation.streaming_text);
             let msg = DisplayMessage::assistant(text);
-            pane.messages.push(msg);
-            if pane.auto_scroll {
-                pane.scroll_offset = 0;
+            pane.conversation.messages.push(msg);
+            if pane.conversation.auto_scroll {
+                pane.conversation.scroll_offset = 0;
             }
         }
     }
@@ -220,13 +224,13 @@ impl TuiState {
     /// Finalize streaming text for a specific interaction
     pub fn finalize_stream_for(&mut self, id: quorum_domain::InteractionId) {
         if let Some(pane) = self.tabs.pane_for_interaction_mut(id)
-            && !pane.streaming_text.is_empty()
+            && !pane.conversation.streaming_text.is_empty()
         {
-            let text = std::mem::take(&mut pane.streaming_text);
+            let text = std::mem::take(&mut pane.conversation.streaming_text);
             let msg = DisplayMessage::assistant(text);
-            pane.messages.push(msg);
-            if pane.auto_scroll {
-                pane.scroll_offset = 0;
+            pane.conversation.messages.push(msg);
+            if pane.conversation.auto_scroll {
+                pane.conversation.scroll_offset = 0;
             }
         }
     }
@@ -234,30 +238,30 @@ impl TuiState {
     // -- Scrolling --
 
     pub fn scroll_up(&mut self) {
-        let pane = self.tabs.active_pane_mut();
-        pane.auto_scroll = false;
-        pane.scroll_offset = pane.scroll_offset.saturating_add(1);
+        let conv = &mut self.tabs.active_pane_mut().conversation;
+        conv.auto_scroll = false;
+        conv.scroll_offset = conv.scroll_offset.saturating_add(1);
     }
 
     pub fn scroll_down(&mut self) {
-        let pane = self.tabs.active_pane_mut();
-        if pane.scroll_offset > 0 {
-            pane.scroll_offset = pane.scroll_offset.saturating_sub(1);
+        let conv = &mut self.tabs.active_pane_mut().conversation;
+        if conv.scroll_offset > 0 {
+            conv.scroll_offset = conv.scroll_offset.saturating_sub(1);
         } else {
-            pane.auto_scroll = true;
+            conv.auto_scroll = true;
         }
     }
 
     pub fn scroll_to_top(&mut self) {
-        let pane = self.tabs.active_pane_mut();
-        pane.auto_scroll = false;
-        pane.scroll_offset = usize::MAX; // Will be clamped during render
+        let conv = &mut self.tabs.active_pane_mut().conversation;
+        conv.auto_scroll = false;
+        conv.scroll_offset = usize::MAX; // Will be clamped during render
     }
 
     pub fn scroll_to_bottom(&mut self) {
-        let pane = self.tabs.active_pane_mut();
-        pane.scroll_offset = 0;
-        pane.auto_scroll = true;
+        let conv = &mut self.tabs.active_pane_mut().conversation;
+        conv.scroll_offset = 0;
+        conv.auto_scroll = true;
     }
 
     // -- Flash messages --
@@ -488,28 +492,28 @@ mod tests {
     #[test]
     fn test_scroll_behavior() {
         let mut state = TuiState::new();
-        assert!(state.tabs.active_pane().auto_scroll);
+        assert!(state.tabs.active_pane().conversation.auto_scroll);
 
         state.scroll_up();
-        assert!(!state.tabs.active_pane().auto_scroll);
-        assert_eq!(state.tabs.active_pane().scroll_offset, 1);
+        assert!(!state.tabs.active_pane().conversation.auto_scroll);
+        assert_eq!(state.tabs.active_pane().conversation.scroll_offset, 1);
 
         state.scroll_to_bottom();
-        assert!(state.tabs.active_pane().auto_scroll);
-        assert_eq!(state.tabs.active_pane().scroll_offset, 0);
+        assert!(state.tabs.active_pane().conversation.auto_scroll);
+        assert_eq!(state.tabs.active_pane().conversation.scroll_offset, 0);
     }
 
     #[test]
     fn test_finalize_stream() {
         let mut state = TuiState::new();
-        state.tabs.active_pane_mut().streaming_text = "Hello world".into();
+        state.tabs.active_pane_mut().conversation.streaming_text = "Hello world".into();
 
         state.finalize_stream();
-        assert!(state.tabs.active_pane().streaming_text.is_empty());
-        assert_eq!(state.tabs.active_pane().messages.len(), 1);
-        assert_eq!(state.tabs.active_pane().messages[0].content, "Hello world");
+        assert!(state.tabs.active_pane().conversation.streaming_text.is_empty());
+        assert_eq!(state.tabs.active_pane().conversation.messages.len(), 1);
+        assert_eq!(state.tabs.active_pane().conversation.messages[0].content, "Hello world");
         assert_eq!(
-            state.tabs.active_pane().messages[0].role,
+            state.tabs.active_pane().conversation.messages[0].role,
             MessageRole::Assistant
         );
     }
@@ -526,8 +530,8 @@ mod tests {
         state.push_message_to(id, DisplayMessage::system("hello"));
 
         let index = state.tabs.find_tab_index_by_interaction(id).unwrap();
-        assert_eq!(state.tabs.tabs()[index].pane.messages.len(), 1);
-        assert_eq!(state.tabs.tabs()[index].pane.messages[0].content, "hello");
+        assert_eq!(state.tabs.tabs()[index].pane.conversation.messages.len(), 1);
+        assert_eq!(state.tabs.tabs()[index].pane.conversation.messages[0].content, "hello");
     }
 
     #[test]
@@ -539,15 +543,15 @@ mod tests {
             .create_tab(PaneKind::Interaction(InteractionForm::Discuss, Some(id)));
 
         if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
-            pane.streaming_text = "stream text".into();
+            pane.conversation.streaming_text = "stream text".into();
         }
 
         state.finalize_stream_for(id);
 
         let pane = state.tabs.pane_for_interaction_mut(id).unwrap();
-        assert!(pane.streaming_text.is_empty());
-        assert_eq!(pane.messages.len(), 1);
-        assert_eq!(pane.messages[0].content, "stream text");
+        assert!(pane.conversation.streaming_text.is_empty());
+        assert_eq!(pane.conversation.messages.len(), 1);
+        assert_eq!(pane.conversation.messages[0].content, "stream text");
     }
 
     #[test]
