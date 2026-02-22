@@ -3,6 +3,7 @@
 //! Single source of truth for everything the TUI renders.
 //! Updated by TuiPresenter (UiEvent → state) and TuiProgressBridge (progress → state).
 
+use super::layout::TuiLayoutConfig;
 use super::mode::InputMode;
 use super::route::RouteTable;
 use super::tab::TabManager;
@@ -41,6 +42,9 @@ pub struct TuiState {
     // -- TUI config --
     pub tui_config: TuiInputConfig,
 
+    // -- Layout config --
+    pub layout_config: TuiLayoutConfig,
+
     // -- Lifecycle --
     pub should_quit: bool,
 }
@@ -61,6 +65,7 @@ impl Default for TuiState {
             flash_message: None,
             hil_prompt: None,
             tui_config: TuiInputConfig::default(),
+            layout_config: TuiLayoutConfig::default(),
             should_quit: false,
         }
     }

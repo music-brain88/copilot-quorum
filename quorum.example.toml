@@ -87,6 +87,33 @@ dynamic_height = true
 # Whether to show context header in $EDITOR temp file (default: true)
 context_header = true
 
+# ==================== TUI Layout ====================
+# Customize the TUI layout with presets and fine-grained surface/route control.
+
+[tui.layout]
+# Layout preset: "default", "minimal", "wide", "stacked" (default: "default")
+#   - default:  70/30 horizontal split (conversation + sidebar)
+#   - minimal:  Full-width conversation, no sidebar
+#   - wide:     60/20/20 three-pane horizontal split (conversation + progress + tools)
+#   - stacked:  70/30 vertical split (conversation top, progress bottom)
+preset = "default"
+# Terminal width threshold for responsive fallback to Minimal (default: 120)
+# Set to 0 to disable responsive fallback.
+#flex_threshold = 120
+
+# Route overrides — change which surface displays each content type.
+# Available targets: "sidebar", "float", "tool_pane", "overlay", "status_bar", "main"
+#[tui.routes]
+#tool_log = "sidebar"        # Where tool execution logs are displayed
+#notification = "status_bar"  # Where notifications appear
+#hil_prompt = "overlay"       # Where human-in-the-loop prompts appear
+
+# Surface configuration — customize individual surface appearance.
+#[tui.surfaces.progress_pane]
+#position = "right"           # "right", "left", "bottom"
+#width = "30%"                # Width as percentage
+#border = "rounded"           # "rounded", "plain", "none", "double"
+
 # ==================== Context Budget ====================
 # Controls how much task result context is retained between executions.
 # Prevents prompt bloat by truncating/summarizing older results.

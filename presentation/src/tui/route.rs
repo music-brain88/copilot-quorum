@@ -4,6 +4,7 @@
 //! Phase 1 uses a fixed default mapping matching the current TUI layout.
 
 use super::content::ContentSlot;
+use super::layout::{LayoutPreset, RouteOverride};
 use super::surface::SurfaceId;
 
 /// A single route entry mapping content to a surface.
@@ -49,6 +50,113 @@ impl RouteTable {
                     surface: SurfaceId::StatusBar,
                 },
             ],
+        }
+    }
+
+    /// Minimal layout: no sidebar, conversation only.
+    pub fn minimal_layout() -> Self {
+        Self {
+            entries: vec![
+                RouteEntry {
+                    content: ContentSlot::Conversation,
+                    surface: SurfaceId::MainPane,
+                },
+                RouteEntry {
+                    content: ContentSlot::HilPrompt,
+                    surface: SurfaceId::Overlay,
+                },
+                RouteEntry {
+                    content: ContentSlot::Help,
+                    surface: SurfaceId::Overlay,
+                },
+                RouteEntry {
+                    content: ContentSlot::Notification,
+                    surface: SurfaceId::StatusBar,
+                },
+            ],
+        }
+    }
+
+    /// Wide layout: 3-pane with tool log in ToolPane.
+    pub fn wide_layout() -> Self {
+        Self {
+            entries: vec![
+                RouteEntry {
+                    content: ContentSlot::Conversation,
+                    surface: SurfaceId::MainPane,
+                },
+                RouteEntry {
+                    content: ContentSlot::Progress,
+                    surface: SurfaceId::Sidebar,
+                },
+                RouteEntry {
+                    content: ContentSlot::ToolLog,
+                    surface: SurfaceId::ToolPane,
+                },
+                RouteEntry {
+                    content: ContentSlot::HilPrompt,
+                    surface: SurfaceId::Overlay,
+                },
+                RouteEntry {
+                    content: ContentSlot::Help,
+                    surface: SurfaceId::Overlay,
+                },
+                RouteEntry {
+                    content: ContentSlot::Notification,
+                    surface: SurfaceId::StatusBar,
+                },
+            ],
+        }
+    }
+
+    /// Stacked layout: vertical split (conversation top, progress bottom).
+    pub fn stacked_layout() -> Self {
+        Self {
+            entries: vec![
+                RouteEntry {
+                    content: ContentSlot::Conversation,
+                    surface: SurfaceId::MainPane,
+                },
+                RouteEntry {
+                    content: ContentSlot::Progress,
+                    surface: SurfaceId::Sidebar,
+                },
+                RouteEntry {
+                    content: ContentSlot::HilPrompt,
+                    surface: SurfaceId::Overlay,
+                },
+                RouteEntry {
+                    content: ContentSlot::Help,
+                    surface: SurfaceId::Overlay,
+                },
+                RouteEntry {
+                    content: ContentSlot::Notification,
+                    surface: SurfaceId::StatusBar,
+                },
+            ],
+        }
+    }
+
+    /// Build a route table from a preset with optional user overrides applied.
+    pub fn from_preset_and_overrides(preset: LayoutPreset, overrides: &[RouteOverride]) -> Self {
+        let mut table = match preset {
+            LayoutPreset::Default => Self::default_layout(),
+            LayoutPreset::Minimal => Self::minimal_layout(),
+            LayoutPreset::Wide => Self::wide_layout(),
+            LayoutPreset::Stacked => Self::stacked_layout(),
+        };
+        for ov in overrides {
+            table.set_route(ov.content, ov.surface);
+        }
+        table
+    }
+
+    /// Set or replace a route entry for the given content slot.
+    pub fn set_route(&mut self, content: ContentSlot, surface: SurfaceId) {
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.content == content) {
+            entry.surface = surface;
+        } else {
+            self.entries.push(RouteEntry { content, surface });
         }
     }
 
@@ -147,5 +255,77 @@ mod tests {
             entries: Vec::new(),
         };
         assert_eq!(route.surface_for(ContentSlot::Conversation), None);
+    }
+
+    #[test]
+    fn test_minimal_layout_no_progress() {
+        let route = RouteTable::minimal_layout();
+        assert_eq!(route.surface_for(ContentSlot::Progress), None);
+        assert_eq!(
+            route.surface_for(ContentSlot::Conversation),
+            Some(SurfaceId::MainPane)
+        );
+    }
+
+    #[test]
+    fn test_wide_layout_has_tool_log() {
+        let route = RouteTable::wide_layout();
+        assert_eq!(
+            route.surface_for(ContentSlot::ToolLog),
+            Some(SurfaceId::ToolPane)
+        );
+        assert_eq!(
+            route.surface_for(ContentSlot::Progress),
+            Some(SurfaceId::Sidebar)
+        );
+    }
+
+    #[test]
+    fn test_stacked_layout() {
+        let route = RouteTable::stacked_layout();
+        assert_eq!(
+            route.surface_for(ContentSlot::Progress),
+            Some(SurfaceId::Sidebar)
+        );
+    }
+
+    #[test]
+    fn test_set_route_overrides_existing() {
+        let mut route = RouteTable::default_layout();
+        route.set_route(ContentSlot::Progress, SurfaceId::ToolFloat);
+        assert_eq!(
+            route.surface_for(ContentSlot::Progress),
+            Some(SurfaceId::ToolFloat)
+        );
+    }
+
+    #[test]
+    fn test_set_route_adds_new() {
+        let mut route = RouteTable::default_layout();
+        route.set_route(ContentSlot::ToolLog, SurfaceId::Sidebar);
+        assert_eq!(
+            route.surface_for(ContentSlot::ToolLog),
+            Some(SurfaceId::Sidebar)
+        );
+    }
+
+    #[test]
+    fn test_from_preset_and_overrides() {
+        use super::super::layout::RouteOverride;
+
+        let overrides = vec![RouteOverride {
+            content: ContentSlot::Progress,
+            surface: SurfaceId::ToolFloat,
+        }];
+        let route = RouteTable::from_preset_and_overrides(LayoutPreset::Default, &overrides);
+        assert_eq!(
+            route.surface_for(ContentSlot::Progress),
+            Some(SurfaceId::ToolFloat)
+        );
+        // Other entries unchanged
+        assert_eq!(
+            route.surface_for(ContentSlot::Conversation),
+            Some(SurfaceId::MainPane)
+        );
     }
 }

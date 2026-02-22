@@ -13,6 +13,7 @@
 
 use super::editor::{self, EditorContext, EditorResult};
 use super::event::{HilKind, HilRequest, RoutedTuiEvent, TuiCommand, TuiEvent};
+use super::layout::TuiLayoutConfig;
 use super::mode::{self, InputMode, KeyAction};
 use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
@@ -79,6 +80,9 @@ pub struct TuiApp<
 
     // -- TUI configuration --
     tui_config: TuiInputConfig,
+
+    // -- Layout configuration --
+    layout_config: TuiLayoutConfig,
 
     // -- Type witness for generics --
     _phantom: std::marker::PhantomData<(G, T, C)>,
@@ -152,6 +156,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             pending_hil_tx: Arc::new(Mutex::new(None)),
             _controller_handle: controller_handle,
             tui_config: TuiInputConfig::default(),
+            layout_config: TuiLayoutConfig::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -197,6 +202,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         self
     }
 
+    pub fn with_layout_config(mut self, config: TuiLayoutConfig) -> Self {
+        self.layout_config = config;
+        self
+    }
+
     /// Run the TUI main loop
     pub async fn run(&mut self) -> io::Result<()> {
         // Setup terminal
@@ -230,6 +240,11 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
         let mut state = TuiState::new();
         state.tui_config = self.tui_config.clone();
+        state.layout_config = self.layout_config.clone();
+        state.route = super::route::RouteTable::from_preset_and_overrides(
+            self.layout_config.preset,
+            &self.layout_config.route_overrides,
+        );
         let mut event_stream = EventStream::new();
         let mut tick = tokio::time::interval(Duration::from_millis(250));
 
@@ -378,11 +393,13 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         use super::surface::{SurfaceId, SurfaceLayout};
 
         let show_tab_bar = state.tabs.len() > 1;
-        let layout = MainLayout::compute_with_input_config(
+        let layout = MainLayout::compute_with_layout(
             frame.area(),
             state.input_line_count() as u16,
             state.tui_config.max_input_height,
             show_tab_bar,
+            state.layout_config.preset,
+            state.layout_config.flex_threshold,
         );
 
         // Build surface layout from the computed main layout
@@ -407,6 +424,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 .surface_for(ContentSlot::Progress)
                 .unwrap_or(SurfaceId::Sidebar),
         ) {
+            frame.render_widget(ProgressPanelWidget::new(state), area);
+        }
+        // ToolPane (Wide layout: third pane — shows Progress as interim until #214)
+        if let Some(area) = surfaces.area_for(SurfaceId::ToolPane) {
             frame.render_widget(ProgressPanelWidget::new(state), area);
         }
         frame.render_widget(InputWidget::new(state), layout.input);
