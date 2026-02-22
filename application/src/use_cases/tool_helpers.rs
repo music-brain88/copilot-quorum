@@ -126,10 +126,7 @@ mod tests {
     fn test_truncation() {
         let mut args = HashMap::new();
         let long_path = "a".repeat(100);
-        args.insert(
-            "path".to_string(),
-            serde_json::Value::String(long_path),
-        );
+        args.insert("path".to_string(), serde_json::Value::String(long_path));
         let result = tool_args_preview(&make_call(args));
         assert!(result.chars().count() <= 50);
         assert!(result.ends_with('…'));

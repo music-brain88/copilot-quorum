@@ -188,9 +188,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
             let results: Vec<_> = futures::future::join_all(futures).await;
 
             let mut tool_result_messages = Vec::new();
-            for ((call, result), exec_id) in
-                tool_calls.iter().zip(results).zip(&exec_ids)
-            {
+            for ((call, result), exec_id) in tool_calls.iter().zip(results).zip(&exec_ids) {
                 let is_error = !result.is_success();
                 let output = if is_error {
                     result
@@ -202,12 +200,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T>
                 };
 
                 if is_error {
-                    progress.on_tool_execution_failed(
-                        "ask",
-                        exec_id,
-                        &call.tool_name,
-                        &output,
-                    );
+                    progress.on_tool_execution_failed("ask", exec_id, &call.tool_name, &output);
                 } else {
                     let duration = result.metadata.duration_ms.unwrap_or(0);
                     let preview = result

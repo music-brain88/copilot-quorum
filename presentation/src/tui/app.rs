@@ -1020,8 +1020,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 use super::event::ToolExecutionDisplayState;
 
                 // Build flash message outside the mutable borrow scope
-                let flash_msg = if let ToolExecutionDisplayState::Error { ref message } =
-                    exec_state
+                let flash_msg = if let ToolExecutionDisplayState::Error { ref message } = exec_state
                 {
                     Some(format!("Tool error: {} - {}", tool_name, message))
                 } else {

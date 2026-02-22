@@ -275,12 +275,7 @@ impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContex
                         .error()
                         .map(|e| e.message.clone())
                         .unwrap_or_default();
-                    progress.on_tool_execution_failed(
-                        "context",
-                        &exec_id,
-                        &call.tool_name,
-                        &error,
-                    );
+                    progress.on_tool_execution_failed("context", &exec_id, &call.tool_name, &error);
                 }
 
                 let (is_error, output) = if success {
