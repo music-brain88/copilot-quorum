@@ -12,9 +12,10 @@ use quorum_application::ToolExecutorPort;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
-    ConfigLoader, CopilotLlmGateway, FileConfig, GitHubReferenceResolver, JsonSchemaToolConverter,
-    JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
+    ConfigLoader, CopilotLlmGateway, CopilotProviderAdapter, FileConfig, GitHubReferenceResolver,
+    JsonSchemaToolConverter, JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
 };
+use quorum_infrastructure::{ProviderAdapter, RoutingGateway};
 use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, LayoutPreset, OutputConfig,
     ReplConfig, TuiApp, TuiInputConfig, TuiLayoutConfig,
@@ -342,8 +343,10 @@ async fn main() -> Result<()> {
 
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
-    let gateway: Arc<dyn LlmGateway> =
-        Arc::new(CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?);
+    let copilot = CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?;
+    let providers =
+        vec![Arc::new(CopilotProviderAdapter::new(copilot)) as Arc<dyn ProviderAdapter>];
+    let gateway: Arc<dyn LlmGateway> = Arc::new(RoutingGateway::new(providers, &config.providers));
 
     // Create tool executor
     let working_dir = cli

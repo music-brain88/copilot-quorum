@@ -1,5 +1,5 @@
-pub(crate) mod copilot_adapter;
-pub(crate) mod routing;
+pub mod copilot_adapter;
+pub mod routing;
 
 use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession};
@@ -14,7 +14,7 @@ pub enum ProviderKind {
 }
 
 #[async_trait]
-pub(crate) trait ProviderAdapter: Send + Sync {
+pub trait ProviderAdapter: Send + Sync {
     fn kind(&self) -> ProviderKind;
     fn supports_model(&self, model: &Model) -> bool;
     async fn create_session(&self, model: &Model) -> Result<Box<dyn LlmSession>, GatewayError>;
