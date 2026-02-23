@@ -24,6 +24,8 @@ pub use copilot::{
     session::CopilotSession,
 };
 pub use logging::JsonlConversationLogger;
+#[cfg(feature = "bedrock")]
+pub use providers::bedrock::BedrockProviderAdapter;
 pub use providers::{
     ProviderAdapter, ProviderKind, copilot_adapter::CopilotProviderAdapter, routing::RoutingGateway,
 };

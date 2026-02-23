@@ -17,7 +17,9 @@ pub use agent::FileAgentConfig;
 pub use context_budget::FileContextBudgetConfig;
 pub use models::FileModelsConfig;
 pub use output::{FileOutputConfig, FileOutputFormat};
-pub use providers::{FileAnthropicConfig, FileOpenAiConfig, FileProvidersConfig};
+pub use providers::{
+    FileAnthropicConfig, FileBedrockConfig, FileOpenAiConfig, FileProvidersConfig,
+};
 pub use quorum::FileQuorumConfig;
 pub use repl::FileReplConfig;
 pub use tools::{

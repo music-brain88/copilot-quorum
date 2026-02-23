@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FileBedrockConfig {
     /// AWS region for Bedrock models (default: "us-east-1")
     pub region: String,
@@ -11,6 +12,8 @@ pub struct FileBedrockConfig {
     pub profile: Option<String>,
     /// Max Tokens per response (default: 8192)
     pub max_tokens: u32,
+    /// Enable cross-region inference (prefixes model ID with region)
+    pub cross_region: Option<bool>,
 }
 
 impl Default for FileBedrockConfig {
@@ -19,6 +22,7 @@ impl Default for FileBedrockConfig {
             region: "us-east-1".to_string(),
             profile: None,
             max_tokens: 8192,
+            cross_region: None,
         }
     }
 }
