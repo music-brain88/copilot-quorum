@@ -3,9 +3,12 @@
 //! This is the main binary that wires together all layers using
 //! dependency injection. Config conversion logic is centralized here.
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use clap::Parser;
+use quorum_application::ContextLoaderPort;
 use quorum_application::ExecutionParams;
+use quorum_application::LlmGateway;
+use quorum_application::ToolExecutorPort;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
@@ -21,11 +24,11 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Layer;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 
 /// Format timestamps using local time (via chrono).
 struct LocalTimer;
@@ -192,7 +195,7 @@ fn build_configs(cli: &Cli, file: &FileConfig) -> (OutputConfig, ReplConfig) {
 fn build_tui_layout_config(config: &FileConfig) -> TuiLayoutConfig {
     use quorum_presentation::tui::content::ContentSlot;
     use quorum_presentation::tui::layout::{
-        BorderStyle, RouteOverride, SurfaceConfig, SurfacePosition, parse_route_target,
+        parse_route_target, BorderStyle, RouteOverride, SurfaceConfig, SurfacePosition,
     };
 
     let preset = config
@@ -339,7 +342,8 @@ async fn main() -> Result<()> {
 
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
-    let gateway = Arc::new(CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?);
+    let gateway: Arc<dyn LlmGateway> =
+        Arc::new(CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?);
 
     // Create tool executor
     let working_dir = cli
@@ -361,14 +365,14 @@ async fn main() -> Result<()> {
         tool_executor = tool_executor.with_custom_tools(&config.tools.custom);
         info!("Registered {} custom tool(s)", config.tools.custom.len());
     }
-    let tool_executor = Arc::new(tool_executor);
+    let tool_executor: Arc<dyn ToolExecutorPort> = Arc::new(tool_executor);
 
     // Create tool schema converter
     let tool_schema: Arc<dyn quorum_application::ToolSchemaPort> =
         Arc::new(JsonSchemaToolConverter);
 
     // Create context loader
-    let context_loader = Arc::new(LocalContextLoader::new());
+    let context_loader: Arc<dyn ContextLoaderPort> = Arc::new(LocalContextLoader::new());
 
     // === Build QuorumConfig from split types ===
 

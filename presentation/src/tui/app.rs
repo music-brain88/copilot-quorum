@@ -25,8 +25,8 @@ use super::state::{
 use super::surface::SurfaceId;
 use super::tab::PaneKind;
 use super::widgets::{
-    MainLayout, header::HeaderWidget, input::InputWidget, status_bar::StatusBarWidget,
-    tab_bar::TabBarWidget,
+    header::HeaderWidget, input::InputWidget, status_bar::StatusBarWidget, tab_bar::TabBarWidget,
+    MainLayout,
 };
 
 /// Side-effect that requires main loop intervention (e.g. terminal suspend)
@@ -39,7 +39,7 @@ use crossterm::{
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
@@ -50,7 +50,7 @@ use quorum_application::{
 use quorum_domain::core::string::truncate;
 use quorum_domain::interaction::{InteractionForm, InteractionId};
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -60,11 +60,7 @@ use tokio_util::sync::CancellationToken;
 use super::human_intervention::TuiHumanIntervention;
 
 /// Main TUI application
-pub struct TuiApp<
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
-> {
+pub struct TuiApp {
     // -- Actor channels --
     cmd_tx: mpsc::UnboundedSender<TuiCommand>,
     ui_rx: mpsc::UnboundedReceiver<UiEvent>,
@@ -90,20 +86,15 @@ pub struct TuiApp<
     // RefCell for interior mutability: dynamic model stream renderers are
     // registered during event handling (&self) but consumed during render (&self).
     content_registry: std::cell::RefCell<ContentRegistry>,
-
-    // -- Type witness for generics --
-    _phantom: std::marker::PhantomData<(G, T, C)>,
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
-    TuiApp<G, T, C>
-{
+impl TuiApp {
     /// Create a new TUI application wired to the controller
     pub fn new(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
-        context_loader: Arc<C>,
+        context_loader: Arc<dyn ContextLoaderPort>,
         config: QuorumConfig,
     ) -> Self {
         Self::new_with_logger(
@@ -118,10 +109,10 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 
     /// Create a new TUI application with a conversation logger.
     pub fn new_with_logger(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
-        context_loader: Arc<C>,
+        context_loader: Arc<dyn ContextLoaderPort>,
         config: QuorumConfig,
         conversation_logger: Arc<dyn ConversationLogger>,
     ) -> Self {
@@ -165,7 +156,6 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             tui_config: TuiInputConfig::default(),
             layout_config: TuiLayoutConfig::default(),
             content_registry: std::cell::RefCell::new(Self::build_default_registry()),
-            _phantom: std::marker::PhantomData,
         }
     }
 

@@ -21,11 +21,11 @@ use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::RunAgentUseCase;
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
-use quorum_domain::ContextMode;
 use quorum_domain::interaction::{
     InteractionForm, InteractionId, InteractionResult, InteractionTree,
 };
 use quorum_domain::util::truncate_str;
+use quorum_domain::ContextMode;
 use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
@@ -1138,10 +1138,7 @@ mod tests {
         }
     }
 
-    fn create_test_controller() -> (
-        AgentController<MockGateway, MockToolExecutor, MockContextLoader>,
-        mpsc::UnboundedReceiver<UiEvent>,
-    ) {
+    fn create_test_controller() -> (AgentController, mpsc::UnboundedReceiver<UiEvent>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let gateway = Arc::new(MockGateway::new(vec![Box::new(MockSession(
             Model::default(),
@@ -1481,7 +1478,7 @@ mod tests {
 
     // === parse_spawn_flags tests ===
 
-    type TestController = AgentController<MockGateway, MockToolExecutor, MockContextLoader>;
+    type TestController = AgentController;
 
     #[test]
     fn test_parse_spawn_flags_no_flag() {
