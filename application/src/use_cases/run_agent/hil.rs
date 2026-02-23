@@ -2,8 +2,8 @@
 //!
 //! Contains human intervention and execution confirmation handlers.
 
-use super::RunAgentUseCase;
 use super::types::RunAgentError;
+use super::RunAgentUseCase;
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::HumanInterventionError;
@@ -14,12 +14,7 @@ use tracing::{info, warn};
 
 use super::types::RunAgentInput;
 
-impl<G, T, C> RunAgentUseCase<G, T, C>
-where
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
-{
+impl RunAgentUseCase {
     /// Handle human intervention when plan revision limit is exceeded
     pub(super) async fn handle_human_intervention(
         &self,

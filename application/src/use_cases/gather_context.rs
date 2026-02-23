@@ -18,7 +18,7 @@ use crate::use_cases::run_agent::RunAgentError;
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use crate::use_cases::tool_helpers::tool_args_preview;
 use quorum_domain::core::string::truncate;
-use quorum_domain::{AgentContext, AgentPromptTemplate, ProjectContext, extract_references};
+use quorum_domain::{extract_references, AgentContext, AgentPromptTemplate, ProjectContext};
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -30,19 +30,19 @@ use tracing::{info, warn};
 /// 1. Load known files directly (no LLM needed)
 /// 2. Run exploration agent with tool use
 /// 3. Proceed with minimal context
-pub struct GatherContextUseCase<T: ToolExecutorPort, C: ContextLoaderPort> {
-    tool_executor: Arc<T>,
+pub struct GatherContextUseCase {
+    tool_executor: Arc<dyn ToolExecutorPort>,
     tool_schema: Arc<dyn ToolSchemaPort>,
-    context_loader: Option<Arc<C>>,
+    context_loader: Option<Arc<dyn ContextLoaderPort>>,
     cancellation_token: Option<CancellationToken>,
     reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
 }
 
-impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContextUseCase<T, C> {
+impl GatherContextUseCase {
     pub fn new(
-        tool_executor: Arc<T>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
-        context_loader: Option<Arc<C>>,
+        context_loader: Option<Arc<dyn ContextLoaderPort>>,
         cancellation_token: Option<CancellationToken>,
     ) -> Self {
         Self {

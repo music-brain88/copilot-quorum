@@ -21,11 +21,11 @@ use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::RunAgentUseCase;
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
-use quorum_domain::ContextMode;
 use quorum_domain::interaction::{
     InteractionForm, InteractionId, InteractionResult, InteractionTree,
 };
 use quorum_domain::util::truncate_str;
+use quorum_domain::ContextMode;
 use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
@@ -66,15 +66,11 @@ pub enum CommandAction {
 /// - Command processing (state changes, config updates)
 /// - Use case orchestration (agent execution, quorum discussion, context init)
 /// - Emitting UiEvents to a channel for the presentation layer
-pub struct AgentController<
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
-> {
-    gateway: Arc<G>,
-    use_case: RunAgentUseCase<G, T, C>,
-    ask_use_case: RunAskUseCase<G, T>,
-    context_loader: Arc<C>,
+pub struct AgentController {
+    gateway: Arc<dyn LlmGateway>,
+    use_case: RunAgentUseCase,
+    ask_use_case: RunAskUseCase,
+    context_loader: Arc<dyn ContextLoaderPort>,
     config: QuorumConfig,
     /// Moderator model for synthesis (if explicitly configured)
     moderator: Option<Model>,
@@ -93,15 +89,14 @@ pub struct AgentController<
     active_interaction_id: InteractionId,
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
-    AgentController<G, T, C>
+impl AgentController
 {
     /// Create a new AgentController
     pub fn new(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
-        context_loader: Arc<C>,
+        context_loader: Arc<dyn ContextLoaderPort>,
         config: QuorumConfig,
         human_intervention: Arc<dyn HumanInterventionPort>,
         tx: mpsc::UnboundedSender<UiEvent>,
@@ -725,7 +720,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
     }
 
     /// Build a context object for executing a spawn in a background task
-    pub fn build_spawn_context(&self) -> SpawnContext<G, T, C> {
+    pub fn build_spawn_context(&self) -> SpawnContext {
         SpawnContext {
             gateway: self.gateway.clone(),
             agent_use_case: self.use_case.clone(),
@@ -836,14 +831,10 @@ fn format_quorum_output(result: &QuorumResult, format: OutputFormat) -> String {
 }
 
 /// Context for executing a spawn in a background task
-pub struct SpawnContext<
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
-> {
-    pub(crate) gateway: Arc<G>,
-    pub(crate) agent_use_case: RunAgentUseCase<G, T, C>,
-    pub(crate) ask_use_case: RunAskUseCase<G, T>,
+pub struct SpawnContext{
+    pub(crate) gateway: Arc<dyn LlmGateway>,
+    pub(crate) agent_use_case: RunAgentUseCase,
+    pub(crate) ask_use_case: RunAskUseCase,
     pub(crate) config: QuorumConfig,
     pub(crate) tx: mpsc::UnboundedSender<UiEvent>,
     pub(crate) verbose: bool,
@@ -858,12 +849,7 @@ pub struct TaskCompletion {
     pub result_text: Option<String>,
 }
 
-impl<G, T, C> SpawnContext<G, T, C>
-where
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
-{
+impl SpawnContext{
     pub async fn execute(
         self,
         interaction_id: Option<InteractionId>,

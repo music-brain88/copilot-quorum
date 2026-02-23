@@ -25,8 +25,8 @@ use super::state::{
 use super::surface::SurfaceId;
 use super::tab::PaneKind;
 use super::widgets::{
-    MainLayout, header::HeaderWidget, input::InputWidget, status_bar::StatusBarWidget,
-    tab_bar::TabBarWidget,
+    header::HeaderWidget, input::InputWidget, status_bar::StatusBarWidget, tab_bar::TabBarWidget,
+    MainLayout,
 };
 
 /// Side-effect that requires main loop intervention (e.g. terminal suspend)
@@ -39,7 +39,7 @@ use crossterm::{
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
@@ -50,7 +50,7 @@ use quorum_application::{
 use quorum_domain::core::string::truncate;
 use quorum_domain::interaction::{InteractionForm, InteractionId};
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1359,12 +1359,8 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
 /// Background controller task (Actor)
 ///
 /// Owns the AgentController and processes commands from the TUI event loop.
-async fn controller_task<
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
->(
-    mut controller: AgentController<G, T, C>,
+async fn controller_task(
+    mut controller: AgentController,
     mut cmd_rx: mpsc::UnboundedReceiver<TuiCommand>,
     progress_tx: mpsc::UnboundedSender<RoutedTuiEvent>,
 ) {

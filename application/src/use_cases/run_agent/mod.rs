@@ -47,26 +47,18 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 /// Use case for running an autonomous agent
-pub struct RunAgentUseCase<
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static = NoContextLoader,
-> {
-    pub(super) gateway: Arc<G>,
-    pub(super) tool_executor: Arc<T>,
+pub struct RunAgentUseCase{
+    pub(super) gateway: Arc<dyn LlmGateway>,
+    pub(super) tool_executor: Arc<dyn ToolExecutorPort>,
     pub(super) tool_schema: Arc<dyn ToolSchemaPort>,
-    pub(super) context_loader: Option<Arc<C>>,
+    pub(super) context_loader: Option<Arc<dyn ContextLoaderPort>>,
     pub(super) cancellation_token: Option<CancellationToken>,
     pub(super) human_intervention: Option<Arc<dyn HumanInterventionPort>>,
     pub(super) reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
     pub(super) conversation_logger: Arc<dyn ConversationLogger>,
 }
 
-impl<G, T, C> Clone for RunAgentUseCase<G, T, C>
-where
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
+impl Clone for RunAgentUseCase
 {
     fn clone(&self) -> Self {
         Self {
@@ -99,12 +91,11 @@ impl ContextLoaderPort for NoContextLoader {
     }
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
-    RunAgentUseCase<G, T, NoContextLoader>
+impl RunAgentUseCase
 {
     pub fn new(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
     ) -> Self {
         Self {
@@ -120,14 +111,14 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static>
     }
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static>
-    RunAgentUseCase<G, T, C>
+impl
+    RunAgentUseCase
 {
     pub fn with_context_loader(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
-        context_loader: Arc<C>,
+        context_loader: Arc<dyn ContextLoaderPort>,
     ) -> Self {
         Self {
             gateway,

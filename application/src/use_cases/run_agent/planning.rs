@@ -18,11 +18,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
-impl<G, T, C> RunAgentUseCase<G, T, C>
-where
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
+impl RunAgentUseCase
 {
     pub(super) async fn create_plan(
         &self,
