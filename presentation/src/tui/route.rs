@@ -3,12 +3,14 @@
 //! A `RouteTable` declares which `ContentSlot` renders into which `SurfaceId`.
 //! Phase 1 uses a fixed default mapping matching the current TUI layout.
 
+use std::collections::HashSet;
+
 use super::content::ContentSlot;
 use super::layout::{LayoutPreset, RouteOverride};
 use super::surface::SurfaceId;
 
 /// A single route entry mapping content to a surface.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RouteEntry {
     pub content: ContentSlot,
     pub surface: SurfaceId,
@@ -146,7 +148,7 @@ impl RouteTable {
             LayoutPreset::Stacked => Self::stacked_layout(),
         };
         for ov in overrides {
-            table.set_route(ov.content, ov.surface);
+            table.set_route(ov.content.clone(), ov.surface.clone());
         }
         table
     }
@@ -161,19 +163,39 @@ impl RouteTable {
     }
 
     /// Look up which surface a content slot should render into.
-    pub fn surface_for(&self, content: ContentSlot) -> Option<SurfaceId> {
+    pub fn surface_for(&self, content: &ContentSlot) -> Option<SurfaceId> {
         self.entries
             .iter()
-            .find(|e| e.content == content)
-            .map(|e| e.surface)
+            .find(|e| &e.content == content)
+            .map(|e| e.surface.clone())
     }
 
     /// Look up which content slots render into a given surface.
-    pub fn content_for(&self, surface: SurfaceId) -> Vec<ContentSlot> {
+    pub fn content_for(&self, surface: &SurfaceId) -> Vec<ContentSlot> {
         self.entries
             .iter()
-            .filter(|e| e.surface == surface)
-            .map(|e| e.content)
+            .filter(|e| &e.surface == surface)
+            .map(|e| e.content.clone())
+            .collect()
+    }
+
+    /// Get all route entries (immutable).
+    pub fn entries(&self) -> &[RouteEntry] {
+        &self.entries
+    }
+
+    /// Collect the unique content-pane SurfaceIds referenced by this route table,
+    /// preserving first-seen order.
+    ///
+    /// Used by the render loop to determine how many panes to create and which
+    /// SurfaceId each pane maps to.
+    pub fn required_pane_surfaces(&self) -> Vec<SurfaceId> {
+        let mut seen = HashSet::new();
+        self.entries
+            .iter()
+            .filter(|e| e.surface.is_content_pane())
+            .filter(|e| seen.insert(e.surface.clone()))
+            .map(|e| e.surface.clone())
             .collect()
     }
 }
@@ -192,7 +214,7 @@ mod tests {
     fn test_default_conversation_to_main_pane() {
         let route = RouteTable::default();
         assert_eq!(
-            route.surface_for(ContentSlot::Conversation),
+            route.surface_for(&ContentSlot::Conversation),
             Some(SurfaceId::MainPane)
         );
     }
@@ -201,7 +223,7 @@ mod tests {
     fn test_default_progress_to_sidebar() {
         let route = RouteTable::default();
         assert_eq!(
-            route.surface_for(ContentSlot::Progress),
+            route.surface_for(&ContentSlot::Progress),
             Some(SurfaceId::Sidebar)
         );
     }
@@ -210,7 +232,7 @@ mod tests {
     fn test_default_hil_to_overlay() {
         let route = RouteTable::default();
         assert_eq!(
-            route.surface_for(ContentSlot::HilPrompt),
+            route.surface_for(&ContentSlot::HilPrompt),
             Some(SurfaceId::Overlay)
         );
     }
@@ -219,7 +241,7 @@ mod tests {
     fn test_default_help_to_overlay() {
         let route = RouteTable::default();
         assert_eq!(
-            route.surface_for(ContentSlot::Help),
+            route.surface_for(&ContentSlot::Help),
             Some(SurfaceId::Overlay)
         );
     }
@@ -228,7 +250,7 @@ mod tests {
     fn test_default_notification_to_status_bar() {
         let route = RouteTable::default();
         assert_eq!(
-            route.surface_for(ContentSlot::Notification),
+            route.surface_for(&ContentSlot::Notification),
             Some(SurfaceId::StatusBar)
         );
     }
@@ -236,7 +258,7 @@ mod tests {
     #[test]
     fn test_content_for_overlay_returns_two() {
         let route = RouteTable::default();
-        let contents = route.content_for(SurfaceId::Overlay);
+        let contents = route.content_for(&SurfaceId::Overlay);
         assert_eq!(contents.len(), 2);
         assert!(contents.contains(&ContentSlot::HilPrompt));
         assert!(contents.contains(&ContentSlot::Help));
@@ -245,7 +267,7 @@ mod tests {
     #[test]
     fn test_content_for_main_pane() {
         let route = RouteTable::default();
-        let contents = route.content_for(SurfaceId::MainPane);
+        let contents = route.content_for(&SurfaceId::MainPane);
         assert_eq!(contents, vec![ContentSlot::Conversation]);
     }
 
@@ -254,15 +276,15 @@ mod tests {
         let route = RouteTable {
             entries: Vec::new(),
         };
-        assert_eq!(route.surface_for(ContentSlot::Conversation), None);
+        assert_eq!(route.surface_for(&ContentSlot::Conversation), None);
     }
 
     #[test]
     fn test_minimal_layout_no_progress() {
         let route = RouteTable::minimal_layout();
-        assert_eq!(route.surface_for(ContentSlot::Progress), None);
+        assert_eq!(route.surface_for(&ContentSlot::Progress), None);
         assert_eq!(
-            route.surface_for(ContentSlot::Conversation),
+            route.surface_for(&ContentSlot::Conversation),
             Some(SurfaceId::MainPane)
         );
     }
@@ -271,11 +293,11 @@ mod tests {
     fn test_wide_layout_has_tool_log() {
         let route = RouteTable::wide_layout();
         assert_eq!(
-            route.surface_for(ContentSlot::ToolLog),
+            route.surface_for(&ContentSlot::ToolLog),
             Some(SurfaceId::ToolPane)
         );
         assert_eq!(
-            route.surface_for(ContentSlot::Progress),
+            route.surface_for(&ContentSlot::Progress),
             Some(SurfaceId::Sidebar)
         );
     }
@@ -284,7 +306,7 @@ mod tests {
     fn test_stacked_layout() {
         let route = RouteTable::stacked_layout();
         assert_eq!(
-            route.surface_for(ContentSlot::Progress),
+            route.surface_for(&ContentSlot::Progress),
             Some(SurfaceId::Sidebar)
         );
     }
@@ -294,7 +316,7 @@ mod tests {
         let mut route = RouteTable::default_layout();
         route.set_route(ContentSlot::Progress, SurfaceId::ToolFloat);
         assert_eq!(
-            route.surface_for(ContentSlot::Progress),
+            route.surface_for(&ContentSlot::Progress),
             Some(SurfaceId::ToolFloat)
         );
     }
@@ -304,7 +326,7 @@ mod tests {
         let mut route = RouteTable::default_layout();
         route.set_route(ContentSlot::ToolLog, SurfaceId::Sidebar);
         assert_eq!(
-            route.surface_for(ContentSlot::ToolLog),
+            route.surface_for(&ContentSlot::ToolLog),
             Some(SurfaceId::Sidebar)
         );
     }
@@ -319,13 +341,56 @@ mod tests {
         }];
         let route = RouteTable::from_preset_and_overrides(LayoutPreset::Default, &overrides);
         assert_eq!(
-            route.surface_for(ContentSlot::Progress),
+            route.surface_for(&ContentSlot::Progress),
             Some(SurfaceId::ToolFloat)
         );
         // Other entries unchanged
         assert_eq!(
-            route.surface_for(ContentSlot::Conversation),
+            route.surface_for(&ContentSlot::Conversation),
             Some(SurfaceId::MainPane)
+        );
+    }
+
+    #[test]
+    fn test_required_pane_surfaces_default() {
+        let route = RouteTable::default_layout();
+        let panes = route.required_pane_surfaces();
+        assert_eq!(panes, vec![SurfaceId::MainPane, SurfaceId::Sidebar]);
+    }
+
+    #[test]
+    fn test_required_pane_surfaces_minimal() {
+        let route = RouteTable::minimal_layout();
+        let panes = route.required_pane_surfaces();
+        assert_eq!(panes, vec![SurfaceId::MainPane]);
+    }
+
+    #[test]
+    fn test_required_pane_surfaces_wide() {
+        let route = RouteTable::wide_layout();
+        let panes = route.required_pane_surfaces();
+        assert_eq!(
+            panes,
+            vec![SurfaceId::MainPane, SurfaceId::Sidebar, SurfaceId::ToolPane]
+        );
+    }
+
+    #[test]
+    fn test_entries_returns_all() {
+        let route = RouteTable::default_layout();
+        assert_eq!(route.entries().len(), 5);
+    }
+
+    #[test]
+    fn test_model_stream_route() {
+        let mut route = RouteTable::default_layout();
+        route.set_route(
+            ContentSlot::ModelStream("claude".into()),
+            SurfaceId::DynamicPane("claude".into()),
+        );
+        assert_eq!(
+            route.surface_for(&ContentSlot::ModelStream("claude".into())),
+            Some(SurfaceId::DynamicPane("claude".into()))
         );
     }
 }

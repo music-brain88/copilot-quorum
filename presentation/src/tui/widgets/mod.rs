@@ -2,31 +2,34 @@
 //!
 //! Layout:
 //! ┌── Header (3) ────────────────────────────────────┐
-//! ├── Conversation (flex) ──┬── Progress (30%) ──────┤
-//! ├── Input (3) ────────────┴────────────────────────┤
+//! ├── Panes (flex, dynamically split) ───────────────┤
+//! ├── Input (3) ─────────────────────────────────────┤
 //! └── StatusBar (1) ─────────────────────────────────┘
 
 pub mod conversation;
 pub mod header;
 pub mod input;
+pub mod model_stream;
 pub mod progress_panel;
 pub mod status_bar;
 pub mod tab_bar;
+pub mod tool_log;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use super::layout::LayoutPreset;
 
-/// Compute the main layout regions from a terminal area
+/// Compute the main layout regions from a terminal area.
+///
+/// `panes` is a dynamically-sized Vec of content pane areas, ordered to match
+/// the `SurfaceId` list from `RouteTable::required_pane_surfaces()`.
 pub struct MainLayout {
     pub header: Rect,
     pub tab_bar: Option<Rect>,
-    pub conversation: Rect,
-    pub progress: Rect,
+    /// Dynamic content panes — ordered to match the route table's pane surfaces.
+    pub panes: Vec<Rect>,
     pub input: Rect,
     pub status_bar: Rect,
-    /// Third pane for Wide layout (tool log display). None for other presets.
-    pub tool_pane: Option<Rect>,
 }
 
 impl MainLayout {
@@ -38,7 +41,7 @@ impl MainLayout {
     /// The input area grows from 3 (1 line + borders) up to max_input_height + 2 (borders),
     /// but is capped to prevent pushing other widgets out of the terminal.
     ///
-    /// Delegates to `compute_with_layout()` with `LayoutPreset::Default` and threshold=0.
+    /// Delegates to `compute_with_layout()` with `LayoutPreset::Default`, threshold=0, pane_count=2.
     #[allow(dead_code)]
     pub fn compute_with_input_config(
         area: Rect,
@@ -53,12 +56,14 @@ impl MainLayout {
             show_tab_bar,
             LayoutPreset::Default,
             0,
+            2,
         )
     }
 
-    /// Compute layout with a preset and flex threshold.
+    /// Compute layout with a preset, flex threshold, and dynamic pane count.
     ///
     /// If `area.width < flex_threshold`, the preset falls back to Minimal.
+    /// `pane_count` determines how many content panes to split the main area into.
     pub fn compute_with_layout(
         area: Rect,
         input_lines: u16,
@@ -66,6 +71,7 @@ impl MainLayout {
         show_tab_bar: bool,
         preset: LayoutPreset,
         flex_threshold: u16,
+        pane_count: usize,
     ) -> Self {
         // Responsive fallback: narrow terminal → Minimal
         let effective_preset = if flex_threshold > 0 && area.width < flex_threshold {
@@ -74,122 +80,39 @@ impl MainLayout {
             preset
         };
 
-        match effective_preset {
-            LayoutPreset::Default => {
-                Self::compute_default(area, input_lines, max_input_height, show_tab_bar)
-            }
-            LayoutPreset::Minimal => {
-                Self::compute_minimal(area, input_lines, max_input_height, show_tab_bar)
-            }
-            LayoutPreset::Wide => {
-                Self::compute_wide(area, input_lines, max_input_height, show_tab_bar)
-            }
-            LayoutPreset::Stacked => {
-                Self::compute_stacked(area, input_lines, max_input_height, show_tab_bar)
-            }
-        }
-    }
-
-    /// Default: 70/30 horizontal split (conversation + sidebar).
-    fn compute_default(
-        area: Rect,
-        input_lines: u16,
-        max_input_height: u16,
-        show_tab_bar: bool,
-    ) -> Self {
         let (header, tab_bar, main_area, input, status_bar) =
             Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
 
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(main_area);
+        let pane_count = if effective_preset == LayoutPreset::Minimal {
+            1
+        } else {
+            pane_count.max(1)
+        };
+
+        let splits = effective_preset.default_splits(pane_count);
+        let direction = effective_preset.split_direction();
+
+        let constraints: Vec<Constraint> = splits
+            .iter()
+            .map(|&pct| Constraint::Percentage(pct))
+            .collect();
+
+        let panes = if constraints.is_empty() {
+            vec![main_area]
+        } else {
+            Layout::default()
+                .direction(direction)
+                .constraints(constraints)
+                .split(main_area)
+                .to_vec()
+        };
 
         Self {
             header,
             tab_bar,
-            conversation: horizontal[0],
-            progress: horizontal[1],
+            panes,
             input,
             status_bar,
-            tool_pane: None,
-        }
-    }
-
-    /// Minimal: full-width conversation, no sidebar.
-    fn compute_minimal(
-        area: Rect,
-        input_lines: u16,
-        max_input_height: u16,
-        show_tab_bar: bool,
-    ) -> Self {
-        let (header, tab_bar, main_area, input, status_bar) =
-            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
-
-        Self {
-            header,
-            tab_bar,
-            conversation: main_area,
-            progress: Rect::ZERO,
-            input,
-            status_bar,
-            tool_pane: None,
-        }
-    }
-
-    /// Wide: 60/20/20 three-pane horizontal split.
-    fn compute_wide(
-        area: Rect,
-        input_lines: u16,
-        max_input_height: u16,
-        show_tab_bar: bool,
-    ) -> Self {
-        let (header, tab_bar, main_area, input, status_bar) =
-            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
-
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(60),
-                Constraint::Percentage(20),
-                Constraint::Percentage(20),
-            ])
-            .split(main_area);
-
-        Self {
-            header,
-            tab_bar,
-            conversation: horizontal[0],
-            progress: horizontal[1],
-            input,
-            status_bar,
-            tool_pane: Some(horizontal[2]),
-        }
-    }
-
-    /// Stacked: vertical split (conversation 70% top, progress 30% bottom).
-    fn compute_stacked(
-        area: Rect,
-        input_lines: u16,
-        max_input_height: u16,
-        show_tab_bar: bool,
-    ) -> Self {
-        let (header, tab_bar, main_area, input, status_bar) =
-            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
-
-        let vertical = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(main_area);
-
-        Self {
-            header,
-            tab_bar,
-            conversation: vertical[0],
-            progress: vertical[1],
-            input,
-            status_bar,
-            tool_pane: None,
         }
     }
 

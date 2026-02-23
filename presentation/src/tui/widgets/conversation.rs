@@ -1,5 +1,6 @@
 //! Conversation widget — message history + streaming text
 
+use crate::tui::content::{ContentRenderer, ContentSlot};
 use crate::tui::state::TuiState;
 use ratatui::{
     buffer::Buffer,
@@ -8,6 +9,19 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
+
+/// ContentRenderer adapter for the conversation pane.
+pub struct ConversationRenderer;
+
+impl ContentRenderer for ConversationRenderer {
+    fn slot(&self) -> ContentSlot {
+        ContentSlot::Conversation
+    }
+
+    fn render_content(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        ConversationWidget::new(state).render(area, buf);
+    }
+}
 
 pub struct ConversationWidget<'a> {
     state: &'a TuiState,

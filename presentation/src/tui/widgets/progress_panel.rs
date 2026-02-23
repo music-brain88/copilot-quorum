@@ -1,5 +1,6 @@
 //! Progress panel widget — phase, tools, quorum status, tool execution lifecycle
 
+use crate::tui::content::{ContentRenderer, ContentSlot};
 use crate::tui::state::{ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiState};
 use quorum_domain::AgentPhase;
 use ratatui::{
@@ -9,6 +10,19 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget},
 };
+
+/// ContentRenderer adapter for the progress panel.
+pub struct ProgressRenderer;
+
+impl ContentRenderer for ProgressRenderer {
+    fn slot(&self) -> ContentSlot {
+        ContentSlot::Progress
+    }
+
+    fn render_content(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        ProgressPanelWidget::new(state).render(area, buf);
+    }
+}
 
 pub struct ProgressPanelWidget<'a> {
     state: &'a TuiState,
@@ -251,7 +265,10 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
 ///
 /// Format: `    ▸ read_file  src/main.rs`
 ///         `    ✓ run_command  cargo test (1.2s)`
-fn render_tool_execution_line<'a>(lines: &mut Vec<Line<'a>>, exec: &ToolExecutionDisplay) {
+pub(super) fn render_tool_execution_line<'a>(
+    lines: &mut Vec<Line<'a>>,
+    exec: &ToolExecutionDisplay,
+) {
     let (icon, color, suffix) = match &exec.state {
         ToolExecutionDisplayStatus::Pending => ("…", Color::DarkGray, String::new()),
         ToolExecutionDisplayStatus::Running => ("▸", Color::Yellow, String::new()),
@@ -284,7 +301,7 @@ fn render_tool_execution_line<'a>(lines: &mut Vec<Line<'a>>, exec: &ToolExecutio
 }
 
 /// Format a duration in milliseconds to a human-readable string.
-fn format_duration(ms: u64) -> String {
+pub(super) fn format_duration(ms: u64) -> String {
     if ms < 1000 {
         format!(" ({}ms)", ms)
     } else {
@@ -293,7 +310,7 @@ fn format_duration(ms: u64) -> String {
 }
 
 /// Truncate a string to max_len characters, appending "..." if truncated.
-fn truncate_str(s: &str, max_len: usize) -> String {
+pub(super) fn truncate_str(s: &str, max_len: usize) -> String {
     if s.chars().count() <= max_len {
         s.to_string()
     } else {

@@ -20,7 +20,9 @@ pub mod tab;
 mod widgets;
 
 pub use app::TuiApp;
-pub use content::{ContentSlot, ConversationContent, ProgressContent};
+pub use content::{
+    ContentRegistry, ContentRenderer, ContentSlot, ConversationContent, ProgressContent,
+};
 pub use event::TuiEvent;
 pub use human_intervention::TuiHumanIntervention;
 pub use layout::{LayoutPreset, TuiLayoutConfig};
