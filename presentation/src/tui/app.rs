@@ -11,6 +11,7 @@
 //!        └── cmd_tx ──────────────────>──┘
 //! ```
 
+use super::content::ContentRegistry;
 use super::editor::{self, EditorContext, EditorResult};
 use super::event::{HilKind, HilRequest, RoutedTuiEvent, TuiCommand, TuiEvent};
 use super::layout::TuiLayoutConfig;
@@ -21,10 +22,11 @@ use super::state::{
     DisplayMessage, EnsembleProgress, HilPrompt, QuorumStatus, TaskProgress, TaskSummary,
     ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiInputConfig, TuiState,
 };
+use super::surface::SurfaceId;
 use super::tab::PaneKind;
 use super::widgets::{
-    MainLayout, conversation::ConversationWidget, header::HeaderWidget, input::InputWidget,
-    progress_panel::ProgressPanelWidget, status_bar::StatusBarWidget, tab_bar::TabBarWidget,
+    MainLayout, header::HeaderWidget, input::InputWidget, status_bar::StatusBarWidget,
+    tab_bar::TabBarWidget,
 };
 
 /// Side-effect that requires main loop intervention (e.g. terminal suspend)
@@ -83,6 +85,11 @@ pub struct TuiApp<
 
     // -- Layout configuration --
     layout_config: TuiLayoutConfig,
+
+    // -- Content registry (registry-driven rendering) --
+    // RefCell for interior mutability: dynamic model stream renderers are
+    // registered during event handling (&self) but consumed during render (&self).
+    content_registry: std::cell::RefCell<ContentRegistry>,
 
     // -- Type witness for generics --
     _phantom: std::marker::PhantomData<(G, T, C)>,
@@ -157,6 +164,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             _controller_handle: controller_handle,
             tui_config: TuiInputConfig::default(),
             layout_config: TuiLayoutConfig::default(),
+            content_registry: std::cell::RefCell::new(Self::build_default_registry()),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -387,11 +395,24 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
         Ok(())
     }
 
-    /// Render all widgets
-    fn render(&self, frame: &mut ratatui::Frame, state: &TuiState) {
-        use super::content::ContentSlot;
-        use super::surface::{SurfaceId, SurfaceLayout};
+    /// Build the default content registry with all built-in renderers.
+    fn build_default_registry() -> ContentRegistry {
+        use super::widgets::{
+            conversation::ConversationRenderer, progress_panel::ProgressRenderer,
+            tool_log::ToolLogRenderer,
+        };
 
+        ContentRegistry::new()
+            .register(Box::new(ConversationRenderer))
+            .register(Box::new(ProgressRenderer))
+            .register(Box::new(ToolLogRenderer))
+    }
+
+    /// Render all widgets via registry-driven dispatch.
+    fn render(&self, frame: &mut ratatui::Frame, state: &TuiState) {
+        use super::surface::SurfaceLayout;
+
+        let pane_surfaces = state.route.required_pane_surfaces();
         let show_tab_bar = state.tabs.len() > 1;
         let layout = MainLayout::compute_with_layout(
             frame.area(),
@@ -400,47 +421,37 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
             show_tab_bar,
             state.layout_config.preset,
             state.layout_config.flex_threshold,
+            pane_surfaces.len(),
         );
 
-        // Build surface layout from the computed main layout
-        let surfaces = SurfaceLayout::from_main_layout(&layout);
+        // Build surface layout from the computed main layout + pane surfaces
+        let surfaces = SurfaceLayout::from_main_layout(&layout, &pane_surfaces);
 
-        // Render via route table: look up surface for each content slot
+        // Fixed chrome
         frame.render_widget(HeaderWidget::new(state), layout.header);
-        if let Some(tab_bar_area) = surfaces.area_for(SurfaceId::TabBar) {
+        if let Some(tab_bar_area) = surfaces.area_for(&SurfaceId::TabBar) {
             frame.render_widget(TabBarWidget::new(&state.tabs), tab_bar_area);
-        }
-        if let Some(area) = surfaces.area_for(
-            state
-                .route
-                .surface_for(ContentSlot::Conversation)
-                .unwrap_or(SurfaceId::MainPane),
-        ) {
-            frame.render_widget(ConversationWidget::new(state), area);
-        }
-        if let Some(area) = surfaces.area_for(
-            state
-                .route
-                .surface_for(ContentSlot::Progress)
-                .unwrap_or(SurfaceId::Sidebar),
-        ) {
-            frame.render_widget(ProgressPanelWidget::new(state), area);
-        }
-        // ToolPane (Wide layout: third pane — shows Progress as interim until #214)
-        if let Some(area) = surfaces.area_for(SurfaceId::ToolPane) {
-            frame.render_widget(ProgressPanelWidget::new(state), area);
         }
         frame.render_widget(InputWidget::new(state), layout.input);
         frame.render_widget(StatusBarWidget::new(state), layout.status_bar);
 
-        // Help overlay
+        // Registry-driven content dispatch
+        let registry = self.content_registry.borrow();
+        for entry in state.route.entries() {
+            if let Some(area) = surfaces.area_for(&entry.surface)
+                && let Some(renderer) = registry.get(&entry.content)
+            {
+                renderer.render_content(state, area, frame.buffer_mut());
+            }
+        }
+
+        // Dynamic overlays (rendered on top, only when visible)
         if state.show_help {
             let help_area = MainLayout::centered_overlay(70, 70, frame.area());
             frame.render_widget(ratatui::widgets::Clear, help_area);
             self.render_help(frame, help_area);
         }
 
-        // HiL modal
         if state.hil_prompt.is_some() {
             let modal_area = MainLayout::centered_overlay(60, 50, frame.area());
             frame.render_widget(ratatui::widgets::Clear, modal_area);
@@ -962,6 +973,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                         voting_started: false,
                         plan_count: None,
                         selected: None,
+                        model_streams: std::collections::HashMap::new(),
                     });
                 }
             }
@@ -1012,6 +1024,60 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static, C: ContextLoaderPor
                 );
                 if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
                     pane.progress.ensemble_progress = None;
+                }
+            }
+            TuiEvent::EnsembleModelStreamStart(model) => {
+                use super::content::ContentSlot;
+                use super::state::{ModelStreamState, ModelStreamStatus};
+                use super::widgets::model_stream::ModelStreamRenderer;
+
+                // Register dynamic route + renderer for this model
+                state.route.set_route(
+                    ContentSlot::ModelStream(model.clone()),
+                    SurfaceId::DynamicPane(model.clone()),
+                );
+                self.content_registry
+                    .borrow_mut()
+                    .register_mut(Box::new(ModelStreamRenderer::new(model.clone())));
+
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                {
+                    ep.model_streams.insert(
+                        model.clone(),
+                        ModelStreamState {
+                            model_name: model,
+                            streaming_text: String::new(),
+                            status: ModelStreamStatus::Streaming,
+                            score: None,
+                            duration_ms: None,
+                        },
+                    );
+                }
+            }
+            TuiEvent::EnsembleModelStreamChunk { model, chunk } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                    && let Some(ms) = ep.model_streams.get_mut(&model)
+                {
+                    ms.streaming_text.push_str(&chunk);
+                }
+            }
+            TuiEvent::EnsembleModelStreamEnd(model) => {
+                use super::state::ModelStreamStatus;
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                    && let Some(ms) = ep.model_streams.get_mut(&model)
+                {
+                    ms.status = ModelStreamStatus::Complete;
+                }
+            }
+            TuiEvent::EnsembleVoteScore { model, score } => {
+                if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
+                    && let Some(ref mut ep) = pane.progress.ensemble_progress
+                    && let Some(ms) = ep.model_streams.get_mut(&model)
+                {
+                    ms.score = Some(score);
                 }
             }
             TuiEvent::AgentStarting => {

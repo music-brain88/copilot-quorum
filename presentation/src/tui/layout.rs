@@ -6,6 +6,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use ratatui::layout::Direction;
+
 use super::content::ContentSlot;
 use super::surface::SurfaceId;
 
@@ -24,6 +26,41 @@ pub enum LayoutPreset {
     Minimal,
     Wide,
     Stacked,
+}
+
+impl LayoutPreset {
+    /// Default percentage splits for a given number of content panes.
+    ///
+    /// Returns a `Vec<u16>` of percentages that sum to 100.
+    pub fn default_splits(&self, pane_count: usize) -> Vec<u16> {
+        match (self, pane_count) {
+            (_, 0) => vec![],
+            (_, 1) => vec![100],
+            (Self::Default, 2) => vec![70, 30],
+            (Self::Wide, 3) => vec![60, 20, 20],
+            (Self::Stacked, 2) => vec![70, 30],
+            _ => {
+                let per = 100 / pane_count as u16;
+                let remainder = 100 - per * pane_count as u16;
+                let mut splits = vec![per; pane_count];
+                // Give the remainder to the first pane
+                if remainder > 0 {
+                    splits[0] += remainder;
+                }
+                splits
+            }
+        }
+    }
+
+    /// Split direction for this preset.
+    ///
+    /// Stacked uses vertical split; all others use horizontal.
+    pub fn split_direction(&self) -> Direction {
+        match self {
+            Self::Stacked => Direction::Vertical,
+            _ => Direction::Horizontal,
+        }
+    }
 }
 
 impl FromStr for LayoutPreset {
@@ -294,5 +331,31 @@ mod tests {
         assert_eq!(config.surface_config.width_percent, 30);
         assert_eq!(config.surface_config.border, BorderStyle::Rounded);
         assert!(config.route_overrides.is_empty());
+    }
+
+    #[test]
+    fn test_default_splits() {
+        assert_eq!(LayoutPreset::Default.default_splits(2), vec![70, 30]);
+        assert_eq!(LayoutPreset::Wide.default_splits(3), vec![60, 20, 20]);
+        assert_eq!(LayoutPreset::Stacked.default_splits(2), vec![70, 30]);
+        assert_eq!(LayoutPreset::Minimal.default_splits(1), vec![100]);
+        assert_eq!(LayoutPreset::Default.default_splits(0), Vec::<u16>::new());
+        // Fallback: equal split with remainder to first pane
+        assert_eq!(LayoutPreset::Default.default_splits(3), vec![34, 33, 33]);
+    }
+
+    #[test]
+    fn test_split_direction() {
+        use ratatui::layout::Direction;
+        assert_eq!(
+            LayoutPreset::Default.split_direction(),
+            Direction::Horizontal
+        );
+        assert_eq!(
+            LayoutPreset::Minimal.split_direction(),
+            Direction::Horizontal
+        );
+        assert_eq!(LayoutPreset::Wide.split_direction(), Direction::Horizontal);
+        assert_eq!(LayoutPreset::Stacked.split_direction(), Direction::Vertical);
     }
 }

@@ -222,6 +222,17 @@ pub trait AgentProgressNotifier: Send + Sync {
     ///
     /// This happens when all models fail to generate plans in ensemble mode.
     fn on_ensemble_fallback(&self, _reason: &str) {}
+
+    // ==================== Ensemble Model Stream Callbacks ====================
+
+    /// Called when a model starts streaming during ensemble planning.
+    fn on_ensemble_model_stream_start(&self, _model: &str) {}
+
+    /// Called for each text chunk from a model during ensemble planning.
+    fn on_ensemble_model_stream_chunk(&self, _model: &str, _chunk: &str) {}
+
+    /// Called when a model finishes streaming during ensemble planning.
+    fn on_ensemble_model_stream_end(&self, _model: &str) {}
 }
 
 /// No-op implementation for when progress isn't needed
