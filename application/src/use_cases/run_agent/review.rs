@@ -7,7 +7,6 @@ use super::RunAgentUseCase;
 use super::types::{QuorumReviewResult, RunAgentError, RunAgentInput};
 use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
-use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::conversation_logger::ConversationEvent;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway};
 use crate::ports::tool_executor::ToolExecutorPort;
@@ -43,16 +42,16 @@ pub(crate) async fn query_model_for_review(
 // ==================== QuorumActionReviewer ====================
 
 /// Action reviewer that uses quorum (multi-model voting) to review high-risk tool calls.
-pub(crate) struct QuorumActionReviewer<G: LlmGateway, T: ToolExecutorPort> {
-    gateway: Arc<G>,
-    tool_executor: Arc<T>,
+pub(crate) struct QuorumActionReviewer {
+    gateway: Arc<dyn LlmGateway>,
+    tool_executor: Arc<dyn ToolExecutorPort>,
     cancellation_token: Option<CancellationToken>,
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> QuorumActionReviewer<G, T> {
+impl QuorumActionReviewer {
     pub(crate) fn new(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         cancellation_token: Option<CancellationToken>,
     ) -> Self {
         Self {
@@ -64,9 +63,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> QuorumActionReviewe
 }
 
 #[async_trait]
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ActionReviewer
-    for QuorumActionReviewer<G, T>
-{
+impl ActionReviewer for QuorumActionReviewer {
     async fn review_action(
         &self,
         tool_call_json: &str,
@@ -178,12 +175,7 @@ impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ActionReviewer
 
 // ==================== RunAgentUseCase Review Methods ====================
 
-impl<G, T, C> RunAgentUseCase<G, T, C>
-where
-    G: LlmGateway + 'static,
-    T: ToolExecutorPort + 'static,
-    C: ContextLoaderPort + 'static,
-{
+impl RunAgentUseCase {
     /// Review the plan using quorum (multiple models vote)
     pub(super) async fn review_plan(
         &self,

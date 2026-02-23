@@ -26,19 +26,19 @@ use tracing::{debug, info, warn};
 /// Handles dynamic model selection based on tool risk level,
 /// parallel execution of low-risk tools, and sequential execution
 /// of high-risk tools with action review.
-pub struct ExecuteTaskUseCase<G: LlmGateway, T: ToolExecutorPort> {
-    gateway: Arc<G>,
-    tool_executor: Arc<T>,
+pub struct ExecuteTaskUseCase {
+    gateway: Arc<dyn LlmGateway>,
+    tool_executor: Arc<dyn ToolExecutorPort>,
     tool_schema: Arc<dyn ToolSchemaPort>,
     cancellation_token: Option<CancellationToken>,
     action_reviewer: Arc<dyn ActionReviewer>,
     conversation_logger: Arc<dyn ConversationLogger>,
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> ExecuteTaskUseCase<G, T> {
+impl ExecuteTaskUseCase {
     pub fn new(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
         cancellation_token: Option<CancellationToken>,
         action_reviewer: Arc<dyn ActionReviewer>,

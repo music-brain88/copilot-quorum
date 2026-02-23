@@ -5,13 +5,17 @@
 
 use anyhow::{Result, bail};
 use clap::Parser;
+use quorum_application::ContextLoaderPort;
 use quorum_application::ExecutionParams;
+use quorum_application::LlmGateway;
+use quorum_application::ToolExecutorPort;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
 use quorum_infrastructure::{
-    ConfigLoader, CopilotLlmGateway, FileConfig, GitHubReferenceResolver, JsonSchemaToolConverter,
-    JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
+    ConfigLoader, CopilotLlmGateway, CopilotProviderAdapter, FileConfig, GitHubReferenceResolver,
+    JsonSchemaToolConverter, JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
 };
+use quorum_infrastructure::{ProviderAdapter, RoutingGateway};
 use quorum_presentation::{
     AgentProgressReporter, Cli, InteractiveHumanIntervention, LayoutPreset, OutputConfig,
     ReplConfig, TuiApp, TuiInputConfig, TuiLayoutConfig,
@@ -339,7 +343,10 @@ async fn main() -> Result<()> {
 
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
-    let gateway = Arc::new(CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?);
+    let copilot = CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?;
+    let providers =
+        vec![Arc::new(CopilotProviderAdapter::new(copilot)) as Arc<dyn ProviderAdapter>];
+    let gateway: Arc<dyn LlmGateway> = Arc::new(RoutingGateway::new(providers, &config.providers));
 
     // Create tool executor
     let working_dir = cli
@@ -361,14 +368,14 @@ async fn main() -> Result<()> {
         tool_executor = tool_executor.with_custom_tools(&config.tools.custom);
         info!("Registered {} custom tool(s)", config.tools.custom.len());
     }
-    let tool_executor = Arc::new(tool_executor);
+    let tool_executor: Arc<dyn ToolExecutorPort> = Arc::new(tool_executor);
 
     // Create tool schema converter
     let tool_schema: Arc<dyn quorum_application::ToolSchemaPort> =
         Arc::new(JsonSchemaToolConverter);
 
     // Create context loader
-    let context_loader = Arc::new(LocalContextLoader::new());
+    let context_loader: Arc<dyn ContextLoaderPort> = Arc::new(LocalContextLoader::new());
 
     // === Build QuorumConfig from split types ===
 

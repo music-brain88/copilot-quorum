@@ -7,6 +7,7 @@ pub mod config;
 pub mod context;
 pub mod copilot;
 pub mod logging;
+pub mod providers;
 pub mod reference;
 pub mod tools;
 
@@ -23,6 +24,9 @@ pub use copilot::{
     session::CopilotSession,
 };
 pub use logging::JsonlConversationLogger;
+pub use providers::{
+    ProviderAdapter, ProviderKind, copilot_adapter::CopilotProviderAdapter, routing::RoutingGateway,
+};
 pub use reference::GitHubReferenceResolver;
 pub use tools::{
     JsonSchemaToolConverter, LocalToolExecutor, default_tool_spec, read_only_tool_spec,
