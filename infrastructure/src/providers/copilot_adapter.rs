@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use quorum_domain::Model;
 
-pub(crate) struct CopilotProviderAdapter {
+pub struct CopilotProviderAdapter {
     inner: CopilotLlmGateway,
 }
 
