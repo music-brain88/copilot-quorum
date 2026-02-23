@@ -1,12 +1,10 @@
 //! Planning-related methods for the RunAgent use case.
 
-use super::RunAgentUseCase;
 use super::types::{EnsemblePlanningOutcome, PlanningResult, RunAgentError, RunAgentInput};
+use super::RunAgentUseCase;
 use crate::ports::agent_progress::AgentProgressNotifier;
-use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::conversation_logger::ConversationEvent;
-use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession, ToolResultMessage};
-use crate::ports::tool_executor::ToolExecutorPort;
+use crate::ports::llm_gateway::{GatewayError, LlmSession, ToolResultMessage};
 use crate::use_cases::shared::check_cancelled;
 use quorum_domain::agent::plan_parser::extract_plan_from_response;
 use quorum_domain::quorum::parsing::parse_vote_score;
@@ -18,8 +16,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
-impl RunAgentUseCase
-{
+impl RunAgentUseCase {
     pub(super) async fn create_plan(
         &self,
         session: &dyn LlmSession,

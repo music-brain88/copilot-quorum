@@ -7,7 +7,6 @@ use super::types::{QuorumReviewResult, RunAgentError, RunAgentInput};
 use super::RunAgentUseCase;
 use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
-use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::conversation_logger::ConversationEvent;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway};
 use crate::ports::tool_executor::ToolExecutorPort;
@@ -176,9 +175,7 @@ impl ActionReviewer for QuorumActionReviewer {
 
 // ==================== RunAgentUseCase Review Methods ====================
 
-impl RunAgentUseCase
-where
-{
+impl RunAgentUseCase {
     /// Review the plan using quorum (multiple models vote)
     pub(super) async fn review_plan(
         &self,

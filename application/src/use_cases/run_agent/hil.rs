@@ -5,10 +5,7 @@
 use super::types::RunAgentError;
 use super::RunAgentUseCase;
 use crate::ports::agent_progress::AgentProgressNotifier;
-use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::human_intervention::HumanInterventionError;
-use crate::ports::llm_gateway::LlmGateway;
-use crate::ports::tool_executor::ToolExecutorPort;
 use quorum_domain::{AgentState, HilMode, HumanDecision};
 use tracing::{info, warn};
 
