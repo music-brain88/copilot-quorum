@@ -30,19 +30,19 @@ use tracing::{info, warn};
 /// 1. Load known files directly (no LLM needed)
 /// 2. Run exploration agent with tool use
 /// 3. Proceed with minimal context
-pub struct GatherContextUseCase<T: ToolExecutorPort, C: ContextLoaderPort> {
-    tool_executor: Arc<T>,
+pub struct GatherContextUseCase {
+    tool_executor: Arc<dyn ToolExecutorPort>,
     tool_schema: Arc<dyn ToolSchemaPort>,
-    context_loader: Option<Arc<C>>,
+    context_loader: Option<Arc<dyn ContextLoaderPort>>,
     cancellation_token: Option<CancellationToken>,
     reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
 }
 
-impl<T: ToolExecutorPort + 'static, C: ContextLoaderPort + 'static> GatherContextUseCase<T, C> {
+impl GatherContextUseCase {
     pub fn new(
-        tool_executor: Arc<T>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
-        context_loader: Option<Arc<C>>,
+        context_loader: Option<Arc<dyn ContextLoaderPort>>,
         cancellation_token: Option<CancellationToken>,
     ) -> Self {
         Self {

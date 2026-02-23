@@ -13,9 +13,10 @@ mod file_config;
 mod loader;
 
 pub use file_config::{
-    EnhancedToolConfig, FileAgentConfig, FileBuiltinToolsConfig, FileCliToolsConfig, FileConfig,
-    FileContextBudgetConfig, FileCustomToolConfig, FileCustomToolParameter, FileMcpServerConfig,
-    FileMcpToolsConfig, FileModelsConfig, FileOutputConfig, FileOutputFormat, FileReplConfig,
+    EnhancedToolConfig, FileAgentConfig, FileAnthropicConfig, FileBuiltinToolsConfig,
+    FileCliToolsConfig, FileConfig, FileContextBudgetConfig, FileCustomToolConfig,
+    FileCustomToolParameter, FileMcpServerConfig, FileMcpToolsConfig, FileModelsConfig,
+    FileOpenAiConfig, FileOutputConfig, FileOutputFormat, FileProvidersConfig, FileReplConfig,
     FileToolsConfig, FileTuiConfig, FileTuiInputConfig, FileTuiLayoutConfig, FileTuiRoutesConfig,
     FileTuiSurfaceConfig, FileTuiSurfacesConfig, ToolProviderType,
 };

@@ -63,14 +63,14 @@ impl RunAskInput {
 /// 2. Send query with low-risk tools via [`send_with_tools()`]
 /// 3. Multi-turn tool loop (low-risk only, parallel execution)
 /// 4. Return [`InteractionResult::AskResult`]
-pub struct RunAskUseCase<G: LlmGateway, T: ToolExecutorPort> {
-    gateway: Arc<G>,
-    tool_executor: Arc<T>,
+pub struct RunAskUseCase {
+    gateway: Arc<dyn LlmGateway>,
+    tool_executor: Arc<dyn ToolExecutorPort>,
     tool_schema: Arc<dyn ToolSchemaPort>,
     conversation_logger: Arc<dyn ConversationLogger>,
 }
 
-impl<G: LlmGateway, T: ToolExecutorPort> Clone for RunAskUseCase<G, T> {
+impl Clone for RunAskUseCase {
     fn clone(&self) -> Self {
         Self {
             gateway: self.gateway.clone(),
@@ -81,10 +81,10 @@ impl<G: LlmGateway, T: ToolExecutorPort> Clone for RunAskUseCase<G, T> {
     }
 }
 
-impl<G: LlmGateway + 'static, T: ToolExecutorPort + 'static> RunAskUseCase<G, T> {
+impl RunAskUseCase {
     pub fn new(
-        gateway: Arc<G>,
-        tool_executor: Arc<T>,
+        gateway: Arc<dyn LlmGateway>,
+        tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
     ) -> Self {
         Self {

@@ -56,12 +56,12 @@ impl RunQuorumInput {
 }
 
 /// Use case for running a Quorum discussion
-pub struct RunQuorumUseCase<G: LlmGateway + 'static> {
-    gateway: Arc<G>,
+pub struct RunQuorumUseCase {
+    gateway: Arc<dyn LlmGateway>,
 }
 
-impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
-    pub fn new(gateway: Arc<G>) -> Self {
+impl RunQuorumUseCase {
+    pub fn new(gateway: Arc<dyn LlmGateway>) -> Self {
         Self { gateway }
     }
 
@@ -138,7 +138,7 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
             let question = input.question.content().to_string();
 
             join_set.spawn(async move {
-                let result = Self::query_model(&gateway, &model, &question).await;
+                let result = Self::query_model(gateway.as_ref(), &model, &question).await;
                 (model, result)
             });
         }
@@ -210,7 +210,8 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
 
             join_set.spawn(async move {
                 let result =
-                    Self::review_responses(&gateway, &model, &question, &other_responses).await;
+                    Self::review_responses(gateway.as_ref(), &model, &question, &other_responses)
+                        .await;
                 (model, other_responses, result)
             });
         }
@@ -271,7 +272,7 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
             .collect();
 
         let synthesis_content = Self::synthesize(
-            &self.gateway,
+            self.gateway.as_ref(),
             &moderator,
             input.question.content(),
             &successful_responses,
@@ -290,7 +291,7 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
 
     /// Query a single model
     async fn query_model(
-        gateway: &G,
+        gateway: &dyn LlmGateway,
         model: &Model,
         question: &str,
     ) -> Result<String, GatewayError> {
@@ -304,7 +305,7 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
 
     /// Have a model review other responses
     async fn review_responses(
-        gateway: &G,
+        gateway: &dyn LlmGateway,
         model: &Model,
         question: &str,
         responses: &[(String, String)],
@@ -319,7 +320,7 @@ impl<G: LlmGateway + 'static> RunQuorumUseCase<G> {
 
     /// Synthesize all responses and reviews
     async fn synthesize(
-        gateway: &G,
+        gateway: &dyn LlmGateway,
         moderator: &Model,
         question: &str,
         responses: &[(String, String)],

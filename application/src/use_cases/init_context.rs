@@ -272,19 +272,19 @@ impl InitContextProgressNotifier for NoInitContextProgress {}
 /// let output = use_case.execute(input).await?;
 /// println!("Generated context file at: {}", output.path);
 /// ```
-pub struct InitContextUseCase<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> {
-    gateway: Arc<G>,
-    context_loader: Arc<C>,
+pub struct InitContextUseCase {
+    gateway: Arc<dyn LlmGateway>,
+    context_loader: Arc<dyn ContextLoaderPort>,
 }
 
-impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase<G, C> {
+impl InitContextUseCase {
     /// Creates a new InitContextUseCase.
     ///
     /// # Arguments
     ///
     /// * `gateway` - LLM gateway for model communication
     /// * `context_loader` - Context loader for file operations
-    pub fn new(gateway: Arc<G>, context_loader: Arc<C>) -> Self {
+    pub fn new(gateway: Arc<dyn LlmGateway>, context_loader: Arc<dyn ContextLoaderPort>) -> Self {
         Self {
             gateway,
             context_loader,
@@ -385,7 +385,7 @@ impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase
             let prompt = analysis_prompt.clone();
 
             join_set.spawn(async move {
-                let result = Self::query_model(&gateway, &model, &prompt).await;
+                let result = Self::query_model(gateway.as_ref(), &model, &prompt).await;
                 (model, result)
             });
         }
@@ -467,7 +467,11 @@ impl<G: LlmGateway + 'static, C: ContextLoaderPort + 'static> InitContextUseCase
     /// # Returns
     ///
     /// The model's analysis response, or an error.
-    async fn query_model(gateway: &G, model: &Model, prompt: &str) -> Result<String, GatewayError> {
+    async fn query_model(
+        gateway: &dyn LlmGateway,
+        model: &Model,
+        prompt: &str,
+    ) -> Result<String, GatewayError> {
         let session = gateway.create_session(model).await?;
         session.send(prompt).await
     }

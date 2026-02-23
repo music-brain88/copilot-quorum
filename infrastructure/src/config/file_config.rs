@@ -7,6 +7,7 @@ use quorum_domain::ContextBudget;
 use quorum_domain::agent::validation::{ConfigIssue, ConfigIssueCode, Severity};
 use quorum_domain::{ConsensusLevel, HilMode, Model, OutputFormat, PhaseScope, QuorumRule};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // Re-export OutputFormat from domain for convenience
 pub use quorum_domain::OutputFormat as FileOutputFormat;
@@ -441,21 +442,21 @@ pub struct FileCliToolsConfig {
     /// Tool aliases (tool_name -> CLI command)
     /// e.g., grep_search = "grep" or grep_search = "rg"
     #[serde(default)]
-    pub aliases: std::collections::HashMap<String, String>,
+    pub aliases: HashMap<String, String>,
     /// Enhanced tool definitions (for suggesting upgrades)
     #[serde(default)]
-    pub enhanced: std::collections::HashMap<String, EnhancedToolConfig>,
+    pub enhanced: HashMap<String, EnhancedToolConfig>,
 }
 
 impl Default for FileCliToolsConfig {
     fn default() -> Self {
-        let mut aliases = std::collections::HashMap::new();
+        let mut aliases = HashMap::new();
         // Default to standard tools (available everywhere)
         aliases.insert("grep_search".to_string(), "grep".to_string());
         aliases.insert("glob_search".to_string(), "find".to_string());
         aliases.insert("read_file".to_string(), "cat".to_string());
 
-        let mut enhanced = std::collections::HashMap::new();
+        let mut enhanced = HashMap::new();
         enhanced.insert(
             "grep_search".to_string(),
             EnhancedToolConfig {
@@ -501,7 +502,7 @@ pub struct FileMcpServerConfig {
     pub args: Vec<String>,
     /// Environment variables
     #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
+    pub env: HashMap<String, String>,
 }
 
 /// MCP tools configuration
@@ -603,7 +604,7 @@ pub struct FileCustomToolConfig {
     pub risk_level: String,
     /// Parameter definitions
     #[serde(default)]
-    pub parameters: std::collections::HashMap<String, FileCustomToolParameter>,
+    pub parameters: HashMap<String, FileCustomToolParameter>,
 }
 
 fn default_high_risk() -> String {
@@ -669,7 +670,7 @@ pub struct FileToolsConfig {
     pub mcp: FileMcpToolsConfig,
     /// Custom tools — user-defined CLI commands exposed as tools
     #[serde(default)]
-    pub custom: std::collections::HashMap<String, FileCustomToolConfig>,
+    pub custom: HashMap<String, FileCustomToolConfig>,
 }
 
 fn default_suggest_enhanced() -> bool {
@@ -684,7 +685,7 @@ impl Default for FileToolsConfig {
             builtin: FileBuiltinToolsConfig::default(),
             cli: FileCliToolsConfig::default(),
             mcp: FileMcpToolsConfig::default(),
-            custom: std::collections::HashMap::new(),
+            custom: HashMap::new(),
         }
     }
 }
@@ -942,6 +943,9 @@ pub struct FileConfig {
     pub tui: FileTuiConfig,
     /// Context budget settings
     pub context_budget: FileContextBudgetConfig,
+    /// Provider settings (e.g. Bedrock credentials)
+    /// This is separate from the agent/model config to allow flexible provider routing.
+    pub providers: FileProvidersConfig,
 }
 
 impl FileConfig {
@@ -1009,6 +1013,94 @@ impl FileConfig {
 
         issues
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileBedrockConfig {
+    /// AWS region for Bedrock models (default: "us-east-1")
+    pub region: String,
+    /// AWS profile name for credentials (default: "default")
+    pub profile: Option<String>,
+    /// Max Tokens per response (default: 8192)
+    pub max_tokens: u32,
+}
+
+impl Default for FileBedrockConfig {
+    fn default() -> Self {
+        Self {
+            region: "us-east-1".to_string(),
+            profile: None,
+            max_tokens: 8192,
+        }
+    }
+}
+
+/// Anthropic API provider configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileAnthropicConfig {
+    /// Environment variable name for the API key (default: "ANTHROPIC_API_KEY").
+    pub api_key_env: String,
+    /// Direct API key (not recommended — use env var instead).
+    pub api_key: Option<String>,
+    /// Base URL for the Anthropic API.
+    pub base_url: String,
+    /// Default max tokens per response.
+    pub max_tokens: u32,
+    /// Anthropic API version header.
+    pub api_version: String,
+}
+
+impl Default for FileAnthropicConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            api_key: None,
+            base_url: "https://api.anthropic.com".to_string(),
+            max_tokens: 8192,
+            api_version: "2023-06-01".to_string(),
+        }
+    }
+}
+
+/// OpenAI API provider configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileOpenAiConfig {
+    /// Environment variable name for the API key (default: "OPENAI_API_KEY").
+    pub api_key_env: String,
+    /// Direct API key (not recommended — use env var instead).
+    pub api_key: Option<String>,
+    /// Base URL for the OpenAI API (can be overridden for Azure OpenAI).
+    pub base_url: String,
+    /// Default max tokens per response.
+    pub max_tokens: u32,
+}
+
+impl Default for FileOpenAiConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: "OPENAI_API_KEY".to_string(),
+            api_key: None,
+            base_url: "https://api.openai.com".to_string(),
+            max_tokens: 8192,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileProvidersConfig {
+    /// Default provider: "copilot", "anthropic", "openai", "bedrock", "azure".
+    pub default: Option<String>,
+    /// Anthropic API settings.
+    pub anthropic: FileAnthropicConfig,
+    /// OpenAI API settings.
+    pub openai: FileOpenAiConfig,
+    /// AWS Bedrock settings.
+    pub bedrock: FileBedrockConfig,
+    /// Explicit model → provider routing overrides.
+    pub routing: HashMap<String, String>,
 }
 
 #[cfg(test)]
