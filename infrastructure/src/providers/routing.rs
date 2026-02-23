@@ -77,7 +77,11 @@ impl RoutingGateway {
         }
 
         // 3. Default provider kind
-        if let Some(p) = self.providers.iter().find(|p| p.kind() == self.default_kind) {
+        if let Some(p) = self
+            .providers
+            .iter()
+            .find(|p| p.kind() == self.default_kind)
+        {
             return Ok(p.as_ref());
         }
 
@@ -314,10 +318,7 @@ mod tests {
     #[tokio::test]
     async fn available_models_aggregates_from_all_providers() {
         let providers = vec![
-            MockProvider::with_models(
-                ProviderKind::Copilot,
-                vec![Model::Gpt52Codex, Model::Gpt41],
-            ),
+            MockProvider::with_models(ProviderKind::Copilot, vec![Model::Gpt52Codex, Model::Gpt41]),
             MockProvider::with_models(ProviderKind::Anthropic, vec![Model::ClaudeSonnet45]),
         ];
         let gw = RoutingGateway::new(providers, &default_config());
