@@ -21,11 +21,11 @@ use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::RunAgentUseCase;
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
+use quorum_domain::ContextMode;
 use quorum_domain::interaction::{
     InteractionForm, InteractionId, InteractionResult, InteractionTree,
 };
 use quorum_domain::util::truncate_str;
-use quorum_domain::ContextMode;
 use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
@@ -89,8 +89,7 @@ pub struct AgentController {
     active_interaction_id: InteractionId,
 }
 
-impl AgentController
-{
+impl AgentController {
     /// Create a new AgentController
     pub fn new(
         gateway: Arc<dyn LlmGateway>,
@@ -831,7 +830,7 @@ fn format_quorum_output(result: &QuorumResult, format: OutputFormat) -> String {
 }
 
 /// Context for executing a spawn in a background task
-pub struct SpawnContext{
+pub struct SpawnContext {
     pub(crate) gateway: Arc<dyn LlmGateway>,
     pub(crate) agent_use_case: RunAgentUseCase,
     pub(crate) ask_use_case: RunAskUseCase,
@@ -849,7 +848,7 @@ pub struct TaskCompletion {
     pub result_text: Option<String>,
 }
 
-impl SpawnContext{
+impl SpawnContext {
     pub async fn execute(
         self,
         interaction_id: Option<InteractionId>,

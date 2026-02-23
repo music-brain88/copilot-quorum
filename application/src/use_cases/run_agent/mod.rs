@@ -47,7 +47,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 /// Use case for running an autonomous agent
-pub struct RunAgentUseCase{
+pub struct RunAgentUseCase {
     pub(super) gateway: Arc<dyn LlmGateway>,
     pub(super) tool_executor: Arc<dyn ToolExecutorPort>,
     pub(super) tool_schema: Arc<dyn ToolSchemaPort>,
@@ -58,8 +58,7 @@ pub struct RunAgentUseCase{
     pub(super) conversation_logger: Arc<dyn ConversationLogger>,
 }
 
-impl Clone for RunAgentUseCase
-{
+impl Clone for RunAgentUseCase {
     fn clone(&self) -> Self {
         Self {
             gateway: self.gateway.clone(),
@@ -91,8 +90,7 @@ impl ContextLoaderPort for NoContextLoader {
     }
 }
 
-impl RunAgentUseCase
-{
+impl RunAgentUseCase {
     pub fn new(
         gateway: Arc<dyn LlmGateway>,
         tool_executor: Arc<dyn ToolExecutorPort>,
@@ -111,9 +109,7 @@ impl RunAgentUseCase
     }
 }
 
-impl
-    RunAgentUseCase
-{
+impl RunAgentUseCase {
     pub fn with_context_loader(
         gateway: Arc<dyn LlmGateway>,
         tool_executor: Arc<dyn ToolExecutorPort>,

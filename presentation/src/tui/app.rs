@@ -25,8 +25,8 @@ use super::state::{
 use super::surface::SurfaceId;
 use super::tab::PaneKind;
 use super::widgets::{
-    header::HeaderWidget, input::InputWidget, status_bar::StatusBarWidget, tab_bar::TabBarWidget,
-    MainLayout,
+    MainLayout, header::HeaderWidget, input::InputWidget, status_bar::StatusBarWidget,
+    tab_bar::TabBarWidget,
 };
 
 /// Side-effect that requires main loop intervention (e.g. terminal suspend)
@@ -39,7 +39,7 @@ use crossterm::{
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
@@ -50,7 +50,7 @@ use quorum_application::{
 use quorum_domain::core::string::truncate;
 use quorum_domain::interaction::{InteractionForm, InteractionId};
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

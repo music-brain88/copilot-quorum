@@ -18,7 +18,7 @@ use crate::use_cases::run_agent::RunAgentError;
 use crate::use_cases::shared::{check_cancelled, send_with_tools_cancellable};
 use crate::use_cases::tool_helpers::tool_args_preview;
 use quorum_domain::core::string::truncate;
-use quorum_domain::{extract_references, AgentContext, AgentPromptTemplate, ProjectContext};
+use quorum_domain::{AgentContext, AgentPromptTemplate, ProjectContext, extract_references};
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;

@@ -3,8 +3,8 @@
 //! Contains plan review, final review orchestration, and the
 //! [`QuorumActionReviewer`] implementation of [`ActionReviewer`].
 
-use super::types::{QuorumReviewResult, RunAgentError, RunAgentInput};
 use super::RunAgentUseCase;
+use super::types::{QuorumReviewResult, RunAgentError, RunAgentInput};
 use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::conversation_logger::ConversationEvent;

@@ -210,7 +210,8 @@ impl RunQuorumUseCase {
 
             join_set.spawn(async move {
                 let result =
-                    Self::review_responses(gateway.as_ref(), &model, &question, &other_responses).await;
+                    Self::review_responses(gateway.as_ref(), &model, &question, &other_responses)
+                        .await;
                 (model, other_responses, result)
             });
         }

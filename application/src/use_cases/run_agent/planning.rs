@@ -1,7 +1,7 @@
 //! Planning-related methods for the RunAgent use case.
 
-use super::types::{EnsemblePlanningOutcome, PlanningResult, RunAgentError, RunAgentInput};
 use super::RunAgentUseCase;
+use super::types::{EnsemblePlanningOutcome, PlanningResult, RunAgentError, RunAgentInput};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::conversation_logger::ConversationEvent;
 use crate::ports::llm_gateway::{GatewayError, LlmSession, ToolResultMessage};

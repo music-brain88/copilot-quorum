@@ -286,10 +286,10 @@ mod tests {
     use crate::ports::tool_executor::ToolExecutorPort;
     use crate::ports::tool_schema::ToolSchemaPort;
     use async_trait::async_trait;
-    use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
-    use quorum_domain::tool::entities::{RiskLevel, ToolCall, ToolDefinition, ToolSpec};
     use quorum_domain::Model;
     use quorum_domain::ToolResult;
+    use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
+    use quorum_domain::tool::entities::{RiskLevel, ToolCall, ToolDefinition, ToolSpec};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
