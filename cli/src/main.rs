@@ -3,7 +3,7 @@
 //! This is the main binary that wires together all layers using
 //! dependency injection. Config conversion logic is centralized here.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::Parser;
 use quorum_application::ContextLoaderPort;
 use quorum_application::ExecutionParams;
@@ -24,11 +24,11 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Layer;
 
 /// Format timestamps using local time (via chrono).
 struct LocalTimer;
@@ -195,7 +195,7 @@ fn build_configs(cli: &Cli, file: &FileConfig) -> (OutputConfig, ReplConfig) {
 fn build_tui_layout_config(config: &FileConfig) -> TuiLayoutConfig {
     use quorum_presentation::tui::content::ContentSlot;
     use quorum_presentation::tui::layout::{
-        parse_route_target, BorderStyle, RouteOverride, SurfaceConfig, SurfacePosition,
+        BorderStyle, RouteOverride, SurfaceConfig, SurfacePosition, parse_route_target,
     };
 
     let preset = config

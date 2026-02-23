@@ -21,11 +21,11 @@ use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
 use crate::use_cases::run_agent::RunAgentUseCase;
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
+use quorum_domain::ContextMode;
 use quorum_domain::interaction::{
     InteractionForm, InteractionId, InteractionResult, InteractionTree,
 };
 use quorum_domain::util::truncate_str;
-use quorum_domain::ContextMode;
 use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::Arc;
