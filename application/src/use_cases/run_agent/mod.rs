@@ -107,9 +107,7 @@ impl RunAgentUseCase {
             conversation_logger: Arc::new(NoConversationLogger),
         }
     }
-}
 
-impl RunAgentUseCase {
     pub fn with_context_loader(
         gateway: Arc<dyn LlmGateway>,
         tool_executor: Arc<dyn ToolExecutorPort>,

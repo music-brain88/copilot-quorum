@@ -9,6 +9,8 @@ use quorum_domain::Model;
 pub enum ProviderKind {
     #[default]
     Copilot,
+    Anthropic,
+    OpenAi,
     Bedrock,
     Azure,
 }
