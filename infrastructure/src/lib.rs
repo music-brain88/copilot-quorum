@@ -7,6 +7,7 @@ pub mod config;
 pub mod context;
 pub mod copilot;
 pub mod logging;
+pub mod providers;
 pub mod reference;
 pub mod tools;
 
