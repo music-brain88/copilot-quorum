@@ -11,6 +11,8 @@ use quorum_domain::Model;
 /// When `cross_region` is true, the model ID is prefixed with `"{region}."`.
 pub fn to_bedrock_model_id(model: &Model, cross_region: bool, region: &str) -> Option<String> {
     let base_id = match model {
+        Model::ClaudeSonnet46 => "anthropic.claude-sonnet-4-6",
+        Model::ClaudeOpus46 => "anthropic.claude-opus-4-6-v1",
         Model::ClaudeSonnet45 => "anthropic.claude-sonnet-4-5-20250929-v1:0",
         Model::ClaudeHaiku45 => "anthropic.claude-haiku-4-5-20250929-v1:0",
         Model::ClaudeOpus45 => "anthropic.claude-opus-4-20250514-v1:0",
@@ -34,6 +36,18 @@ pub fn is_bedrock_supported(model: &Model) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_claude_sonnet46_mapping() {
+        let id = to_bedrock_model_id(&Model::ClaudeSonnet46, false, "us-east-1").unwrap();
+        assert_eq!(id, "anthropic.claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn test_claude_opus46_mapping() {
+        let id = to_bedrock_model_id(&Model::ClaudeOpus46, false, "us-east-1").unwrap();
+        assert_eq!(id, "anthropic.claude-opus-4-6-v1");
+    }
 
     #[test]
     fn test_claude_sonnet45_mapping() {
@@ -92,6 +106,8 @@ mod tests {
 
     #[test]
     fn test_is_bedrock_supported() {
+        assert!(is_bedrock_supported(&Model::ClaudeSonnet46));
+        assert!(is_bedrock_supported(&Model::ClaudeOpus46));
         assert!(is_bedrock_supported(&Model::ClaudeSonnet45));
         assert!(is_bedrock_supported(&Model::ClaudeHaiku45));
         assert!(is_bedrock_supported(&Model::ClaudeOpus45));

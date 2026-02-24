@@ -119,6 +119,8 @@ impl ProviderAdapter for BedrockProviderAdapter {
 
     async fn available_models(&self) -> Result<Vec<Model>, GatewayError> {
         Ok(vec![
+            Model::ClaudeSonnet46,
+            Model::ClaudeOpus46,
             Model::ClaudeSonnet45,
             Model::ClaudeHaiku45,
             Model::ClaudeOpus45,

@@ -130,6 +130,8 @@ impl LlmGateway for CopilotLlmGateway {
         // Copilot CLI doesn't have a model listing endpoint,
         // so we return the known available models
         Ok(vec![
+            Model::ClaudeSonnet46,
+            Model::ClaudeOpus46,
             Model::ClaudeSonnet45,
             Model::ClaudeHaiku45,
             Model::ClaudeOpus45,
