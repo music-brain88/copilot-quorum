@@ -47,34 +47,73 @@ impl RiskLevel {
     }
 }
 
-/// Read-only commands that are safe to execute without Quorum review.
-///
-/// These commands only observe the environment — they don't modify files,
-/// install packages, or change system state.
-///
-/// Commands that *can* mutate state depending on flags (e.g. `sed -i`,
-/// `awk -i inplace`) or execute arbitrary programs (`xargs`, `node`,
-/// `python`, `make`) are intentionally excluded — High risk with HiL
-/// review is the safer default for those.
-const SAFE_COMMANDS: &[&str] = &[
-    // File system (read-only)
-    "ls", "pwd", "echo", "cat", "head", "tail", "wc", "find", "which",
-    "type", "file", "stat", "tree", "realpath", "dirname", "basename",
-    "du", "df",
-    // Text processing (pure filters — no in-place mutation)
-    "grep", "rg", "sort", "uniq", "cut", "tr", "diff", "jq",
-    // System info
-    "date", "env", "printenv", "uname", "whoami", "id",
-    // Git (read-only)
-    "git status", "git log", "git diff", "git show", "git branch",
-    "git remote", "git tag", "git stash list", "git rev-parse",
-    // Rust toolchain (build/check — no system mutation)
-    "cargo check", "cargo test", "cargo build", "cargo clippy",
-    "cargo fmt", "cargo doc", "cargo bench", "rustc", "rustup show",
-    // Package info (read-only queries)
-    "npm test", "pip list", "pip show",
-    // Other dev tools (build/check only)
-    "go build", "go test", "go vet",
+// Read-only commands that are safe to execute without Quorum review.
+//
+// These commands only observe the environment — they don't modify files,
+// install packages, or change system state.
+//
+// Commands that *can* mutate state depending on flags (e.g. `sed -i`,
+// `awk -i inplace`) or execute arbitrary programs (`xargs`, `node`,
+// `python`, `make`) are intentionally excluded — High risk with HiL
+// review is the safer default for those.
+//
+// Commands are organized into `SAFE_COMMAND_CATEGORIES` by domain:
+// filesystem, text processing, system info, git, Rust toolchain, package
+// managers, and other dev tools.
+
+/// File system (read-only)
+const SAFE_FS_COMMANDS: &[&str] = &[
+    "ls", "pwd", "echo", "cat", "head", "tail", "wc", "find", "which", "type", "file", "stat",
+    "tree", "realpath", "dirname", "basename", "du", "df",
+];
+
+/// Text processing (pure filters — no in-place mutation)
+const SAFE_TEXT_COMMANDS: &[&str] = &["grep", "rg", "sort", "uniq", "cut", "tr", "diff", "jq"];
+
+/// System info
+const SAFE_SYSINFO_COMMANDS: &[&str] = &["date", "env", "printenv", "uname", "whoami", "id"];
+
+/// Git (read-only)
+const SAFE_GIT_COMMANDS: &[&str] = &[
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch",
+    "git remote",
+    "git tag",
+    "git stash list",
+    "git rev-parse",
+];
+
+/// Rust toolchain (build/check — no system mutation)
+const SAFE_RUST_COMMANDS: &[&str] = &[
+    "cargo check",
+    "cargo test",
+    "cargo build",
+    "cargo clippy",
+    "cargo fmt",
+    "cargo doc",
+    "cargo bench",
+    "rustc",
+    "rustup show",
+];
+
+/// Package info (read-only queries)
+const SAFE_PACKAGE_COMMANDS: &[&str] = &["npm test", "pip list", "pip show"];
+
+/// Other dev tools (build/check only)
+const SAFE_DEVTOOL_COMMANDS: &[&str] = &["go build", "go test", "go vet"];
+
+/// All safe command categories combined.
+const SAFE_COMMAND_CATEGORIES: &[&[&str]] = &[
+    SAFE_FS_COMMANDS,
+    SAFE_TEXT_COMMANDS,
+    SAFE_SYSINFO_COMMANDS,
+    SAFE_GIT_COMMANDS,
+    SAFE_RUST_COMMANDS,
+    SAFE_PACKAGE_COMMANDS,
+    SAFE_DEVTOOL_COMMANDS,
 ];
 
 /// Extract the base command from a shell command string.
@@ -129,7 +168,7 @@ fn is_segment_safe(segment: &str) -> bool {
     let normalized = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
 
     // Check multi-word safe commands first (e.g. "git status", "cargo test")
-    for &safe in SAFE_COMMANDS {
+    for &safe in SAFE_COMMAND_CATEGORIES.iter().flat_map(|c| c.iter()) {
         if safe.contains(' ') {
             if normalized.starts_with(safe) {
                 return true;
@@ -716,8 +755,14 @@ mod tests {
     #[test]
     fn test_classify_mutable_text_tools_are_high() {
         // sed/awk can modify files with -i; xargs runs arbitrary commands
-        assert_eq!(classify_command_risk("sed -i 's/foo/bar/' file.txt"), RiskLevel::High);
-        assert_eq!(classify_command_risk("awk '{print}' file.txt"), RiskLevel::High);
+        assert_eq!(
+            classify_command_risk("sed -i 's/foo/bar/' file.txt"),
+            RiskLevel::High
+        );
+        assert_eq!(
+            classify_command_risk("awk '{print}' file.txt"),
+            RiskLevel::High
+        );
         assert_eq!(classify_command_risk("xargs rm"), RiskLevel::High);
     }
 
@@ -726,7 +771,10 @@ mod tests {
         // node/python/make can execute arbitrary code
         assert_eq!(classify_command_risk("node script.js"), RiskLevel::High);
         assert_eq!(classify_command_risk("python script.py"), RiskLevel::High);
-        assert_eq!(classify_command_risk("python3 -c 'import os'"), RiskLevel::High);
+        assert_eq!(
+            classify_command_risk("python3 -c 'import os'"),
+            RiskLevel::High
+        );
         assert_eq!(classify_command_risk("npx some-tool"), RiskLevel::High);
         assert_eq!(classify_command_risk("make"), RiskLevel::High);
         assert_eq!(classify_command_risk("yarn build"), RiskLevel::High);
