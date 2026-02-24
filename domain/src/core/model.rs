@@ -9,6 +9,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Model {
     // Claude models
+    ClaudeSonnet46,
+    ClaudeOpus46,
     ClaudeSonnet45,
     ClaudeHaiku45,
     ClaudeOpus45,
@@ -33,6 +35,8 @@ impl Model {
     /// Get the string identifier for this model
     pub fn as_str(&self) -> &str {
         match self {
+            Model::ClaudeSonnet46 => "claude-sonnet-4.6",
+            Model::ClaudeOpus46 => "claude-opus-4.6",
             Model::ClaudeSonnet45 => "claude-sonnet-4.5",
             Model::ClaudeHaiku45 => "claude-haiku-4.5",
             Model::ClaudeOpus45 => "claude-opus-4.5",
@@ -60,7 +64,9 @@ impl Model {
     pub fn is_claude(&self) -> bool {
         matches!(
             self,
-            Model::ClaudeSonnet45
+            Model::ClaudeSonnet46
+                | Model::ClaudeOpus46
+                | Model::ClaudeSonnet45
                 | Model::ClaudeHaiku45
                 | Model::ClaudeOpus45
                 | Model::ClaudeSonnet4
@@ -107,6 +113,8 @@ impl std::str::FromStr for Model {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s {
+            "claude-sonnet-4.6" => Model::ClaudeSonnet46,
+            "claude-opus-4.6" => Model::ClaudeOpus46,
             "claude-sonnet-4.5" => Model::ClaudeSonnet45,
             "claude-haiku-4.5" => Model::ClaudeHaiku45,
             "claude-opus-4.5" => Model::ClaudeOpus45,

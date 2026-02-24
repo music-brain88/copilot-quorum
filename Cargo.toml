@@ -63,6 +63,11 @@ scraper = "0.22"
 # OS-level process management (Linux: PR_SET_PDEATHSIG)
 libc = "0.2"
 
+# AWS SDK (optional, for Bedrock provider)
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-bedrockruntime = "1"
+aws-smithy-types = "1"
+
 # Workspace crates
 quorum-domain = { path = "domain" }
 quorum-application = { path = "application" }

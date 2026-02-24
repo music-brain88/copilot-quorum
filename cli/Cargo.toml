@@ -42,3 +42,4 @@ dirs = "6.0"
 [features]
 default = ["web-tools"]
 web-tools = ["quorum-infrastructure/web-tools"]
+bedrock = ["quorum-infrastructure/bedrock"]

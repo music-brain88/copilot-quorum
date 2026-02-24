@@ -1,6 +1,9 @@
 pub mod copilot_adapter;
 pub mod routing;
 
+#[cfg(feature = "bedrock")]
+pub mod bedrock;
+
 use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession};
 use quorum_domain::Model;

@@ -11,6 +11,8 @@ use quorum_application::LlmGateway;
 use quorum_application::ToolExecutorPort;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
+#[cfg(feature = "bedrock")]
+use quorum_infrastructure::BedrockProviderAdapter;
 use quorum_infrastructure::{
     ConfigLoader, CopilotLlmGateway, CopilotProviderAdapter, FileConfig, GitHubReferenceResolver,
     JsonSchemaToolConverter, JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
@@ -344,8 +346,18 @@ async fn main() -> Result<()> {
     // === Dependency Injection ===
     // Create infrastructure adapter (Copilot Gateway)
     let copilot = CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?;
-    let providers =
-        vec![Arc::new(CopilotProviderAdapter::new(copilot)) as Arc<dyn ProviderAdapter>];
+    #[allow(unused_mut)]
+    let mut providers: Vec<Arc<dyn ProviderAdapter>> =
+        vec![Arc::new(CopilotProviderAdapter::new(copilot))];
+
+    #[cfg(feature = "bedrock")]
+    {
+        if let Some(bedrock) = BedrockProviderAdapter::try_new(&config.providers.bedrock).await {
+            info!("Bedrock provider registered");
+            providers.push(Arc::new(bedrock));
+        }
+    }
+
     let gateway: Arc<dyn LlmGateway> = Arc::new(RoutingGateway::new(providers, &config.providers));
 
     // Create tool executor
