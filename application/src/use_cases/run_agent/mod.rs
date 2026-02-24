@@ -1088,7 +1088,6 @@ mod tests {
         fn has_phase(&self, phase: &AgentPhase) -> bool {
             self.phases.lock().unwrap().contains(phase)
         }
-
     }
 
     impl AgentProgressNotifier for TrackingProgress {

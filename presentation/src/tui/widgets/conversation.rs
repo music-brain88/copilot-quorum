@@ -100,9 +100,6 @@ impl<'a> Widget for ConversationWidget<'a> {
             .title(" Conversation ")
             .style(Style::default().fg(Color::White));
 
-        paragraph
-            .block(block)
-            .scroll((scroll, 0))
-            .render(area, buf);
+        paragraph.block(block).scroll((scroll, 0)).render(area, buf);
     }
 }
