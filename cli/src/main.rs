@@ -257,11 +257,21 @@ fn build_tui_layout_config(config: &FileConfig) -> TuiLayoutConfig {
         }
     }
 
+    // Build strategy preset overrides from [tui.layout.strategy]
+    let strategy_presets = config
+        .tui
+        .layout
+        .strategy
+        .iter()
+        .filter_map(|(k, v)| v.parse::<LayoutPreset>().ok().map(|p| (k.clone(), p)))
+        .collect();
+
     TuiLayoutConfig {
         preset,
         flex_threshold,
         surface_config,
         route_overrides,
+        strategy_presets,
     }
 }
 

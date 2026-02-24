@@ -19,7 +19,9 @@ use crate::copilot::router::MessageRouter;
 use crate::copilot::session::CopilotSession;
 use async_trait::async_trait;
 use quorum_application::ConversationLogger;
-use quorum_application::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
+use quorum_application::ports::llm_gateway::{
+    GatewayError, LlmGateway, LlmSession, StreamObserver,
+};
 use quorum_domain::Model;
 use std::sync::Arc;
 use tracing::info;
@@ -103,6 +105,24 @@ impl LlmGateway for CopilotLlmGateway {
             Arc::clone(&self.router),
             model.clone(),
             Some(system_prompt.to_string()),
+        )
+        .await
+        .map_err(|e| GatewayError::SessionError(e.to_string()))?;
+
+        Ok(Box::new(session))
+    }
+
+    async fn create_streaming_session(
+        &self,
+        model: &Model,
+        system_prompt: &str,
+        observer: StreamObserver,
+    ) -> Result<Box<dyn LlmSession>, GatewayError> {
+        let session = CopilotSession::new_with_observer(
+            Arc::clone(&self.router),
+            model.clone(),
+            Some(system_prompt.to_string()),
+            observer,
         )
         .await
         .map_err(|e| GatewayError::SessionError(e.to_string()))?;

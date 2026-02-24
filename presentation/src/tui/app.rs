@@ -1016,7 +1016,7 @@ impl TuiApp {
                     pane.progress.ensemble_progress = None;
                 }
             }
-            TuiEvent::EnsembleModelStreamStart(model) => {
+            TuiEvent::ModelStreamStart { model, context: _ } => {
                 use super::content::ContentSlot;
                 use super::state::{ModelStreamState, ModelStreamStatus};
                 use super::widgets::model_stream::ModelStreamRenderer;
@@ -1045,7 +1045,7 @@ impl TuiApp {
                     );
                 }
             }
-            TuiEvent::EnsembleModelStreamChunk { model, chunk } => {
+            TuiEvent::ModelStreamChunk { model, chunk } => {
                 if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
                     && let Some(ref mut ep) = pane.progress.ensemble_progress
                     && let Some(ms) = ep.model_streams.get_mut(&model)
@@ -1053,7 +1053,7 @@ impl TuiApp {
                     ms.streaming_text.push_str(&chunk);
                 }
             }
-            TuiEvent::EnsembleModelStreamEnd(model) => {
+            TuiEvent::ModelStreamEnd(model) => {
                 use super::state::ModelStreamStatus;
                 if let Some(pane) = state.tabs.pane_for_interaction_mut(id)
                     && let Some(ref mut ep) = pane.progress.ensemble_progress

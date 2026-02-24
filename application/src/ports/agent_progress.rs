@@ -30,7 +30,7 @@
 //! }
 //! ```
 
-use quorum_domain::{AgentPhase, ErrorCategory, Model, Plan, ReviewRound, Task, Thought};
+use quorum_domain::{AgentPhase, ErrorCategory, Model, Plan, ReviewRound, StreamContext, Task, Thought};
 
 /// Progress notifier for agent execution.
 ///
@@ -223,16 +223,22 @@ pub trait AgentProgressNotifier: Send + Sync {
     /// This happens when all models fail to generate plans in ensemble mode.
     fn on_ensemble_fallback(&self, _reason: &str) {}
 
-    // ==================== Ensemble Model Stream Callbacks ====================
+    // ==================== Model Stream Callbacks ====================
+    // Generic per-model streaming callbacks used across all orchestration phases
+    // (Ensemble Planning, Quorum Discussion, Debate, etc.)
 
-    /// Called when a model starts streaming during ensemble planning.
-    fn on_ensemble_model_stream_start(&self, _model: &str) {}
+    /// Called when a model starts streaming.
+    ///
+    /// # Arguments
+    /// * `model` - Model identifier string
+    /// * `context` - Which orchestration phase is streaming
+    fn on_model_stream_start(&self, _model: &str, _context: &StreamContext) {}
 
-    /// Called for each text chunk from a model during ensemble planning.
-    fn on_ensemble_model_stream_chunk(&self, _model: &str, _chunk: &str) {}
+    /// Called for each text chunk from a model during streaming.
+    fn on_model_stream_chunk(&self, _model: &str, _chunk: &str) {}
 
-    /// Called when a model finishes streaming during ensemble planning.
-    fn on_ensemble_model_stream_end(&self, _model: &str) {}
+    /// Called when a model finishes streaming.
+    fn on_model_stream_end(&self, _model: &str) {}
 }
 
 /// No-op implementation for when progress isn't needed

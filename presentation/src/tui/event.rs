@@ -5,7 +5,7 @@
 
 use quorum_domain::{
     AgentPhase, ConsensusLevel, ContextMode, HumanDecision, InteractionForm, InteractionId, Plan,
-    ReviewRound,
+    ReviewRound, StreamContext,
 };
 use tokio::sync::oneshot;
 
@@ -151,13 +151,16 @@ pub enum TuiEvent {
     },
     EnsembleFallback(String),
 
-    // -- Ensemble model stream (per-model live output) --
-    EnsembleModelStreamStart(String),
-    EnsembleModelStreamChunk {
+    // -- Model stream (per-model live output for Ensemble, Quorum, etc.) --
+    ModelStreamStart {
+        model: String,
+        context: StreamContext,
+    },
+    ModelStreamChunk {
         model: String,
         chunk: String,
     },
-    EnsembleModelStreamEnd(String),
+    ModelStreamEnd(String),
     EnsembleVoteScore {
         model: String,
         score: f64,
