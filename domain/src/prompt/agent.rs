@@ -618,6 +618,77 @@ Output the final context document in markdown format."#,
         )
     }
 
+    /// Prompt for synthesizing a structured execution summary.
+    ///
+    /// Generates a ホウレンソウ (report/results/suggestion) structured summary
+    /// from task execution results. The LLM synthesizes raw per-task outputs
+    /// into a user-friendly report.
+    pub fn execution_summary(request: &str, plan: &Plan, task_summaries: &str) -> String {
+        let tasks_overview = plan
+            .tasks
+            .iter()
+            .map(|t| {
+                let status = if t.status == crate::agent::TaskStatus::Completed {
+                    "✓"
+                } else if t.status == crate::agent::TaskStatus::Failed {
+                    "✗"
+                } else {
+                    "?"
+                };
+                format!("[{}] {}", status, t.description)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!(
+            r#"## Task
+
+Synthesize the following agent execution results into a structured summary for the user.
+
+## Original Request
+
+{request}
+
+## Plan Objective
+
+{objective}
+
+## Tasks Executed
+
+{tasks_overview}
+
+## Raw Task Results
+
+{task_summaries}
+
+## Instructions
+
+Create a concise summary in the following structure:
+
+### 実行概要
+What was done (1-3 bullet points). Focus on actions taken, not internal details.
+
+### 主要な発見・結果
+What was found or accomplished (1-5 bullet points). Include specific findings, file names, or data points that are relevant to the user's request.
+
+### 推奨アクション
+What to do next (0-3 bullet points). Only include if there are actionable follow-ups. Omit this section entirely if no recommendations are needed.
+
+## Rules
+
+- Write from the user's perspective, not the agent's internal perspective
+- Do NOT list tool names, internal IDs, or raw file paths unless directly relevant
+- Do NOT include technical details about how tools were executed
+- Be specific: prefer "Found 3 TODO comments in src/auth.rs" over "Searched codebase"
+- Keep the total summary under 500 words
+- Use the same language as the original request"#,
+            request = request,
+            objective = plan.objective,
+            tasks_overview = tasks_overview,
+            task_summaries = task_summaries,
+        )
+    }
+
     /// Prompt for final review
     pub fn final_review(request: &str, plan: &Plan, results_summary: &str) -> String {
         let tasks_summary = plan
@@ -920,5 +991,54 @@ mod tests {
         assert!(prompt.contains("Original request"));
         assert!(prompt.contains("Do something"));
         assert!(prompt.contains("SUCCESS, PARTIAL, or FAILURE"));
+    }
+
+    #[test]
+    fn test_execution_summary_prompt() {
+        let mut plan = Plan::new("Check README contents", "Read and summarize");
+        let mut task = Task::new("1", "Read README.md");
+        task.status = crate::agent::TaskStatus::Completed;
+        plan.tasks.push(task);
+
+        let prompt = AgentPromptTemplate::execution_summary(
+            "READMEの内容を確認して",
+            &plan,
+            "Task task-1 (Read README.md): OK — # My Project",
+        );
+
+        // Should contain the original request
+        assert!(prompt.contains("READMEの内容を確認して"));
+        // Should contain ホウレンソウ structure
+        assert!(prompt.contains("実行概要"));
+        assert!(prompt.contains("主要な発見・結果"));
+        assert!(prompt.contains("推奨アクション"));
+        // Should contain plan objective
+        assert!(prompt.contains("Check README contents"));
+        // Should contain task status
+        assert!(prompt.contains("[✓] Read README.md"));
+        // Should contain raw results
+        assert!(prompt.contains("Task task-1"));
+        // Should contain rules about user perspective
+        assert!(prompt.contains("user's perspective"));
+    }
+
+    #[test]
+    fn test_execution_summary_shows_failed_tasks() {
+        let mut plan = Plan::new("Run tests", "Verify correctness");
+        let mut task1 = Task::new("1", "Run unit tests");
+        task1.status = crate::agent::TaskStatus::Completed;
+        let mut task2 = Task::new("2", "Run integration tests");
+        task2.status = crate::agent::TaskStatus::Failed;
+        plan.tasks.push(task1);
+        plan.tasks.push(task2);
+
+        let prompt = AgentPromptTemplate::execution_summary(
+            "Run all tests",
+            &plan,
+            "Task task-1: OK\nTask task-2: FAILED",
+        );
+
+        assert!(prompt.contains("[✓] Run unit tests"));
+        assert!(prompt.contains("[✗] Run integration tests"));
     }
 }

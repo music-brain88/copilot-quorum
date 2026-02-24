@@ -172,6 +172,61 @@ impl RunAgentUseCase {
         ));
     }
 
+    /// Synthesize a structured summary from task execution results using an LLM.
+    ///
+    /// Uses the exploration model (lightweight) to generate a ホウレンソウ-structured
+    /// report from the raw per-task summaries. Falls back to the mechanical
+    /// summary if the LLM call fails.
+    async fn synthesize_summary(
+        &self,
+        input: &RunAgentInput,
+        state: &AgentState,
+        mechanical_summary: &str,
+    ) -> Option<String> {
+        let plan = state.plan.as_ref()?;
+
+        let system_prompt = "You are a concise technical reporter. \
+            Summarize agent execution results into a structured report for the user. \
+            Respond in the same language as the original request.";
+
+        let prompt =
+            AgentPromptTemplate::execution_summary(&input.request, plan, mechanical_summary);
+
+        let session = match self
+            .gateway
+            .create_text_only_session(&input.models.exploration, system_prompt)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Failed to create synthesis session: {}", e);
+                return None;
+            }
+        };
+
+        match session.send(&prompt).await {
+            Ok(response) if !response.trim().is_empty() => {
+                info!("Summary synthesis succeeded ({} bytes)", response.len());
+                self.conversation_logger.log(ConversationEvent::new(
+                    "summary_synthesis",
+                    serde_json::json!({
+                        "model": input.models.exploration.to_string(),
+                        "bytes": response.len(),
+                    }),
+                ));
+                Some(response)
+            }
+            Ok(_) => {
+                warn!("Summary synthesis returned empty response");
+                None
+            }
+            Err(e) => {
+                warn!("Summary synthesis failed: {}", e);
+                None
+            }
+        }
+    }
+
     /// Send a prompt to LLM with cancellation support and streaming.
     ///
     /// Uses `send_streaming()` to receive incremental chunks, forwarding each
@@ -646,7 +701,12 @@ impl RunAgentUseCase {
             .await;
 
         let summary = match execution_result {
-            Ok(summary) => summary,
+            Ok(mechanical_summary) => {
+                // Attempt LLM-based structured summary synthesis
+                self.synthesize_summary(&input, &state, &mechanical_summary)
+                    .await
+                    .unwrap_or(mechanical_summary)
+            }
             Err(e) => {
                 let summary = format!("Agent failed during execution: {}", e);
                 state.fail(e.to_string());
