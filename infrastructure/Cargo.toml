@@ -53,12 +53,18 @@ reqwest = { workspace = true, optional = true }
 # HTML parsing (optional, for web tools)
 scraper = { workspace = true, optional = true }
 
+# AWS SDK (optional, for Bedrock provider)
+aws-config = { workspace = true, optional = true }
+aws-sdk-bedrockruntime = { workspace = true, optional = true }
+aws-smithy-types = { workspace = true, optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
 
 [features]
 default = []
 web-tools = ["dep:reqwest", "dep:scraper"]
+bedrock = ["dep:aws-config", "dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types"]
 
 [dev-dependencies]
 tempfile = "3"
