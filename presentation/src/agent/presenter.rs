@@ -470,6 +470,16 @@ impl ReplPresenter {
                     println!("       {} {}", "└─".dimmed(), error.red());
                 }
             }
+
+            // Show synthesized summary if it differs from raw task list
+            if !result.summary.is_empty() && result.summary.contains("###") {
+                println!();
+                println!("  {}", "📝 Summary:".bold());
+                println!();
+                for line in result.summary.lines() {
+                    println!("  {}", line);
+                }
+            }
         } else {
             // Fallback to old summary if no plan
             println!("{}", "Summary:".bold());

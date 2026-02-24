@@ -21,6 +21,40 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+/// Extract a brief meaningful line from task output.
+///
+/// Skips common noise lines (thinking prefixes, tool headers, separators)
+/// and returns the first substantive line, truncated to `max_bytes`.
+fn extract_task_brief(output: &str, max_bytes: usize) -> Option<String> {
+    let meaningful_line = output.lines().find(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        // Skip common noise patterns
+        if trimmed.starts_with("**Thinking**") || trimmed.starts_with("**thinking**") {
+            return false;
+        }
+        if trimmed.starts_with("[") && trimmed.contains("]:") {
+            // e.g. "[read_file]: ..." — tool output header
+            return false;
+        }
+        if trimmed.chars().all(|c| c == '-' || c == '=' || c == '─') {
+            return false;
+        }
+        if trimmed.len() <= 3 {
+            // Skip very short lines (e.g. "##", "ok", "...") — too terse to be a useful brief
+            return false;
+        }
+        true
+    });
+
+    meaningful_line.map(|line| {
+        let truncated = truncate_str(line.trim(), max_bytes);
+        truncated.to_string()
+    })
+}
+
 /// Use case for executing tasks from an approved plan (Phase 4).
 ///
 /// Handles dynamic model selection based on tool risk level,
@@ -77,7 +111,7 @@ impl ExecuteTaskUseCase {
             }
 
             // Get next task and determine appropriate model
-            let (task_id, selected_model, task_index, task_total) = {
+            let (task_id, task_description, selected_model, task_index, task_total) = {
                 let plan = state.plan.as_ref().ok_or_else(|| {
                     RunAgentError::TaskExecutionFailed("No plan available".to_string())
                 })?;
@@ -88,7 +122,13 @@ impl ExecuteTaskUseCase {
                         let index =
                             plan.tasks.iter().position(|t| t.id == task.id).unwrap_or(0) + 1;
                         let total = plan.tasks.len();
-                        (task.id.clone(), model.clone(), index, total)
+                        (
+                            task.id.clone(),
+                            task.description.clone(),
+                            model.clone(),
+                            index,
+                            total,
+                        )
                     }
                     None => break, // All tasks complete
                 }
@@ -202,10 +242,26 @@ impl ExecuteTaskUseCase {
                 progress.on_task_complete(task, success, task_index, task_total);
             }
 
+            let status = if success { "OK" } else { "FAILED" };
+            let brief = if success {
+                extract_task_brief(&output, 150)
+                    .map(|b| format!(" — {}", b))
+                    .unwrap_or_default()
+            } else {
+                // For failures, the output IS the error message
+                let error_brief = truncate_str(&output, 150);
+                if error_brief.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", error_brief)
+                }
+            };
             results.push(format!(
-                "Task {}: {}",
+                "Task {} ({}): {}{}",
                 task_id,
-                if success { "OK" } else { "FAILED" }
+                truncate_str(&task_description, 60),
+                status,
+                brief,
             ));
             result_buffer.push(task_id.as_str(), &output);
         }
@@ -717,5 +773,51 @@ impl ExecuteTaskUseCase {
         }
 
         Ok((all_outputs.join("\n---\n"), all_executions))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_brief_skips_thinking_prefix() {
+        let output = "**Thinking**: let me analyze this\nThe config uses TOML format.";
+        let brief = extract_task_brief(output, 150);
+        assert_eq!(brief.unwrap(), "The config uses TOML format.");
+    }
+
+    #[test]
+    fn extract_brief_skips_tool_headers() {
+        let output = "[read_file]: contents of foo.rs\n---\nFound 3 functions in the module.";
+        let brief = extract_task_brief(output, 150);
+        assert_eq!(brief.unwrap(), "Found 3 functions in the module.");
+    }
+
+    #[test]
+    fn extract_brief_skips_separator_lines() {
+        let output = "---\n===\nActual meaningful content here.";
+        let brief = extract_task_brief(output, 150);
+        assert_eq!(brief.unwrap(), "Actual meaningful content here.");
+    }
+
+    #[test]
+    fn extract_brief_truncates_long_lines() {
+        let output = "A".repeat(300);
+        let brief = extract_task_brief(&output, 150).unwrap();
+        assert!(brief.len() <= 150);
+    }
+
+    #[test]
+    fn extract_brief_returns_none_for_empty() {
+        assert!(extract_task_brief("", 150).is_none());
+        assert!(extract_task_brief("---\n===", 150).is_none());
+    }
+
+    #[test]
+    fn extract_brief_returns_first_meaningful_line() {
+        let output = "\n\n  No matches found in .rs files\nSome other info";
+        let brief = extract_task_brief(output, 150);
+        assert_eq!(brief.unwrap(), "No matches found in .rs files");
     }
 }
