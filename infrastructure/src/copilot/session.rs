@@ -143,6 +143,11 @@ impl CopilotSession {
     ///
     /// The observer receives each text chunk as it arrives from the LLM,
     /// enabling per-model live streaming in the TUI.
+    ///
+    /// Sends `availableTools: []` to disable Copilot CLI built-in tools,
+    /// preventing the model from executing commands during streaming sessions
+    /// (e.g., Ensemble Planning, Quorum Discussion). User-defined tools
+    /// passed via `send_with_tools()` still work normally.
     pub async fn new_with_observer(
         router: Arc<MessageRouter>,
         model: Model,
@@ -161,7 +166,7 @@ impl CopilotSession {
             system_prompt: system_prompt.clone(),
             system_message,
             tools: None,
-            available_tools: None,
+            available_tools: Some(vec![]),
         };
 
         let (session_id, channel) = router.create_session(params).await?;
