@@ -17,22 +17,55 @@
 /// Checks for explicit APPROVE/REJECT keywords in the response text.
 /// Conservative: defaults to rejection when ambiguous.
 ///
+/// # Approval Keywords
+///
+/// `APPROVE`, `PROCEED`, `LGTM`, `LOOKS SAFE`, `ACCEPTABLE`
+/// (excluding negated forms like "NOT APPROVE", "CANNOT APPROVE")
+///
+/// # Rejection Keywords
+///
+/// `REJECT`, `REVISE THIS`, `NEEDS REVISION`, `SHOULD REVISE`,
+/// `UNSAFE`, `DANGEROUS`, `DO NOT APPROVE`, `SHOULD NOT APPROVE`,
+/// `NOT APPROVE`, `CANNOT APPROVE`
+///
+/// Note: `"REVISED"` (past tense / adjective) is NOT treated as rejection.
+/// This prevents false positives like `"The revised plan looks good. APPROVE."`
+///
 /// # Returns
 ///
 /// `(approved, full_response_as_feedback)`
 pub fn parse_review_response(response: &str) -> (bool, String) {
     let response_upper = response.to_uppercase();
 
-    // Check for explicit approval/rejection keywords
-    let approved = response_upper.contains("APPROVE")
+    // --- Approval detection ---
+    let approved = (response_upper.contains("APPROVE")
+        || response_upper.contains("PROCEED")
+        || response_upper.contains("LGTM")
+        || response_upper.contains("LOOKS SAFE")
+        || response_upper.contains("ACCEPTABLE"))
         && !response_upper.contains("NOT APPROVE")
         && !response_upper.contains("DON'T APPROVE")
-        && !response_upper.contains("CANNOT APPROVE");
+        && !response_upper.contains("CANNOT APPROVE")
+        && !response_upper.contains("DO NOT APPROVE")
+        && !response_upper.contains("SHOULD NOT APPROVE");
+
+    // --- Rejection detection ---
+    // "REVISE" requires action-oriented context to avoid false positives
+    // with "REVISED" (adjective/past tense, e.g. "the revised plan looks good")
+    let has_actionable_revise = response_upper.contains("REVISE THIS")
+        || response_upper.contains("NEEDS REVISION")
+        || response_upper.contains("SHOULD REVISE")
+        || response_upper.contains("MUST REVISE")
+        || response_upper.contains("PLEASE REVISE");
 
     let rejected = response_upper.contains("REJECT")
-        || response_upper.contains("REVISE")
+        || has_actionable_revise
         || response_upper.contains("NOT APPROVE")
-        || response_upper.contains("CANNOT APPROVE");
+        || response_upper.contains("CANNOT APPROVE")
+        || response_upper.contains("DO NOT APPROVE")
+        || response_upper.contains("SHOULD NOT APPROVE")
+        || response_upper.contains("UNSAFE")
+        || response_upper.contains("DANGEROUS");
 
     // If explicitly rejected, return false
     // If explicitly approved and not rejected, return true
@@ -199,6 +232,80 @@ Here is my evaluation:
     #[test]
     fn test_ambiguous_defaults_to_reject() {
         let (approved, _) = parse_review_response("This plan has some issues.");
+        assert!(!approved);
+    }
+
+    #[test]
+    fn test_proceed_response() {
+        let (approved, _) = parse_review_response("PROCEED with this plan. It looks fine.");
+        assert!(approved);
+    }
+
+    #[test]
+    fn test_lgtm_response() {
+        let (approved, _) = parse_review_response("LGTM, this command is safe to execute.");
+        assert!(approved);
+    }
+
+    #[test]
+    fn test_looks_safe_response() {
+        let (approved, _) = parse_review_response("This LOOKS SAFE to me. Go ahead.");
+        assert!(approved);
+    }
+
+    #[test]
+    fn test_acceptable_response() {
+        let (approved, _) = parse_review_response("This is ACCEPTABLE. No concerns.");
+        assert!(approved);
+    }
+
+    #[test]
+    fn test_revised_adjective_not_rejection() {
+        // "REVISED" as adjective — should NOT be treated as rejection
+        let (approved, _) =
+            parse_review_response("The revised plan looks good. I APPROVE this approach.");
+        assert!(approved);
+    }
+
+    #[test]
+    fn test_revise_this_is_rejection() {
+        let (approved, _) = parse_review_response("Please REVISE THIS approach. It has issues.");
+        assert!(!approved);
+    }
+
+    #[test]
+    fn test_needs_revision_is_rejection() {
+        let (approved, _) = parse_review_response("This plan NEEDS REVISION before proceeding.");
+        assert!(!approved);
+    }
+
+    #[test]
+    fn test_should_revise_is_rejection() {
+        let (approved, _) = parse_review_response("You SHOULD REVISE the error handling.");
+        assert!(!approved);
+    }
+
+    #[test]
+    fn test_dangerous_is_rejection() {
+        let (approved, _) = parse_review_response("This command is DANGEROUS. Do not run it.");
+        assert!(!approved);
+    }
+
+    #[test]
+    fn test_unsafe_is_rejection() {
+        let (approved, _) = parse_review_response("The operation is UNSAFE for production.");
+        assert!(!approved);
+    }
+
+    #[test]
+    fn test_do_not_approve() {
+        let (approved, _) = parse_review_response("I DO NOT APPROVE this action.");
+        assert!(!approved);
+    }
+
+    #[test]
+    fn test_should_not_approve() {
+        let (approved, _) = parse_review_response("We SHOULD NOT APPROVE this plan.");
         assert!(!approved);
     }
 

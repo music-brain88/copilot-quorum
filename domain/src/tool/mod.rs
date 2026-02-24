@@ -71,7 +71,7 @@ pub mod provider;
 pub mod traits;
 pub mod value_objects;
 
-pub use entities::{ToolCall, ToolDefinition, ToolSpec};
+pub use entities::{ToolCall, ToolDefinition, ToolSpec, classify_command_risk};
 pub use provider::{ProviderError, ToolProvider};
 pub use traits::{DefaultToolValidator, ToolValidator};
 pub use value_objects::{ErrorCategory, ToolError, ToolResult};
