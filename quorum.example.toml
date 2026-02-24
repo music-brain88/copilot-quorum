@@ -126,6 +126,23 @@ preset = "default"
 # Number of most recent results kept in full without truncation (default: 3)
 #recent_full_count = 3
 
+# ==================== Providers ====================
+# Provider-specific configuration for direct API access.
+# By default, all models are routed through the Copilot CLI backend.
+
+# AWS Bedrock provider (requires `bedrock` feature: cargo build --features bedrock)
+# Uses IAM authentication — no API key needed, just configured AWS credentials.
+#[providers.bedrock]
+#region = "us-east-1"              # AWS region (default: "us-east-1")
+#profile = "default"               # AWS profile name (optional)
+#max_tokens = 8192                 # Max tokens per response (default: 8192)
+#cross_region = false              # Enable cross-region inference (default: false)
+
+# Explicit model → provider routing overrides.
+# Maps model names to provider backends ("copilot", "anthropic", "openai", "bedrock", "azure").
+#[providers.routing]
+#"claude-sonnet-4.5" = "bedrock"   # Route Claude models through Bedrock instead of Copilot
+
 # ==================== Custom Tools ====================
 # Define external CLI commands as first-class tools.
 # Parameter values are shell-escaped to prevent command injection.
