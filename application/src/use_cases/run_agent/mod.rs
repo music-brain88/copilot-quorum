@@ -945,11 +945,6 @@ mod tests {
                 .push_back(responses);
         }
 
-        /// Add a fallback session script (used when no model-specific session exists)
-        fn add_fallback_session(&mut self, responses: Vec<ScriptedResponse>) {
-            self.fallback_responses.lock().unwrap().push_back(responses);
-        }
-
         fn get_session_responses(&self, model: &str) -> Vec<ScriptedResponse> {
             // Try model-specific queue first
             if let Some(queue) = self.session_queues.lock().unwrap().get_mut(model) {
@@ -1090,16 +1085,8 @@ mod tests {
             }
         }
 
-        fn phases(&self) -> Vec<AgentPhase> {
-            self.phases.lock().unwrap().clone()
-        }
-
         fn has_phase(&self, phase: &AgentPhase) -> bool {
             self.phases.lock().unwrap().contains(phase)
-        }
-
-        fn execution_confirmation_count(&self) -> usize {
-            *self.execution_confirmation_count.lock().unwrap()
         }
     }
 
@@ -1147,11 +1134,6 @@ mod tests {
         "I APPROVE this plan. It looks good.".to_string()
     }
 
-    /// Helper to create a "REJECT" review response
-    fn reject_response() -> String {
-        "I REJECT this plan. It needs changes.".to_string()
-    }
-
     /// Builder for configuring and executing flow tests
     struct FlowTestBuilder {
         mode: SessionMode,
@@ -1182,6 +1164,7 @@ mod tests {
                 require_plan_review: true,
                 require_final_review: false,
                 max_plan_revisions: 3,
+                ..Default::default()
             };
             let execution = ExecutionParams {
                 max_iterations: 50,
@@ -1269,6 +1252,7 @@ mod tests {
                 require_plan_review: false,
                 require_final_review: false,
                 max_plan_revisions: 3,
+                ..Default::default()
             };
             let execution = ExecutionParams {
                 max_iterations: 50,
@@ -1360,11 +1344,6 @@ mod tests {
             }
 
             self.gateway = gateway;
-            self
-        }
-
-        fn with_phase_scope(mut self, scope: PhaseScope) -> Self {
-            self.mode.phase_scope = scope;
             self
         }
 

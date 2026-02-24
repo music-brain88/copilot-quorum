@@ -45,5 +45,13 @@ pub trait ActionReviewer: Send + Sync {
     ) -> Result<ReviewDecision, RunAgentError>;
 
     /// Check if a tool is high-risk (requires review before execution).
-    fn is_high_risk_tool(&self, tool_name: &str) -> bool;
+    ///
+    /// For tools like `run_command`, the actual risk depends on the command
+    /// arguments (e.g. `ls` is low-risk, `rm` is high-risk). Implementations
+    /// should inspect `arguments` when relevant.
+    fn is_high_risk_tool(
+        &self,
+        tool_name: &str,
+        arguments: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> bool;
 }

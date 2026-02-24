@@ -40,6 +40,12 @@ pub struct AgentPolicy {
     pub require_final_review: bool,
     /// Maximum number of plan revisions before HiL triggers.
     pub max_plan_revisions: usize,
+    /// Maximum consecutive action rejections before cascade escalation.
+    ///
+    /// When the Quorum rejects this many tool actions in a row (across tasks),
+    /// the agent escalates based on `hil_mode` (same as plan revision HiL).
+    /// Default: 3.
+    pub max_action_rejections: usize,
 }
 
 impl Default for AgentPolicy {
@@ -49,6 +55,7 @@ impl Default for AgentPolicy {
             require_plan_review: true,
             require_final_review: false,
             max_plan_revisions: 3,
+            max_action_rejections: 3,
         }
     }
 }
@@ -76,11 +83,32 @@ impl AgentPolicy {
         self
     }
 
+    pub fn with_max_action_rejections(mut self, max: usize) -> Self {
+        self.max_action_rejections = max;
+        self
+    }
+
     /// Determine the HiL action given the current plan revision count.
     ///
     /// This encodes the domain rule: "if revision count >= limit, act based on hil_mode".
     pub fn hil_action(&self, plan_revision_count: usize) -> HilAction {
         if plan_revision_count < self.max_plan_revisions {
+            return HilAction::Continue;
+        }
+        match self.hil_mode {
+            HilMode::Interactive => HilAction::RequestIntervention,
+            HilMode::AutoReject => HilAction::Abort,
+            HilMode::AutoApprove => HilAction::ForceApprove,
+        }
+    }
+
+    /// Determine the action when consecutive action rejections hit the limit.
+    ///
+    /// Symmetric with [`hil_action`](Self::hil_action) — uses the same `hil_mode`
+    /// to decide escalation behavior, preventing rejection cascades where the
+    /// Quorum repeatedly rejects tool calls and the agent gets stuck.
+    pub fn action_rejection_action(&self, rejection_count: usize) -> HilAction {
+        if rejection_count < self.max_action_rejections {
             return HilAction::Continue;
         }
         match self.hil_mode {
@@ -102,6 +130,7 @@ mod tests {
         assert!(policy.require_plan_review);
         assert!(!policy.require_final_review);
         assert_eq!(policy.max_plan_revisions, 3);
+        assert_eq!(policy.max_action_rejections, 3);
     }
 
     #[test]
@@ -141,5 +170,48 @@ mod tests {
     fn test_hil_action_auto_approve() {
         let policy = AgentPolicy::default().with_hil_mode(HilMode::AutoApprove);
         assert_eq!(policy.hil_action(3), HilAction::ForceApprove);
+    }
+
+    // ==================== action_rejection_action Tests ====================
+
+    #[test]
+    fn test_action_rejection_continue() {
+        let policy = AgentPolicy::default(); // max_action_rejections = 3
+        assert_eq!(policy.action_rejection_action(0), HilAction::Continue);
+        assert_eq!(policy.action_rejection_action(1), HilAction::Continue);
+        assert_eq!(policy.action_rejection_action(2), HilAction::Continue);
+    }
+
+    #[test]
+    fn test_action_rejection_interactive() {
+        let policy = AgentPolicy::default().with_hil_mode(HilMode::Interactive);
+        assert_eq!(
+            policy.action_rejection_action(3),
+            HilAction::RequestIntervention
+        );
+    }
+
+    #[test]
+    fn test_action_rejection_auto_reject() {
+        let policy = AgentPolicy::default().with_hil_mode(HilMode::AutoReject);
+        assert_eq!(policy.action_rejection_action(3), HilAction::Abort);
+    }
+
+    #[test]
+    fn test_action_rejection_auto_approve() {
+        let policy = AgentPolicy::default().with_hil_mode(HilMode::AutoApprove);
+        assert_eq!(policy.action_rejection_action(3), HilAction::ForceApprove);
+    }
+
+    #[test]
+    fn test_action_rejection_custom_limit() {
+        let policy = AgentPolicy::default()
+            .with_max_action_rejections(5)
+            .with_hil_mode(HilMode::Interactive);
+        assert_eq!(policy.action_rejection_action(4), HilAction::Continue);
+        assert_eq!(
+            policy.action_rejection_action(5),
+            HilAction::RequestIntervention
+        );
     }
 }
