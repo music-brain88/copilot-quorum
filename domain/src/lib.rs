@@ -57,6 +57,7 @@ pub use orchestration::{
     scope::PhaseScope,
     session_mode::SessionMode,
     strategy::{DebateConfig, DebateIntensity, OrchestrationStrategy, StrategyExecutor},
+    stream_context::StreamContext,
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
 pub use prompt::{AgentPromptTemplate, PromptTemplate};

@@ -27,6 +27,7 @@ pub enum Model {
     Gpt41,
     // Gemini models
     Gemini3Pro,
+    Gemini31Pro,
     // Custom
     Custom(String),
 }
@@ -51,6 +52,7 @@ impl Model {
             Model::Gpt5Mini => "gpt-5-mini",
             Model::Gpt41 => "gpt-4.1",
             Model::Gemini3Pro => "gemini-3-pro-preview",
+            Model::Gemini31Pro => "gemini-3.1-pro-preview",
             Model::Custom(s) => s,
         }
     }
@@ -91,7 +93,7 @@ impl Model {
 
     /// Check if this is a Gemini model
     pub fn is_gemini(&self) -> bool {
-        matches!(self, Model::Gemini3Pro)
+        matches!(self, Model::Gemini3Pro | Model::Gemini31Pro)
     }
 }
 

@@ -111,6 +111,32 @@ impl FileConfig {
             }
         }
 
+        // 4b. TUI strategy preset validation
+        {
+            let valid = ["default", "minimal", "min", "wide", "stacked", "stack"];
+            for (strategy, preset_str) in &self.tui.layout.strategy {
+                if !valid.contains(&preset_str.to_lowercase().as_str()) {
+                    issues.push(ConfigIssue {
+                        severity: Severity::Warning,
+                        code: ConfigIssueCode::InvalidEnumValue {
+                            field: format!("tui.layout.strategy.{}", strategy),
+                            value: preset_str.clone(),
+                            valid_values: vec![
+                                "default".to_string(),
+                                "minimal".to_string(),
+                                "wide".to_string(),
+                                "stacked".to_string(),
+                            ],
+                        },
+                        message: format!(
+                            "tui.layout.strategy.{}: unknown value '{}', ignored",
+                            strategy, preset_str
+                        ),
+                    });
+                }
+            }
+        }
+
         // 5. Dead [quorum] section detection
         if self.quorum != FileQuorumConfig::default() {
             issues.push(ConfigIssue {

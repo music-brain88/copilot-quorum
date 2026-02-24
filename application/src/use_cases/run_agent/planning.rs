@@ -4,15 +4,17 @@ use super::RunAgentUseCase;
 use super::types::{EnsemblePlanningOutcome, PlanningResult, RunAgentError, RunAgentInput};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::conversation_logger::ConversationEvent;
-use crate::ports::llm_gateway::{GatewayError, LlmSession, ToolResultMessage};
+use crate::ports::llm_gateway::{GatewayError, LlmSession, StreamObserver, ToolResultMessage};
 use crate::use_cases::shared::check_cancelled;
 use quorum_domain::agent::plan_parser::extract_plan_from_response;
 use quorum_domain::quorum::parsing::parse_vote_score;
 use quorum_domain::session::response::LlmResponse;
 use quorum_domain::{
-    AgentContext, AgentPromptTemplate, EnsemblePlanResult, Model, PlanCandidate, PromptTemplate,
+    AgentContext, AgentPromptTemplate, EnsemblePlanResult, Model, Plan, PlanCandidate,
+    PromptTemplate, StreamContext,
 };
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
@@ -108,6 +110,9 @@ impl RunAgentUseCase {
         let session_timeout = input.execution.ensemble_session_timeout;
         let mut join_set = JoinSet::new();
 
+        // Aggregation channel for real-time per-model streaming chunks
+        let (agg_tx, mut agg_rx) = mpsc::unbounded_channel::<(String, String)>();
+
         for model in models {
             let gateway = Arc::clone(&self.gateway);
             let model = model.clone();
@@ -116,12 +121,19 @@ impl RunAgentUseCase {
             let system_prompt = system_prompt.to_string();
             let feedback = previous_feedback.map(|s| s.to_string());
 
-            progress.on_ensemble_model_stream_start(&model.to_string());
+            progress.on_model_stream_start(&model.to_string(), &StreamContext::EnsemblePlanning);
+
+            // Create observer that relays chunks to the aggregation channel
+            let tx = agg_tx.clone();
+            let model_name = model.to_string();
+            let observer: StreamObserver = Arc::new(move |chunk: &str| {
+                let _ = tx.send((model_name.clone(), chunk.to_string()));
+            });
 
             join_set.spawn(async move {
                 let plan_future = async {
                     let session = gateway
-                        .create_session_with_system_prompt(&model, &system_prompt)
+                        .create_streaming_session(&model, &system_prompt, observer)
                         .await
                         .map_err(|e| e.to_string())?;
 
@@ -148,47 +160,54 @@ impl RunAgentUseCase {
                 (model, result)
             });
         }
+        // Drop the original sender so agg_rx closes when all spawned tasks finish
+        drop(agg_tx);
 
-        // Collect generated plans with cancellation support
+        // Collect generated plans with cancellation + real-time stream draining
         let mut candidates: Vec<PlanCandidate> = Vec::new();
         let mut text_responses: Vec<(String, String)> = Vec::new();
         let mut retryable_models: Vec<Model> = Vec::new();
         let mut failed_count = 0usize;
 
         loop {
-            let result = if let Some(ref token) = self.cancellation_token {
+            // Use select! to drain streaming chunks while waiting for task completion
+            let task_result = if let Some(ref token) = self.cancellation_token {
                 tokio::select! {
                     biased;
                     _ = token.cancelled() => {
                         join_set.abort_all();
                         return Err(RunAgentError::Cancelled);
                     }
+                    Some((model, chunk)) = agg_rx.recv() => {
+                        progress.on_model_stream_chunk(&model, &chunk);
+                        continue;
+                    }
                     result = join_set.join_next() => result,
                 }
             } else {
-                join_set.join_next().await
+                tokio::select! {
+                    biased;
+                    Some((model, chunk)) = agg_rx.recv() => {
+                        progress.on_model_stream_chunk(&model, &chunk);
+                        continue;
+                    }
+                    result = join_set.join_next() => result,
+                }
             };
 
-            let Some(result) = result else {
+            let Some(result) = task_result else {
                 break;
             };
 
             match result {
                 Ok((model, Ok(PlanningResult::Plan(plan)))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
-                    // Emit plan text as a stream chunk for live display
                     let model_str = model.to_string();
-                    let summary = format!(
-                        "Objective: {}\nTasks: {}",
-                        plan.objective,
-                        plan.tasks
-                            .iter()
-                            .map(|t| t.description.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    progress.on_ensemble_model_stream_chunk(&model_str, &summary);
-                    progress.on_ensemble_model_stream_end(&model_str);
+                    // Emit plan content as synthetic chunk so TUI pane shows the plan.
+                    // Tool-use sessions produce no streaming text (plan is in tool args),
+                    // so without this the pane would go straight to "Complete" with no content.
+                    progress.on_model_stream_chunk(&model_str, &format_plan_summary(&plan));
+                    progress.on_model_stream_end(&model_str);
                     self.conversation_logger.log(ConversationEvent::new(
                         "plan_generated",
                         serde_json::json!({
@@ -204,24 +223,22 @@ impl RunAgentUseCase {
                     let model_str = model.to_string();
                     if text.trim().is_empty() {
                         warn!("Model {} returned empty text response, discarding", model);
-                        progress.on_ensemble_model_stream_end(&model_str);
+                        progress.on_model_stream_end(&model_str);
                         progress.on_ensemble_model_failed(&model, "empty response");
                         failed_count += 1;
                     } else {
                         info!("Model {} returned text response (no plan)", model);
-                        progress.on_ensemble_model_stream_chunk(&model_str, &text);
-                        progress.on_ensemble_model_stream_end(&model_str);
+                        progress.on_model_stream_chunk(&model_str, &text);
+                        progress.on_model_stream_end(&model_str);
                         progress.on_ensemble_plan_generated(&model);
                         text_responses.push((model_str, text));
                     }
                 }
                 Ok((model, Err(e))) => {
                     // All errors are retryable (timeout, transport close, router stopped, etc.)
-                    // since the Copilot CLI may serialize session.send internally, causing
-                    // later sessions to fail when earlier ones complete and close the transport.
                     let model_str = model.to_string();
                     warn!("Model {} failed (will retry after backoff): {}", model, e);
-                    progress.on_ensemble_model_stream_end(&model_str);
+                    progress.on_model_stream_end(&model_str);
                     progress.on_ensemble_model_failed(&model, &e);
                     retryable_models.push(model);
                 }
@@ -271,10 +288,13 @@ impl RunAgentUseCase {
                 .await
                 {
                     Ok(PlanningResult::Plan(plan)) => {
+                        let model_str = model.to_string();
                         info!(
                             "Model {} generated plan on retry: {}",
                             model, plan.objective
                         );
+                        progress.on_model_stream_chunk(&model_str, &format_plan_summary(&plan));
+                        progress.on_model_stream_end(&model_str);
                         progress.on_ensemble_plan_generated(&model);
                         candidates.push(PlanCandidate::new(model, plan));
                     }
@@ -287,9 +307,12 @@ impl RunAgentUseCase {
                             progress.on_ensemble_model_failed(&model, "empty response");
                             failed_count += 1;
                         } else {
+                            let model_str = model.to_string();
                             info!("Model {} returned text response on retry (no plan)", model);
+                            progress.on_model_stream_chunk(&model_str, &text);
+                            progress.on_model_stream_end(&model_str);
                             progress.on_ensemble_plan_generated(&model);
-                            text_responses.push((model.to_string(), text));
+                            text_responses.push((model_str, text));
                         }
                     }
                     Err(e) => {
@@ -543,4 +566,21 @@ pub(super) async fn generate_plan_from_session(
     }
 
     Ok(PlanningResult::TextResponse(String::new()))
+}
+
+/// Format a plan's content for display in a per-model streaming pane.
+///
+/// During Ensemble Planning, tool-use sessions produce no streaming text
+/// (the plan lives in tool call arguments). This function creates a readable
+/// summary that gets emitted as a synthetic chunk so the TUI pane shows
+/// the plan content instead of going straight to "Complete".
+fn format_plan_summary(plan: &Plan) -> String {
+    let mut summary = format!("## {}\n\n{}\n", plan.objective, plan.reasoning);
+    if !plan.tasks.is_empty() {
+        summary.push_str("\n**Tasks:**\n");
+        for (i, task) in plan.tasks.iter().enumerate() {
+            summary.push_str(&format!("{}. {}\n", i + 1, task.description));
+        }
+    }
+    summary
 }

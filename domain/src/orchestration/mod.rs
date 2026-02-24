@@ -18,4 +18,5 @@ pub mod mode;
 pub mod scope;
 pub mod session_mode;
 pub mod strategy;
+pub mod stream_context;
 pub mod value_objects;

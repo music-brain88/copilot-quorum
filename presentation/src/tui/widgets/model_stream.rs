@@ -54,9 +54,7 @@ impl<'a> Widget for ModelStreamWidget<'a> {
         let pane = self.state.tabs.active_pane();
         let mut lines: Vec<Line> = Vec::new();
 
-        if let Some(ref ep) = pane.progress.ensemble_progress
-            && let Some(ms) = ep.model_streams.get(self.model_name)
-        {
+        if let Some(ms) = pane.progress.model_streams.get(self.model_name) {
             // Status indicator
             let (status_icon, status_color) = match &ms.status {
                 ModelStreamStatus::Pending => ("◯", Color::DarkGray),

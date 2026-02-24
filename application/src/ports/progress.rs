@@ -2,7 +2,7 @@
 //!
 //! Defines the interface for reporting progress during Quorum execution.
 
-use quorum_domain::{Model, Phase};
+use quorum_domain::{Model, Phase, StreamContext};
 
 /// Callback for progress updates during Quorum execution
 ///
@@ -17,6 +17,17 @@ pub trait ProgressNotifier: Send + Sync {
 
     /// Called when a phase completes
     fn on_phase_complete(&self, phase: &Phase);
+
+    // ==================== Model Stream Callbacks ====================
+
+    /// Called when a model starts streaming during a Quorum phase.
+    fn on_model_stream_start(&self, _model: &Model, _context: &StreamContext) {}
+
+    /// Called for each text chunk from a model during streaming.
+    fn on_model_stream_chunk(&self, _model: &str, _chunk: &str) {}
+
+    /// Called when a model finishes streaming.
+    fn on_model_stream_end(&self, _model: &str) {}
 }
 
 /// No-op progress notifier for when progress reporting is not needed
@@ -54,5 +65,18 @@ impl ProgressNotifier for QuorumProgressAdapter<'_> {
 
     fn on_phase_complete(&self, phase: &Phase) {
         self.inner.on_quorum_complete(phase.as_str(), true, None);
+    }
+
+    fn on_model_stream_start(&self, model: &Model, context: &StreamContext) {
+        self.inner
+            .on_model_stream_start(&model.to_string(), context);
+    }
+
+    fn on_model_stream_chunk(&self, model: &str, chunk: &str) {
+        self.inner.on_model_stream_chunk(model, chunk);
+    }
+
+    fn on_model_stream_end(&self, model: &str) {
+        self.inner.on_model_stream_end(model);
     }
 }
