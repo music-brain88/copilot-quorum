@@ -2,14 +2,15 @@
 //!
 //! Orchestrates the full Quorum discussion flow.
 
-use crate::ports::llm_gateway::{GatewayError, LlmGateway};
+use crate::ports::llm_gateway::{GatewayError, LlmGateway, StreamObserver};
 use crate::ports::progress::{NoProgress, ProgressNotifier};
 use quorum_domain::{
     Model, ModelConfig, ModelResponse, PeerReview, Phase, PromptTemplate, Question, QuorumResult,
-    SynthesisResult,
+    StreamContext, SynthesisResult,
 };
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
@@ -121,7 +122,7 @@ impl RunQuorumUseCase {
         ))
     }
 
-    /// Phase 1: Query all models in parallel
+    /// Phase 1: Query all models in parallel with real-time streaming
     async fn phase_initial(
         &self,
         input: &RunQuorumInput,
@@ -130,6 +131,7 @@ impl RunQuorumUseCase {
         info!("Phase 1: Initial Query");
         progress.on_phase_start(&Phase::Initial, input.models.participants.len());
 
+        let (agg_tx, mut agg_rx) = mpsc::unbounded_channel::<(String, String)>();
         let mut join_set = JoinSet::new();
 
         for model in &input.models.participants {
@@ -137,28 +139,52 @@ impl RunQuorumUseCase {
             let model = model.clone();
             let question = input.question.content().to_string();
 
+            progress.on_model_stream_start(&model, &StreamContext::QuorumInitial);
+
+            // Create observer for this model's streaming chunks
+            let tx = agg_tx.clone();
+            let model_name = model.to_string();
+            let observer: StreamObserver = Arc::new(move |chunk: &str| {
+                let _ = tx.send((model_name.clone(), chunk.to_string()));
+            });
+
             join_set.spawn(async move {
-                let result = Self::query_model(gateway.as_ref(), &model, &question).await;
+                let result =
+                    Self::query_model_streaming(gateway.as_ref(), &model, &question, observer)
+                        .await;
                 (model, result)
             });
         }
+        drop(agg_tx);
 
         let mut responses = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok((model, Ok(content))) => {
-                    info!("Model {} responded successfully", model);
-                    progress.on_task_complete(&Phase::Initial, &model, true);
-                    responses.push(ModelResponse::success(model.to_string(), content));
+        loop {
+            tokio::select! {
+                biased;
+                Some((model, chunk)) = agg_rx.recv() => {
+                    progress.on_model_stream_chunk(&model, &chunk);
+                    continue;
                 }
-                Ok((model, Err(e))) => {
-                    warn!("Model {} failed: {}", model, e);
-                    progress.on_task_complete(&Phase::Initial, &model, false);
-                    responses.push(ModelResponse::failure(model.to_string(), e.to_string()));
-                }
-                Err(e) => {
-                    warn!("Task join error: {}", e);
+                result = join_set.join_next() => {
+                    let Some(result) = result else { break };
+                    match result {
+                        Ok((model, Ok(content))) => {
+                            info!("Model {} responded successfully", model);
+                            progress.on_model_stream_end(&model.to_string());
+                            progress.on_task_complete(&Phase::Initial, &model, true);
+                            responses.push(ModelResponse::success(model.to_string(), content));
+                        }
+                        Ok((model, Err(e))) => {
+                            warn!("Model {} failed: {}", model, e);
+                            progress.on_model_stream_end(&model.to_string());
+                            progress.on_task_complete(&Phase::Initial, &model, false);
+                            responses.push(ModelResponse::failure(model.to_string(), e.to_string()));
+                        }
+                        Err(e) => {
+                            warn!("Task join error: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -167,7 +193,7 @@ impl RunQuorumUseCase {
         Ok(responses)
     }
 
-    /// Phase 2: Each model reviews others' responses
+    /// Phase 2: Each model reviews others' responses with streaming
     async fn phase_review(
         &self,
         input: &RunQuorumInput,
@@ -179,6 +205,7 @@ impl RunQuorumUseCase {
         let successful_responses: Vec<_> = responses.iter().filter(|r| r.success).collect();
         progress.on_phase_start(&Phase::Review, successful_responses.len());
 
+        let (agg_tx, mut agg_rx) = mpsc::unbounded_channel::<(String, String)>();
         let mut join_set = JoinSet::new();
 
         // Prepare anonymized responses
@@ -208,37 +235,63 @@ impl RunQuorumUseCase {
             let model: Model = response.model.parse().unwrap();
             let question = input.question.content().to_string();
 
+            progress.on_model_stream_start(&model, &StreamContext::QuorumReview);
+
+            let tx = agg_tx.clone();
+            let model_name = model.to_string();
+            let observer: StreamObserver = Arc::new(move |chunk: &str| {
+                let _ = tx.send((model_name.clone(), chunk.to_string()));
+            });
+
             join_set.spawn(async move {
-                let result =
-                    Self::review_responses(gateway.as_ref(), &model, &question, &other_responses)
-                        .await;
+                let result = Self::review_responses_streaming(
+                    gateway.as_ref(),
+                    &model,
+                    &question,
+                    &other_responses,
+                    observer,
+                )
+                .await;
                 (model, other_responses, result)
             });
         }
+        drop(agg_tx);
 
         let mut reviews = Vec::new();
 
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok((model, reviewed, Ok(review_content))) => {
-                    info!("Model {} completed review", model);
-                    progress.on_task_complete(&Phase::Review, &model, true);
+        loop {
+            tokio::select! {
+                biased;
+                Some((model, chunk)) = agg_rx.recv() => {
+                    progress.on_model_stream_chunk(&model, &chunk);
+                    continue;
+                }
+                result = join_set.join_next() => {
+                    let Some(result) = result else { break };
+                    match result {
+                        Ok((model, reviewed, Ok(review_content))) => {
+                            info!("Model {} completed review", model);
+                            progress.on_model_stream_end(&model.to_string());
+                            progress.on_task_complete(&Phase::Review, &model, true);
 
-                    // Create a review entry for each reviewed response
-                    for (id, _) in reviewed {
-                        reviews.push(PeerReview::new(
-                            model.to_string(),
-                            id,
-                            review_content.clone(),
-                        ));
+                            // Create a review entry for each reviewed response
+                            for (id, _) in reviewed {
+                                reviews.push(PeerReview::new(
+                                    model.to_string(),
+                                    id,
+                                    review_content.clone(),
+                                ));
+                            }
+                        }
+                        Ok((model, _, Err(e))) => {
+                            warn!("Model {} review failed: {}", model, e);
+                            progress.on_model_stream_end(&model.to_string());
+                            progress.on_task_complete(&Phase::Review, &model, false);
+                        }
+                        Err(e) => {
+                            warn!("Task join error: {}", e);
+                        }
                     }
-                }
-                Ok((model, _, Err(e))) => {
-                    warn!("Model {} review failed: {}", model, e);
-                    progress.on_task_complete(&Phase::Review, &model, false);
-                }
-                Err(e) => {
-                    warn!("Task join error: {}", e);
                 }
             }
         }
@@ -247,7 +300,7 @@ impl RunQuorumUseCase {
         Ok(reviews)
     }
 
-    /// Phase 3: Synthesize all responses and reviews
+    /// Phase 3: Synthesize all responses and reviews with streaming
     async fn phase_synthesis(
         &self,
         input: &RunQuorumInput,
@@ -271,15 +324,42 @@ impl RunQuorumUseCase {
             .map(|r| (r.reviewer.clone(), r.content.clone()))
             .collect();
 
-        let synthesis_content = Self::synthesize(
+        progress.on_model_stream_start(&moderator, &StreamContext::QuorumSynthesis);
+
+        // Use a channel to relay synthesis chunks to progress in real-time
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let moderator_name = moderator.to_string();
+        let observer: StreamObserver = Arc::new(move |chunk: &str| {
+            let _ = tx.send(chunk.to_string());
+        });
+
+        let synthesis_future = Self::synthesize_streaming(
             self.gateway.as_ref(),
             &moderator,
             input.question.content(),
             &successful_responses,
             &review_pairs,
-        )
-        .await?;
+            observer,
+        );
+        tokio::pin!(synthesis_future);
 
+        let synthesis_content = loop {
+            tokio::select! {
+                biased;
+                Some(chunk) = rx.recv() => {
+                    progress.on_model_stream_chunk(&moderator_name, &chunk);
+                }
+                result = &mut synthesis_future => {
+                    // Drain remaining chunks
+                    while let Ok(chunk) = rx.try_recv() {
+                        progress.on_model_stream_chunk(&moderator_name, &chunk);
+                    }
+                    break result?;
+                }
+            }
+        };
+
+        progress.on_model_stream_end(&moderator.to_string());
         progress.on_task_complete(&Phase::Synthesis, &moderator, true);
         progress.on_phase_complete(&Phase::Synthesis);
 
@@ -289,45 +369,48 @@ impl RunQuorumUseCase {
         ))
     }
 
-    /// Query a single model
-    async fn query_model(
+    /// Query a single model with streaming observer
+    async fn query_model_streaming(
         gateway: &dyn LlmGateway,
         model: &Model,
         question: &str,
+        observer: StreamObserver,
     ) -> Result<String, GatewayError> {
         let session = gateway
-            .create_session_with_system_prompt(model, PromptTemplate::initial_system())
+            .create_streaming_session(model, PromptTemplate::initial_system(), observer)
             .await?;
 
         let prompt = PromptTemplate::initial_query(question);
         session.send(&prompt).await
     }
 
-    /// Have a model review other responses
-    async fn review_responses(
+    /// Have a model review other responses with streaming
+    async fn review_responses_streaming(
         gateway: &dyn LlmGateway,
         model: &Model,
         question: &str,
         responses: &[(String, String)],
+        observer: StreamObserver,
     ) -> Result<String, GatewayError> {
         let session = gateway
-            .create_session_with_system_prompt(model, PromptTemplate::review_system())
+            .create_streaming_session(model, PromptTemplate::review_system(), observer)
             .await?;
 
         let prompt = PromptTemplate::review_prompt(question, responses);
         session.send(&prompt).await
     }
 
-    /// Synthesize all responses and reviews
-    async fn synthesize(
+    /// Synthesize all responses and reviews with streaming observer
+    async fn synthesize_streaming(
         gateway: &dyn LlmGateway,
         moderator: &Model,
         question: &str,
         responses: &[(String, String)],
         reviews: &[(String, String)],
+        observer: StreamObserver,
     ) -> Result<String, GatewayError> {
         let session = gateway
-            .create_session_with_system_prompt(moderator, PromptTemplate::synthesis_system())
+            .create_streaming_session(moderator, PromptTemplate::synthesis_system(), observer)
             .await?;
 
         let prompt = PromptTemplate::synthesis_prompt(question, responses, reviews);

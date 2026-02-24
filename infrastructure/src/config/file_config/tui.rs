@@ -67,6 +67,17 @@ pub struct FileTuiLayoutConfig {
     pub preset: String,
     /// Terminal width threshold for responsive fallback to Minimal
     pub flex_threshold: u16,
+    /// Per-strategy layout preset overrides
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [tui.layout.strategy]
+    /// quorum = "stacked"
+    /// ensemble = "wide"
+    /// ```
+    #[serde(default)]
+    pub strategy: std::collections::HashMap<String, String>,
 }
 
 impl Default for FileTuiLayoutConfig {
@@ -74,6 +85,7 @@ impl Default for FileTuiLayoutConfig {
         Self {
             preset: "default".to_string(),
             flex_threshold: 120,
+            strategy: std::collections::HashMap::new(),
         }
     }
 }
@@ -294,5 +306,26 @@ preset = "invalid_preset"
         assert_eq!(config.tui.layout.flex_threshold, 120);
         assert!(config.tui.routes.tool_log.is_none());
         assert!(config.tui.surfaces.progress_pane.is_none());
+    }
+
+    #[test]
+    fn test_tui_layout_strategy_presets_deserialize() {
+        let toml_str = r#"
+[tui.layout]
+preset = "default"
+
+[tui.layout.strategy]
+quorum = "stacked"
+ensemble = "wide"
+"#;
+        let config: super::super::FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.tui.layout.strategy.get("quorum").unwrap(), "stacked");
+        assert_eq!(config.tui.layout.strategy.get("ensemble").unwrap(), "wide");
+    }
+
+    #[test]
+    fn test_tui_layout_strategy_empty_by_default() {
+        let config = FileTuiLayoutConfig::default();
+        assert!(config.strategy.is_empty());
     }
 }

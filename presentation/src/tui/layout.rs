@@ -3,6 +3,7 @@
 //! Provides `LayoutPreset` (Default, Minimal, Wide, Stacked) and supporting
 //! types for TOML-driven layout configuration.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -207,12 +208,36 @@ pub struct RouteOverride {
 /// Complete TUI layout configuration.
 ///
 /// Assembled from `[tui.layout]` TOML section and used by the render loop.
+///
+/// # Strategy-based preset overrides
+///
+/// The `strategy_presets` map allows per-strategy layout overrides:
+/// ```toml
+/// [tui.layout.strategy]
+/// quorum = "stacked"
+/// ensemble = "wide"
+/// ```
+///
+/// When an orchestration strategy activates, the TUI switches to the
+/// corresponding preset. If no override is configured, `preset` is used.
 #[derive(Debug, Clone)]
 pub struct TuiLayoutConfig {
     pub preset: LayoutPreset,
     pub flex_threshold: u16,
     pub surface_config: SurfaceConfig,
     pub route_overrides: Vec<RouteOverride>,
+    /// Per-strategy layout preset overrides (e.g., "quorum" → Stacked).
+    pub strategy_presets: HashMap<String, LayoutPreset>,
+}
+
+impl TuiLayoutConfig {
+    /// Get the effective preset for a given strategy, falling back to the base preset.
+    pub fn preset_for_strategy(&self, strategy: &str) -> LayoutPreset {
+        self.strategy_presets
+            .get(strategy)
+            .copied()
+            .unwrap_or(self.preset)
+    }
 }
 
 impl Default for TuiLayoutConfig {
@@ -222,6 +247,7 @@ impl Default for TuiLayoutConfig {
             flex_threshold: 120,
             surface_config: SurfaceConfig::default(),
             route_overrides: Vec::new(),
+            strategy_presets: HashMap::new(),
         }
     }
 }
@@ -331,6 +357,23 @@ mod tests {
         assert_eq!(config.surface_config.width_percent, 30);
         assert_eq!(config.surface_config.border, BorderStyle::Rounded);
         assert!(config.route_overrides.is_empty());
+        assert!(config.strategy_presets.is_empty());
+    }
+
+    #[test]
+    fn test_preset_for_strategy() {
+        let mut config = TuiLayoutConfig::default();
+        config
+            .strategy_presets
+            .insert("quorum".to_string(), LayoutPreset::Stacked);
+        config
+            .strategy_presets
+            .insert("ensemble".to_string(), LayoutPreset::Wide);
+
+        assert_eq!(config.preset_for_strategy("quorum"), LayoutPreset::Stacked);
+        assert_eq!(config.preset_for_strategy("ensemble"), LayoutPreset::Wide);
+        // Unknown strategy falls back to base preset
+        assert_eq!(config.preset_for_strategy("debate"), LayoutPreset::Default);
     }
 
     #[test]

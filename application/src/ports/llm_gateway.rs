@@ -5,8 +5,21 @@
 use async_trait::async_trait;
 use quorum_domain::session::response::LlmResponse;
 use quorum_domain::{Model, StreamEvent};
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
+
+/// Observer callback for streaming chunks from an LLM session.
+///
+/// Injected at session creation time via [`LlmGateway::create_streaming_session`].
+/// The observer receives each text chunk as it arrives, enabling real-time
+/// per-model streaming display in the TUI.
+///
+/// # Thread Safety
+///
+/// `Arc<dyn Fn(&str) + Send + Sync>` — cheaply cloneable across async tasks.
+/// Typically wraps an `mpsc::UnboundedSender` to relay chunks to a collector.
+pub type StreamObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Errors that can occur during LLM gateway operations
 #[derive(Error, Debug)]
@@ -61,6 +74,24 @@ pub trait LlmGateway: Send + Sync {
         &self,
         model: &Model,
         system_prompt: &str,
+    ) -> Result<Box<dyn LlmSession>, GatewayError> {
+        self.create_session_with_system_prompt(model, system_prompt)
+            .await
+    }
+
+    /// Create a new session with a stream observer for real-time chunk delivery.
+    ///
+    /// The observer receives each text chunk during streaming, enabling per-model
+    /// live output in the TUI (Ensemble Planning, Quorum Discussion, etc.).
+    ///
+    /// Default implementation ignores the observer and delegates to
+    /// [`create_session_with_system_prompt`](Self::create_session_with_system_prompt),
+    /// so existing providers (Bedrock, test mocks) work without changes.
+    async fn create_streaming_session(
+        &self,
+        model: &Model,
+        system_prompt: &str,
+        _observer: StreamObserver,
     ) -> Result<Box<dyn LlmSession>, GatewayError> {
         self.create_session_with_system_prompt(model, system_prompt)
             .await

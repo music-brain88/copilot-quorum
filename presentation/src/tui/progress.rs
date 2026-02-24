@@ -6,7 +6,9 @@
 
 use super::event::{RoutedTuiEvent, TuiEvent};
 use quorum_application::AgentProgressNotifier;
-use quorum_domain::{AgentPhase, InteractionId, Model, Plan, ReviewRound, Task, Thought};
+use quorum_domain::{
+    AgentPhase, InteractionId, Model, Plan, ReviewRound, StreamContext, Task, Thought,
+};
 use tokio::sync::mpsc;
 
 /// Bridge from AgentProgressNotifier callbacks to TuiEvent channel
@@ -295,19 +297,22 @@ impl AgentProgressNotifier for TuiProgressBridge {
         self.emit(TuiEvent::EnsembleFallback(reason.to_string()));
     }
 
-    fn on_ensemble_model_stream_start(&self, model: &str) {
-        self.emit(TuiEvent::EnsembleModelStreamStart(model.to_string()));
+    fn on_model_stream_start(&self, model: &str, context: &StreamContext) {
+        self.emit(TuiEvent::ModelStreamStart {
+            model: model.to_string(),
+            context: context.clone(),
+        });
     }
 
-    fn on_ensemble_model_stream_chunk(&self, model: &str, chunk: &str) {
-        self.emit(TuiEvent::EnsembleModelStreamChunk {
+    fn on_model_stream_chunk(&self, model: &str, chunk: &str) {
+        self.emit(TuiEvent::ModelStreamChunk {
             model: model.to_string(),
             chunk: chunk.to_string(),
         });
     }
 
-    fn on_ensemble_model_stream_end(&self, model: &str) {
-        self.emit(TuiEvent::EnsembleModelStreamEnd(model.to_string()));
+    fn on_model_stream_end(&self, model: &str) {
+        self.emit(TuiEvent::ModelStreamEnd(model.to_string()));
     }
 }
 

@@ -33,7 +33,9 @@ use crate::copilot::protocol::{
 use crate::copilot::router::{MessageRouter, SessionChannel};
 use crate::copilot::transport::StreamingOutcome;
 use async_trait::async_trait;
-use quorum_application::ports::llm_gateway::{GatewayError, LlmSession, ToolResultMessage};
+use quorum_application::ports::llm_gateway::{
+    GatewayError, LlmSession, StreamObserver, ToolResultMessage,
+};
 use quorum_domain::Model;
 use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
 use quorum_domain::util::truncate_str;
@@ -87,6 +89,10 @@ pub struct CopilotSession {
     model: Model,
     system_prompt: Option<String>,
     tool_session: Mutex<Option<ToolSessionState>>,
+    /// Optional observer that receives each streaming text chunk.
+    /// Injected at construction time via [`new_with_observer`](Self::new_with_observer),
+    /// immutable thereafter (no Mutex needed).
+    stream_observer: Option<StreamObserver>,
 }
 
 impl CopilotSession {
@@ -129,6 +135,51 @@ impl CopilotSession {
             model,
             system_prompt,
             tool_session: Mutex::new(None),
+            stream_observer: None,
+        })
+    }
+
+    /// Create a new session with a stream observer for real-time chunk delivery.
+    ///
+    /// The observer receives each text chunk as it arrives from the LLM,
+    /// enabling per-model live streaming in the TUI.
+    ///
+    /// Sends `availableTools: []` to disable Copilot CLI built-in tools,
+    /// preventing the model from executing commands during streaming sessions
+    /// (e.g., Ensemble Planning, Quorum Discussion). User-defined tools
+    /// passed via `send_with_tools()` still work normally.
+    pub async fn new_with_observer(
+        router: Arc<MessageRouter>,
+        model: Model,
+        system_prompt: Option<String>,
+        observer: StreamObserver,
+    ) -> Result<Self> {
+        info!("Creating streaming session with model: {}", model);
+
+        let system_message = system_prompt.as_ref().map(|content| SystemMessageConfig {
+            mode: "append".to_string(),
+            content: content.clone(),
+        });
+
+        let params = CreateSessionParams {
+            model: Some(model.to_string()),
+            system_prompt: system_prompt.clone(),
+            system_message,
+            tools: None,
+            available_tools: Some(vec![]),
+        };
+
+        let (session_id, channel) = router.create_session(params).await?;
+        debug!("Streaming session created: {}", session_id);
+
+        Ok(Self {
+            router,
+            session_id,
+            channel: Mutex::new(channel),
+            model,
+            system_prompt,
+            tool_session: Mutex::new(None),
+            stream_observer: Some(observer),
         })
     }
 
@@ -167,6 +218,7 @@ impl CopilotSession {
             model,
             system_prompt,
             tool_session: Mutex::new(None),
+            stream_observer: None,
         })
     }
 
@@ -176,8 +228,17 @@ impl CopilotSession {
     }
 
     /// Sends a prompt and waits for the complete response.
+    ///
+    /// If a stream observer was injected at construction time, each chunk
+    /// is forwarded to it for real-time display.
     pub async fn ask(&self, content: &str) -> Result<String> {
-        self.ask_streaming(content, |_| {}).await
+        let observer = self.stream_observer.clone();
+        self.ask_streaming(content, move |chunk| {
+            if let Some(ref obs) = observer {
+                obs(chunk);
+            }
+        })
+        .await
     }
 
     /// Sends a prompt and streams the response, calling `on_chunk` for each piece.
@@ -377,9 +438,14 @@ impl CopilotSession {
             )));
         }
 
-        // Read streaming and build response
+        // Read streaming and build response — forward chunks to observer if present
+        let observer = self.stream_observer.clone();
         let outcome = tool_channel
-            .read_streaming_for_tools(|_chunk| {})
+            .read_streaming_for_tools(move |chunk| {
+                if let Some(ref obs) = observer {
+                    obs(chunk);
+                }
+            })
             .await
             .map_err(|e| GatewayError::RequestFailed(e.to_string()))?;
 
@@ -546,10 +612,15 @@ impl LlmSession for CopilotSession {
             request_id, response_json,
         );
 
-        // Read the next streaming response from the tool session channel
+        // Read the next streaming response — forward chunks to observer if present
+        let observer = self.stream_observer.clone();
         let outcome = state
             .channel
-            .read_streaming_for_tools(|_chunk| {})
+            .read_streaming_for_tools(move |chunk| {
+                if let Some(ref obs) = observer {
+                    obs(chunk);
+                }
+            })
             .await
             .map_err(|e| GatewayError::RequestFailed(e.to_string()))?;
 
