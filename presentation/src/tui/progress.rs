@@ -6,7 +6,9 @@
 
 use super::event::{RoutedTuiEvent, TuiEvent};
 use quorum_application::AgentProgressNotifier;
-use quorum_domain::{AgentPhase, InteractionId, Model, Plan, ReviewRound, StreamContext, Task, Thought};
+use quorum_domain::{
+    AgentPhase, InteractionId, Model, Plan, ReviewRound, StreamContext, Task, Thought,
+};
 use tokio::sync::mpsc;
 
 /// Bridge from AgentProgressNotifier callbacks to TuiEvent channel

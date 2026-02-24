@@ -166,6 +166,7 @@ impl LlmGateway for CopilotLlmGateway {
             Model::Gpt5Mini,
             Model::Gpt41,
             Model::Gemini3Pro,
+            Model::Gemini31Pro,
         ])
     }
 }

@@ -30,7 +30,9 @@
 //! }
 //! ```
 
-use quorum_domain::{AgentPhase, ErrorCategory, Model, Plan, ReviewRound, StreamContext, Task, Thought};
+use quorum_domain::{
+    AgentPhase, ErrorCategory, Model, Plan, ReviewRound, StreamContext, Task, Thought,
+};
 
 /// Progress notifier for agent execution.
 ///

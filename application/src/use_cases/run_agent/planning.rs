@@ -10,8 +10,8 @@ use quorum_domain::agent::plan_parser::extract_plan_from_response;
 use quorum_domain::quorum::parsing::parse_vote_score;
 use quorum_domain::session::response::LlmResponse;
 use quorum_domain::{
-    AgentContext, AgentPromptTemplate, EnsemblePlanResult, Model, PlanCandidate, PromptTemplate,
-    StreamContext,
+    AgentContext, AgentPromptTemplate, EnsemblePlanResult, Model, Plan, PlanCandidate,
+    PromptTemplate, StreamContext,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -121,10 +121,7 @@ impl RunAgentUseCase {
             let system_prompt = system_prompt.to_string();
             let feedback = previous_feedback.map(|s| s.to_string());
 
-            progress.on_model_stream_start(
-                &model.to_string(),
-                &StreamContext::EnsemblePlanning,
-            );
+            progress.on_model_stream_start(&model.to_string(), &StreamContext::EnsemblePlanning);
 
             // Create observer that relays chunks to the aggregation channel
             let tx = agg_tx.clone();
@@ -206,6 +203,10 @@ impl RunAgentUseCase {
                 Ok((model, Ok(PlanningResult::Plan(plan)))) => {
                     info!("Model {} generated plan: {}", model, plan.objective);
                     let model_str = model.to_string();
+                    // Emit plan content as synthetic chunk so TUI pane shows the plan.
+                    // Tool-use sessions produce no streaming text (plan is in tool args),
+                    // so without this the pane would go straight to "Complete" with no content.
+                    progress.on_model_stream_chunk(&model_str, &format_plan_summary(&plan));
                     progress.on_model_stream_end(&model_str);
                     self.conversation_logger.log(ConversationEvent::new(
                         "plan_generated",
@@ -227,6 +228,7 @@ impl RunAgentUseCase {
                         failed_count += 1;
                     } else {
                         info!("Model {} returned text response (no plan)", model);
+                        progress.on_model_stream_chunk(&model_str, &text);
                         progress.on_model_stream_end(&model_str);
                         progress.on_ensemble_plan_generated(&model);
                         text_responses.push((model_str, text));
@@ -286,10 +288,13 @@ impl RunAgentUseCase {
                 .await
                 {
                     Ok(PlanningResult::Plan(plan)) => {
+                        let model_str = model.to_string();
                         info!(
                             "Model {} generated plan on retry: {}",
                             model, plan.objective
                         );
+                        progress.on_model_stream_chunk(&model_str, &format_plan_summary(&plan));
+                        progress.on_model_stream_end(&model_str);
                         progress.on_ensemble_plan_generated(&model);
                         candidates.push(PlanCandidate::new(model, plan));
                     }
@@ -302,9 +307,12 @@ impl RunAgentUseCase {
                             progress.on_ensemble_model_failed(&model, "empty response");
                             failed_count += 1;
                         } else {
+                            let model_str = model.to_string();
                             info!("Model {} returned text response on retry (no plan)", model);
+                            progress.on_model_stream_chunk(&model_str, &text);
+                            progress.on_model_stream_end(&model_str);
                             progress.on_ensemble_plan_generated(&model);
-                            text_responses.push((model.to_string(), text));
+                            text_responses.push((model_str, text));
                         }
                     }
                     Err(e) => {
@@ -558,4 +566,21 @@ pub(super) async fn generate_plan_from_session(
     }
 
     Ok(PlanningResult::TextResponse(String::new()))
+}
+
+/// Format a plan's content for display in a per-model streaming pane.
+///
+/// During Ensemble Planning, tool-use sessions produce no streaming text
+/// (the plan lives in tool call arguments). This function creates a readable
+/// summary that gets emitted as a synthetic chunk so the TUI pane shows
+/// the plan content instead of going straight to "Complete".
+fn format_plan_summary(plan: &Plan) -> String {
+    let mut summary = format!("## {}\n\n{}\n", plan.objective, plan.reasoning);
+    if !plan.tasks.is_empty() {
+        summary.push_str("\n**Tasks:**\n");
+        for (i, task) in plan.tasks.iter().enumerate() {
+            summary.push_str(&format!("{}. {}\n", i + 1, task.description));
+        }
+    }
+    summary
 }

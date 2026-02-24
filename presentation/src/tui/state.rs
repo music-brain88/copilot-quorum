@@ -349,6 +349,8 @@ pub struct ProgressState {
     pub quorum_status: Option<QuorumStatus>,
     pub task_progress: Option<TaskProgress>,
     pub ensemble_progress: Option<EnsembleProgress>,
+    /// Per-model streaming state, shared across Ensemble and Quorum Discussion.
+    pub model_streams: std::collections::HashMap<String, ModelStreamState>,
     pub is_running: bool,
 }
 
@@ -413,8 +415,6 @@ pub struct EnsembleProgress {
     pub voting_started: bool,
     pub plan_count: Option<usize>,
     pub selected: Option<(String, f64)>,
-    /// Per-model streaming state for live output display.
-    pub model_streams: std::collections::HashMap<String, ModelStreamState>,
 }
 
 /// Per-model streaming state during Ensemble planning.

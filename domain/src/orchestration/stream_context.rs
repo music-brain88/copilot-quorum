@@ -44,7 +44,10 @@ mod tests {
 
     #[test]
     fn test_stream_context_display() {
-        assert_eq!(StreamContext::EnsemblePlanning.to_string(), "Ensemble Planning");
+        assert_eq!(
+            StreamContext::EnsemblePlanning.to_string(),
+            "Ensemble Planning"
+        );
         assert_eq!(StreamContext::QuorumInitial.to_string(), "Initial Query");
         assert_eq!(StreamContext::QuorumReview.to_string(), "Peer Review");
         assert_eq!(StreamContext::QuorumSynthesis.to_string(), "Synthesis");
@@ -52,7 +55,10 @@ mod tests {
 
     #[test]
     fn test_stream_context_equality() {
-        assert_eq!(StreamContext::EnsemblePlanning, StreamContext::EnsemblePlanning);
+        assert_eq!(
+            StreamContext::EnsemblePlanning,
+            StreamContext::EnsemblePlanning
+        );
         assert_ne!(StreamContext::QuorumInitial, StreamContext::QuorumReview);
     }
 }
