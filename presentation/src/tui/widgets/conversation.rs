@@ -78,7 +78,12 @@ impl<'a> Widget for ConversationWidget<'a> {
         let text = self.format_messages();
         let visible_height = area.height.saturating_sub(2); // borders
         let content_width = area.width.saturating_sub(2); // borders
-        let total_lines = count_wrapped_lines(&text, content_width);
+
+        // Use Paragraph's own line_count() which uses WordWrapper internally,
+        // matching the exact wrapping algorithm used during rendering.
+        // Built without block so line_count returns pure content lines.
+        let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+        let total_lines = paragraph.line_count(content_width) as u16;
 
         // Calculate scroll: scroll_offset=0 means "show bottom"
         let pane = self.state.tabs.active_pane();
@@ -95,29 +100,9 @@ impl<'a> Widget for ConversationWidget<'a> {
             .title(" Conversation ")
             .style(Style::default().fg(Color::White));
 
-        Paragraph::new(text)
+        paragraph
             .block(block)
-            .wrap(Wrap { trim: false })
             .scroll((scroll, 0))
             .render(area, buf);
     }
-}
-
-/// Count the total number of physical (wrapped) lines for a given available width.
-///
-/// `Paragraph::scroll((row, 0))` operates on physical lines after word-wrap,
-/// but `Text::lines.len()` returns the logical (pre-wrap) count. This function
-/// estimates the physical line count so scroll calculations stay accurate.
-fn count_wrapped_lines(text: &Text<'_>, available_width: u16) -> u16 {
-    if available_width == 0 {
-        return text.lines.len() as u16;
-    }
-    let w = available_width as usize;
-    text.lines
-        .iter()
-        .map(|line| {
-            let lw = line.width();
-            if lw == 0 { 1u16 } else { lw.div_ceil(w) as u16 }
-        })
-        .sum()
 }
