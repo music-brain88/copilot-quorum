@@ -67,7 +67,9 @@ pub use session::{
     stream::StreamEvent,
 };
 pub use tool::{
-    entities::{RiskLevel, ToolCall, ToolDefinition, ToolParameter, ToolSpec},
+    entities::{
+        RiskLevel, ToolCall, ToolDefinition, ToolParameter, ToolSpec, classify_command_risk,
+    },
     traits::{DefaultToolValidator, ToolValidator},
     value_objects::{ErrorCategory, ToolError, ToolResult, ToolResultMetadata},
 };

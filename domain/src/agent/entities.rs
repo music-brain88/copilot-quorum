@@ -824,6 +824,13 @@ pub struct AgentState {
     /// Number of plan revisions (rejections) - tracked separately from Plan
     /// because Plan is recreated on each revision attempt
     pub plan_revision_count: usize,
+    /// Consecutive action rejections across tasks.
+    ///
+    /// Tracks how many times in a row the Quorum has rejected tool actions.
+    /// Used by cascade prevention logic to trigger escalation (HiL, force-approve,
+    /// or abort) when the agent gets stuck in a rejection loop.
+    /// Reset to 0 when a task completes successfully.
+    pub action_rejection_count: usize,
     /// Error message if failed
     pub error: Option<String>,
 }
@@ -851,6 +858,7 @@ impl AgentState {
             thoughts: Vec::new(),
             iteration_count: 0,
             plan_revision_count: 0,
+            action_rejection_count: 0,
             error: None,
         }
     }
@@ -902,6 +910,23 @@ impl AgentState {
     /// Marks the agent as successfully completed.
     pub fn complete(&mut self) {
         self.phase = AgentPhase::Completed;
+    }
+
+    /// Records an action rejection and returns the new count.
+    ///
+    /// Called when a Quorum action review rejects a tool call.
+    /// The count is used by [`AgentPolicy::action_rejection_action`] to
+    /// determine whether to escalate (e.g. HiL, force-approve, abort).
+    pub fn record_action_rejection(&mut self) -> usize {
+        self.action_rejection_count += 1;
+        self.action_rejection_count
+    }
+
+    /// Resets the action rejection counter.
+    ///
+    /// Called when a task completes successfully, breaking any rejection cascade.
+    pub fn reset_action_rejections(&mut self) {
+        self.action_rejection_count = 0;
     }
 
     /// Increments iteration count and returns `true` if within limits.

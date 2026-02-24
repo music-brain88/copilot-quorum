@@ -1182,6 +1182,7 @@ mod tests {
                 require_plan_review: true,
                 require_final_review: false,
                 max_plan_revisions: 3,
+                ..Default::default()
             };
             let execution = ExecutionParams {
                 max_iterations: 50,
@@ -1269,6 +1270,7 @@ mod tests {
                 require_plan_review: false,
                 require_final_review: false,
                 max_plan_revisions: 3,
+                ..Default::default()
             };
             let execution = ExecutionParams {
                 max_iterations: 50,

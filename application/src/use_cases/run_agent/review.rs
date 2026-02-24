@@ -163,7 +163,20 @@ impl ActionReviewer for QuorumActionReviewer {
         }
     }
 
-    fn is_high_risk_tool(&self, tool_name: &str) -> bool {
+    fn is_high_risk_tool(
+        &self,
+        tool_name: &str,
+        arguments: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> bool {
+        // For run_command, dynamically classify based on the actual command
+        if tool_name == "run_command" {
+            if let Some(cmd_str) = arguments.get("command").and_then(|v| v.as_str()) {
+                return quorum_domain::classify_command_risk(cmd_str).requires_quorum();
+            }
+            // No command argument → treat as high-risk (conservative)
+            return true;
+        }
+
         if let Some(definition) = self.tool_executor.get_tool(tool_name) {
             definition.is_high_risk()
         } else {

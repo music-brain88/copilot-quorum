@@ -192,6 +192,54 @@ impl ExecuteTaskUseCase {
                 {
                     Err(RunAgentError::ActionRejected(feedback)) => {
                         action_attempts += 1;
+
+                        // Track consecutive rejections for cascade detection
+                        let rejection_count = state.record_action_rejection();
+                        let cascade_action = input.policy.action_rejection_action(rejection_count);
+
+                        match cascade_action {
+                            quorum_domain::agent::agent_policy::HilAction::Abort => {
+                                warn!(
+                                    "Action rejection cascade detected ({} consecutive). Aborting.",
+                                    rejection_count
+                                );
+                                break Err(RunAgentError::ActionRejected(format!(
+                                    "Rejection cascade: {} consecutive rejections exceeded limit. \
+                                     Last feedback: {}",
+                                    rejection_count, feedback
+                                )));
+                            }
+                            quorum_domain::agent::agent_policy::HilAction::ForceApprove => {
+                                info!(
+                                    "Action rejection cascade ({} consecutive): auto-approve mode, \
+                                     skipping review for next attempt.",
+                                    rejection_count
+                                );
+                                // Reset and continue — next attempt won't be reviewed
+                                // (the tool-level review is still in place, but the cascade
+                                // count signals that we should let it through)
+                                action_feedback = Some(format!(
+                                    "{}\n[NOTE: Cascade limit reached. Proceeding without review.]",
+                                    feedback
+                                ));
+                                continue;
+                            }
+                            quorum_domain::agent::agent_policy::HilAction::RequestIntervention => {
+                                warn!(
+                                    "Action rejection cascade ({} consecutive): requesting human intervention.",
+                                    rejection_count
+                                );
+                                break Err(RunAgentError::ActionRejected(format!(
+                                    "Rejection cascade: {} consecutive rejections. \
+                                     Human intervention required. Last feedback: {}",
+                                    rejection_count, feedback
+                                )));
+                            }
+                            quorum_domain::agent::agent_policy::HilAction::Continue => {
+                                // Within retry limits — normal retry flow
+                            }
+                        }
+
                         if action_attempts >= max_action_retries {
                             break Err(RunAgentError::ActionRejected(format!(
                                 "Action rejected after {} attempts. Last feedback: {}",
@@ -225,6 +273,8 @@ impl ExecuteTaskUseCase {
                     {
                         task.tool_executions = tool_executions;
                     }
+                    // Reset cascade counter on success
+                    state.reset_action_rejections();
                     (true, output)
                 }
                 Err(e) => (false, e.to_string()),
@@ -278,9 +328,15 @@ impl ExecuteTaskUseCase {
     }
 
     /// Determine the appropriate model for a task based on tool risk level.
+    ///
+    /// Note: At task-selection time we only know the tool name, not arguments,
+    /// so `run_command` falls through to decision model (conservative).
     fn select_model_for_task<'a>(&self, task: &Task, models: &'a ModelConfig) -> &'a Model {
         if let Some(tool_name) = &task.tool_name {
-            if self.action_reviewer.is_high_risk_tool(tool_name) {
+            if self
+                .action_reviewer
+                .is_high_risk_tool(tool_name, &std::collections::HashMap::new())
+            {
                 &models.decision
             } else {
                 &models.exploration
@@ -458,7 +514,10 @@ impl ExecuteTaskUseCase {
             let mut high_risk_calls = Vec::new();
 
             for call in &tool_calls {
-                if self.action_reviewer.is_high_risk_tool(&call.tool_name) {
+                if self
+                    .action_reviewer
+                    .is_high_risk_tool(&call.tool_name, &call.arguments)
+                {
                     high_risk_calls.push(call);
                 } else {
                     low_risk_calls.push(call);
@@ -586,6 +645,7 @@ impl ExecuteTaskUseCase {
             }
 
             // Execute high-risk calls sequentially (with action review)
+            let mut high_risk_rejected_count = 0;
             for call in &high_risk_calls {
                 exec_counter += 1;
                 let exec_id = format!("{}-exec-{}", task_id_str, exec_counter);
@@ -620,6 +680,7 @@ impl ExecuteTaskUseCase {
                 match review_decision {
                     ReviewDecision::Rejected(_) => {
                         warn!("Tool call {} rejected by action review", call.tool_name);
+                        high_risk_rejected_count += 1;
                         exec.mark_running();
                         exec.mark_error("Action rejected by quorum review");
                         progress.on_tool_execution_failed(
@@ -756,6 +817,17 @@ impl ExecuteTaskUseCase {
                         call.tool_name
                     );
                 }
+            }
+
+            // If ALL high-risk calls were rejected (and there were some),
+            // propagate ActionRejected to the outer retry loop.
+            if !high_risk_calls.is_empty()
+                && high_risk_rejected_count == high_risk_calls.len()
+                && low_risk_calls.is_empty()
+            {
+                return Err(RunAgentError::ActionRejected(
+                    "All tool calls rejected by quorum review".to_string(),
+                ));
             }
 
             // Send tool results back to LLM for next turn
