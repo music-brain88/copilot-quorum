@@ -945,11 +945,6 @@ mod tests {
                 .push_back(responses);
         }
 
-        /// Add a fallback session script (used when no model-specific session exists)
-        fn add_fallback_session(&mut self, responses: Vec<ScriptedResponse>) {
-            self.fallback_responses.lock().unwrap().push_back(responses);
-        }
-
         fn get_session_responses(&self, model: &str) -> Vec<ScriptedResponse> {
             // Try model-specific queue first
             if let Some(queue) = self.session_queues.lock().unwrap().get_mut(model) {
@@ -1090,17 +1085,10 @@ mod tests {
             }
         }
 
-        fn phases(&self) -> Vec<AgentPhase> {
-            self.phases.lock().unwrap().clone()
-        }
-
         fn has_phase(&self, phase: &AgentPhase) -> bool {
             self.phases.lock().unwrap().contains(phase)
         }
 
-        fn execution_confirmation_count(&self) -> usize {
-            *self.execution_confirmation_count.lock().unwrap()
-        }
     }
 
     impl AgentProgressNotifier for TrackingProgress {
@@ -1145,11 +1133,6 @@ mod tests {
     /// Helper to create an "APPROVE" review response
     fn approve_response() -> String {
         "I APPROVE this plan. It looks good.".to_string()
-    }
-
-    /// Helper to create a "REJECT" review response
-    fn reject_response() -> String {
-        "I REJECT this plan. It needs changes.".to_string()
     }
 
     /// Builder for configuring and executing flow tests
@@ -1362,11 +1345,6 @@ mod tests {
             }
 
             self.gateway = gateway;
-            self
-        }
-
-        fn with_phase_scope(mut self, scope: PhaseScope) -> Self {
-            self.mode.phase_scope = scope;
             self
         }
 
