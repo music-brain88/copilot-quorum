@@ -313,12 +313,12 @@ impl ConfigAccessorPort for QuorumConfig {
             // ---- agent.* (SessionMode + AgentPolicy) ----
             "agent.consensus_level" => {
                 let s = extract_string(key, value)?;
-                let level = s.parse::<ConsensusLevel>().map_err(|e| {
-                    ConfigAccessError::InvalidValue {
-                        key: key.to_string(),
-                        message: e,
-                    }
-                })?;
+                let level =
+                    s.parse::<ConsensusLevel>()
+                        .map_err(|e| ConfigAccessError::InvalidValue {
+                            key: key.to_string(),
+                            message: e,
+                        })?;
                 self.mode.consensus_level = level;
                 Ok(self.mode.validate_combination())
             }
@@ -340,17 +340,13 @@ impl ConfigAccessorPort for QuorumConfig {
                         self.mode.strategy = OrchestrationStrategy::default();
                     }
                     "debate" => {
-                        self.mode.strategy = OrchestrationStrategy::Debate(
-                            quorum_domain::DebateConfig::default(),
-                        );
+                        self.mode.strategy =
+                            OrchestrationStrategy::Debate(quorum_domain::DebateConfig::default());
                     }
                     _ => {
                         return Err(ConfigAccessError::InvalidValue {
                             key: key.to_string(),
-                            message: format!(
-                                "unknown strategy '{}', valid: quorum, debate",
-                                s
-                            ),
+                            message: format!("unknown strategy '{}', valid: quorum, debate", s),
                         });
                     }
                 }
@@ -358,12 +354,12 @@ impl ConfigAccessorPort for QuorumConfig {
             }
             "agent.hil_mode" => {
                 let s = extract_string(key, value)?;
-                let mode =
-                    s.parse::<HilMode>()
-                        .map_err(|e| ConfigAccessError::InvalidValue {
-                            key: key.to_string(),
-                            message: e,
-                        })?;
+                let mode = s
+                    .parse::<HilMode>()
+                    .map_err(|e| ConfigAccessError::InvalidValue {
+                        key: key.to_string(),
+                        message: e,
+                    })?;
                 self.policy.hil_mode = mode;
                 Ok(vec![])
             }
@@ -385,13 +381,18 @@ impl ConfigAccessorPort for QuorumConfig {
             }
             "models.review" => {
                 let list = extract_string_list(key, value)?;
-                self.models.review = list.into_iter().map(|s| s.parse::<Model>().unwrap()).collect();
+                self.models.review = list
+                    .into_iter()
+                    .map(|s| s.parse::<Model>().unwrap())
+                    .collect();
                 Ok(vec![])
             }
             "models.participants" => {
                 let list = extract_string_list(key, value)?;
-                self.models.participants =
-                    list.into_iter().map(|s| s.parse::<Model>().unwrap()).collect();
+                self.models.participants = list
+                    .into_iter()
+                    .map(|s| s.parse::<Model>().unwrap())
+                    .collect();
                 Ok(vec![])
             }
             "models.moderator" => {
@@ -418,12 +419,12 @@ impl ConfigAccessorPort for QuorumConfig {
             // ---- output.* ----
             "output.format" => {
                 let s = extract_string(key, value)?;
-                let format = s.parse::<OutputFormat>().map_err(|e| {
-                    ConfigAccessError::InvalidValue {
-                        key: key.to_string(),
-                        message: e,
-                    }
-                })?;
+                let format =
+                    s.parse::<OutputFormat>()
+                        .map_err(|e| ConfigAccessError::InvalidValue {
+                            key: key.to_string(),
+                            message: e,
+                        })?;
                 self.output_format = format;
                 Ok(vec![])
             }
@@ -825,10 +826,16 @@ mod tests {
     fn test_config_set_context_budget() {
         let mut config = QuorumConfig::default();
         config
-            .config_set("context_budget.max_entry_bytes", ConfigValue::Integer(10_000))
+            .config_set(
+                "context_budget.max_entry_bytes",
+                ConfigValue::Integer(10_000),
+            )
             .unwrap();
         config
-            .config_set("context_budget.max_total_bytes", ConfigValue::Integer(50_000))
+            .config_set(
+                "context_budget.max_total_bytes",
+                ConfigValue::Integer(50_000),
+            )
             .unwrap();
         config
             .config_set("context_budget.recent_full_count", ConfigValue::Integer(5))
@@ -843,7 +850,10 @@ mod tests {
         let mut config = QuorumConfig::default();
         // max_entry_bytes > max_total_bytes should fail
         let err = config
-            .config_set("context_budget.max_entry_bytes", ConfigValue::Integer(100_000))
+            .config_set(
+                "context_budget.max_entry_bytes",
+                ConfigValue::Integer(100_000),
+            )
             .unwrap_err();
         assert!(matches!(err, ConfigAccessError::InvalidValue { .. }));
     }
