@@ -25,6 +25,7 @@ pub mod interaction;
 pub mod orchestration;
 pub mod prompt;
 pub mod quorum;
+pub mod scripting;
 pub mod session;
 pub mod tool;
 pub mod util;
@@ -61,6 +62,7 @@ pub use orchestration::{
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
 pub use prompt::{AgentPromptTemplate, PromptTemplate};
+pub use scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 pub use session::{
     entities::Message,
     repository::LlmSessionRepository,

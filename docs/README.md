@@ -29,7 +29,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [CLI & Configuration](./guides/cli-and-configuration.md) | REPL コマンド、設定、コンテキスト管理 |
+| [CLI & Configuration](./guides/cli-and-configuration.md) | REPL コマンド、設定、コンテキスト管理、Lua スクリプティング |
 | [Modal TUI](./guides/tui.md) | Neovim ライクなモーダルインターフェース |
 
 ---
@@ -95,10 +95,11 @@ copilot-quorum/
 │   ├── session/        # Message, LlmResponse, ContentBlock, StopReason
 │   ├── context/        # ProjectContext, KnownContextFile
 │   ├── config/         # OutputFormat
+│   ├── scripting/      # ScriptEventType, ScriptEventData, ScriptValue
 │   └── interaction/    # InteractionMode
 │
 ├── application/        # アプリケーション層 - ユースケース
-│   ├── ports/          # LlmGateway, LlmSession, ProgressNotifier, ToolExecutorPort, ToolSchemaPort
+│   ├── ports/          # LlmGateway, LlmSession, ProgressNotifier, ToolExecutorPort, ToolSchemaPort, ScriptingEnginePort
 │   ├── use_cases/      # RunQuorumUseCase, RunAgentUseCase, AgentController, RunAskUseCase
 │   └── config/         # ExecutionParams, QuorumConfig
 │
@@ -106,6 +107,7 @@ copilot-quorum/
 │   ├── copilot/        # CopilotLlmGateway, CopilotSession, MessageRouter
 │   ├── tools/          # LocalToolExecutor, ToolRegistry, providers (builtin, cli, custom), schema
 │   ├── config/         # FileConfig, ConfigLoader
+│   ├── scripting/      # LuaScriptingEngine, Config/Keymap API, EventBus, Sandbox
 │   ├── context/        # LocalContextLoader
 │   ├── reference/      # GitHub reference resolver
 │   └── logging/        # JSONL logger

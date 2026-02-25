@@ -59,12 +59,18 @@ Extension Platform ユーザーがスクリプトやプラグインで拡張
 |---------|-------------|-----------|
 | Workflow Layer | DAG ベース並列タスク実行 | [workflow-layer.md](workflow-layer.md), [Discussion #157](https://github.com/music-brain88/copilot-quorum/discussions/157) |
 
+### Partially Implemented / 一部実装 🟡
+
+| Feature | Description | Reference |
+|---------|-------------|-----------|
+| Extension Platform (Phase 1) | Lua ランタイム + Config/Keymap API | [extension-platform.md](extension-platform.md), [#193](https://github.com/music-brain88/copilot-quorum/issues/193) |
+
 ### Concept Phase / 構想段階 🔴
 
 | Feature | Description | Reference |
 |---------|-------------|-----------|
 | Knowledge-Driven Architecture | 3 層構想（Knowledge / Context / Workflow） | [knowledge-architecture.md](knowledge-architecture.md), [Discussion #43](https://github.com/music-brain88/copilot-quorum/discussions/43) |
-| Extension Platform | Lua スクリプティング + Protocol-Based 拡張 | [extension-platform.md](extension-platform.md), [Discussion #58](https://github.com/music-brain88/copilot-quorum/discussions/58) Layer 5, [Discussion #98](https://github.com/music-brain88/copilot-quorum/discussions/98) |
+| Extension Platform (Phase 2+) | TUI API + Plugin + TOML→Lua 一本化 | [extension-platform.md](extension-platform.md), [#230](https://github.com/music-brain88/copilot-quorum/issues/230), [#231](https://github.com/music-brain88/copilot-quorum/issues/231), [#233](https://github.com/music-brain88/copilot-quorum/issues/233) |
 
 ---
 
@@ -87,9 +93,12 @@ v0.11 ─── Custom Tools + Config 4-Type Split ─ ✅ Done (current)
           │   ├─ GitHub Discussions 連携
           │   └─ Context Gathering 参照グラフ
           │
-          └─ Extension Platform ───────────── 🔴 Concept
-              ├─ Lua scripting (mlua)
-              └─ Protocol-Based extensions
+          └─ Extension Platform
+              ├─ Phase 1: Lua Runtime + Config/Keymap ── ✅ Done (#193)
+              ├─ Phase 2: TUI API ───────────────────── 🔴 Planned (#230)
+              ├─ Phase 3: Plugin + Tools ─────────────── 🔴 Planned (#231)
+              ├─ TOML → Lua 一本化 ──────────────────── 🔴 Planned (#233)
+              └─ Protocol-Based extensions ──────────── 🔴 Concept
 ```
 
 ---
