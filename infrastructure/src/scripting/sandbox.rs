@@ -33,8 +33,12 @@ mod tests {
         let lua = Lua::new();
         apply_sandbox(&lua).unwrap();
 
-        let result: LuaValue = lua.globals().get::<LuaTable>("package").unwrap()
-            .get("loadlib").unwrap();
+        let result: LuaValue = lua
+            .globals()
+            .get::<LuaTable>("package")
+            .unwrap()
+            .get("loadlib")
+            .unwrap();
         assert_eq!(result, LuaValue::Nil);
     }
 
@@ -43,8 +47,12 @@ mod tests {
         let lua = Lua::new();
         apply_sandbox(&lua).unwrap();
 
-        let cpath: String = lua.globals().get::<LuaTable>("package").unwrap()
-            .get("cpath").unwrap();
+        let cpath: String = lua
+            .globals()
+            .get::<LuaTable>("package")
+            .unwrap()
+            .get("cpath")
+            .unwrap();
         assert_eq!(cpath, "");
     }
 
@@ -72,7 +80,9 @@ mod tests {
 
         // Pure Lua require should still work conceptually
         // (will fail with "module not found" but won't crash from C loading)
-        let result = lua.load("pcall(require, 'nonexistent')").eval::<(bool, String)>();
+        let result = lua
+            .load("pcall(require, 'nonexistent')")
+            .eval::<(bool, String)>();
         assert!(result.is_ok());
         let (ok, _msg) = result.unwrap();
         assert!(!ok); // Fails to find module, but doesn't crash

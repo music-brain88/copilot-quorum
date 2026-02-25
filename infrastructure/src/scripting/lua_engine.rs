@@ -170,9 +170,9 @@ impl ScriptingEnginePort for LuaScriptingEngine {
             }
         }
 
-        let continued =
-            bus.fire(&lua, event.as_str(), &data_table, event.is_cancellable())
-                .map_err(lua_to_script_error)?;
+        let continued = bus
+            .fire(&lua, event.as_str(), &data_table, event.is_cancellable())
+            .map_err(lua_to_script_error)?;
 
         if continued {
             Ok(EventOutcome::Continue)
@@ -290,8 +290,7 @@ mod tests {
     }
 
     fn make_engine() -> LuaScriptingEngine {
-        let config: Arc<Mutex<dyn ConfigAccessorPort>> =
-            Arc::new(Mutex::new(TestConfig::new()));
+        let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(TestConfig::new()));
         LuaScriptingEngine::new(config).unwrap()
     }
 
@@ -360,8 +359,7 @@ mod tests {
         engine.load_script(&script_path).unwrap();
 
         // Fire the event
-        let data = ScriptEventData::new()
-            .with_field("mode", ScriptValue::String("solo".into()));
+        let data = ScriptEventData::new().with_field("mode", ScriptValue::String("solo".into()));
         let result = engine
             .emit_event(ScriptEventType::SessionStarted, data)
             .unwrap();
@@ -390,8 +388,7 @@ mod tests {
         .unwrap();
         engine.load_script(&script_path).unwrap();
 
-        let data =
-            ScriptEventData::new().with_field("path", ScriptValue::String("/test".into()));
+        let data = ScriptEventData::new().with_field("path", ScriptValue::String("/test".into()));
         let result = engine
             .emit_event(ScriptEventType::ScriptLoading, data)
             .unwrap();

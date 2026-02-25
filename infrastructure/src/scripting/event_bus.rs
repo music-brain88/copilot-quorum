@@ -171,10 +171,7 @@ mod tests {
         let lua = Lua::new();
         let mut bus = EventBus::new();
 
-        let func = lua
-            .load("function() end")
-            .eval::<LuaFunction>()
-            .unwrap();
+        let func = lua.load("function() end").eval::<LuaFunction>().unwrap();
         let key = lua.create_registry_value(func).unwrap();
         bus.register("Test", key);
 

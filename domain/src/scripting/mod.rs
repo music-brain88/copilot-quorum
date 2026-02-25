@@ -41,7 +41,6 @@ impl ScriptEventType {
     pub fn is_cancellable(&self) -> bool {
         matches!(self, Self::ScriptLoading)
     }
-
 }
 
 impl std::str::FromStr for ScriptEventType {

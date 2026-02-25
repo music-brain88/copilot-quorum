@@ -113,9 +113,7 @@ impl CustomKeymap {
     ///
     /// Each entry is `(mode_name, key_descriptor, action)` from the engine.
     /// Entries with unparseable key descriptors or unknown modes are silently skipped.
-    pub fn from_registered(
-        keymaps: &[(String, String, quorum_application::KeymapAction)],
-    ) -> Self {
+    pub fn from_registered(keymaps: &[(String, String, quorum_application::KeymapAction)]) -> Self {
         let mut entries = Vec::new();
         for (mode_name, key_desc, action) in keymaps {
             let mode = match mode_name.as_str() {
@@ -128,12 +126,8 @@ impl CustomKeymap {
                 continue;
             };
             let key_action = match action {
-                quorum_application::KeymapAction::Builtin(name) => {
-                    builtin_action_by_name(name)
-                }
-                quorum_application::KeymapAction::LuaCallback(id) => {
-                    KeyAction::LuaCallback(*id)
-                }
+                quorum_application::KeymapAction::Builtin(name) => builtin_action_by_name(name),
+                quorum_application::KeymapAction::LuaCallback(id) => KeyAction::LuaCallback(*id),
             };
             entries.push((mode, key_code, modifiers, key_action));
         }
@@ -150,7 +144,6 @@ impl CustomKeymap {
             }
         })
     }
-
 }
 
 /// Map a built-in action name (from Lua) to a `KeyAction`.
@@ -575,7 +568,10 @@ mod tests {
     fn test_parse_ctrl_shift_combo() {
         assert_eq!(
             parse_key_descriptor("Ctrl+Shift+p"),
-            Some((KeyCode::Char('p'), KeyModifiers::CONTROL | KeyModifiers::SHIFT))
+            Some((
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ))
         );
     }
 
@@ -616,7 +612,10 @@ mod tests {
 
     #[test]
     fn test_builtin_action_by_name() {
-        assert_eq!(builtin_action_by_name("submit_input"), KeyAction::SubmitInput);
+        assert_eq!(
+            builtin_action_by_name("submit_input"),
+            KeyAction::SubmitInput
+        );
         assert_eq!(builtin_action_by_name("quit"), KeyAction::Quit);
         assert_eq!(builtin_action_by_name("unknown"), KeyAction::None);
     }

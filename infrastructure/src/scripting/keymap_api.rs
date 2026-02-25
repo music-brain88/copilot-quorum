@@ -51,9 +51,8 @@ impl KeymapRegistry {
 
     pub fn register(&mut self, entry: KeymapEntry) {
         // Remove any existing binding for the same mode + key descriptor
-        self.entries.retain(|e| {
-            !(e.mode == entry.mode && e.key_descriptor == entry.key_descriptor)
-        });
+        self.entries
+            .retain(|e| !(e.mode == entry.mode && e.key_descriptor == entry.key_descriptor));
         self.entries.push(entry);
     }
 

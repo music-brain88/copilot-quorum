@@ -43,7 +43,6 @@ pub use agent::{
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
 pub use config::{ConfigKeyInfo, Mutability, OutputFormat, known_keys, lookup_key};
-pub use scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 pub use context::{
     ContextBudget, ContextMode, KnownContextFile, LoadedContextFile, ProjectContext,
     ResourceReference, TaskResultBuffer, extract_references,
@@ -63,6 +62,7 @@ pub use orchestration::{
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
 pub use prompt::{AgentPromptTemplate, PromptTemplate};
+pub use scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 pub use session::{
     entities::Message,
     repository::LlmSessionRepository,

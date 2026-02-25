@@ -33,9 +33,9 @@ pub fn register_config_api(
     {
         let config = Arc::clone(&config);
         let get_fn = lua.create_function(move |lua, key: String| {
-            let guard = config.lock().map_err(|e| {
-                LuaError::external(format!("config lock poisoned: {}", e))
-            })?;
+            let guard = config
+                .lock()
+                .map_err(|e| LuaError::external(format!("config lock poisoned: {}", e)))?;
             match guard.config_get(&key) {
                 Ok(value) => push_config_value(lua, value),
                 Err(e) => Err(LuaError::external(e.to_string())),
@@ -53,20 +53,20 @@ pub fn register_config_api(
 
             // Get old value for event data
             let old_value = {
-                let guard = config.lock().map_err(|e| {
-                    LuaError::external(format!("config lock poisoned: {}", e))
-                })?;
+                let guard = config
+                    .lock()
+                    .map_err(|e| LuaError::external(format!("config lock poisoned: {}", e)))?;
                 guard.config_get(&key).ok()
             };
 
             // Set new value
             {
-                let mut guard = config.lock().map_err(|e| {
-                    LuaError::external(format!("config lock poisoned: {}", e))
-                })?;
-                guard.config_set(&key, lua_value.clone()).map_err(|e| {
-                    LuaError::external(e.to_string())
-                })?;
+                let mut guard = config
+                    .lock()
+                    .map_err(|e| LuaError::external(format!("config lock poisoned: {}", e)))?;
+                guard
+                    .config_set(&key, lua_value.clone())
+                    .map_err(|e| LuaError::external(e.to_string()))?;
             }
 
             // Fire ConfigChanged event
@@ -77,9 +77,9 @@ pub fn register_config_api(
             }
             data.set("new_value", push_config_value(lua, lua_value)?)?;
 
-            let bus = event_bus.lock().map_err(|e| {
-                LuaError::external(format!("event_bus lock poisoned: {}", e))
-            })?;
+            let bus = event_bus
+                .lock()
+                .map_err(|e| LuaError::external(format!("event_bus lock poisoned: {}", e)))?;
             // ConfigChanged is not cancellable, ignore result
             let _ = bus.fire(lua, "ConfigChanged", &data, false);
 
@@ -92,9 +92,9 @@ pub fn register_config_api(
     {
         let config = Arc::clone(&config);
         let keys_fn = lua.create_function(move |lua, ()| {
-            let guard = config.lock().map_err(|e| {
-                LuaError::external(format!("config lock poisoned: {}", e))
-            })?;
+            let guard = config
+                .lock()
+                .map_err(|e| LuaError::external(format!("config lock poisoned: {}", e)))?;
             let keys = guard.config_keys();
             let table = lua.create_table()?;
             for (i, key) in keys.iter().enumerate() {
@@ -116,9 +116,9 @@ pub fn register_config_api(
             if key == "get" || key == "set" || key == "keys" {
                 return Ok(LuaValue::Nil);
             }
-            let guard = config.lock().map_err(|e| {
-                LuaError::external(format!("config lock poisoned: {}", e))
-            })?;
+            let guard = config
+                .lock()
+                .map_err(|e| LuaError::external(format!("config lock poisoned: {}", e)))?;
             match guard.config_get(&key) {
                 Ok(value) => push_config_value(lua, value),
                 Err(_) => Ok(LuaValue::Nil),
@@ -131,21 +131,21 @@ pub fn register_config_api(
     {
         let config_for_newindex = Arc::clone(&config);
         let event_bus_for_newindex = Arc::clone(&event_bus);
-        let newindex_fn =
-            lua.create_function(move |lua, (_table, key, value): (LuaTable, String, LuaValue)| {
+        let newindex_fn = lua.create_function(
+            move |lua, (_table, key, value): (LuaTable, String, LuaValue)| {
                 let lua_value = lua_to_config_value(value)?;
 
                 let old_value = {
-                    let guard = config_for_newindex.lock().map_err(|e| {
-                        LuaError::external(format!("config lock poisoned: {}", e))
-                    })?;
+                    let guard = config_for_newindex
+                        .lock()
+                        .map_err(|e| LuaError::external(format!("config lock poisoned: {}", e)))?;
                     guard.config_get(&key).ok()
                 };
 
                 {
-                    let mut guard = config_for_newindex.lock().map_err(|e| {
-                        LuaError::external(format!("config lock poisoned: {}", e))
-                    })?;
+                    let mut guard = config_for_newindex
+                        .lock()
+                        .map_err(|e| LuaError::external(format!("config lock poisoned: {}", e)))?;
                     guard
                         .config_set(&key, lua_value.clone())
                         .map_err(|e| LuaError::external(e.to_string()))?;
@@ -159,13 +159,14 @@ pub fn register_config_api(
                 }
                 data.set("new_value", push_config_value(lua, lua_value)?)?;
 
-                let bus = event_bus_for_newindex.lock().map_err(|e| {
-                    LuaError::external(format!("event_bus lock poisoned: {}", e))
-                })?;
+                let bus = event_bus_for_newindex
+                    .lock()
+                    .map_err(|e| LuaError::external(format!("event_bus lock poisoned: {}", e)))?;
                 let _ = bus.fire(lua, "ConfigChanged", &data, false);
 
                 Ok(())
-            })?;
+            },
+        )?;
         meta.set("__newindex", newindex_fn)?;
     }
 
@@ -266,8 +267,7 @@ mod tests {
     fn test_config_get_function() {
         let lua = Lua::new();
         let quorum = lua.create_table().unwrap();
-        let config: Arc<Mutex<dyn ConfigAccessorPort>> =
-            Arc::new(Mutex::new(MockConfig::new()));
+        let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(MockConfig::new()));
         let event_bus = Arc::new(Mutex::new(EventBus::new()));
 
         register_config_api(&lua, &quorum, config, event_bus).unwrap();
@@ -284,8 +284,7 @@ mod tests {
     fn test_config_set_function() {
         let lua = Lua::new();
         let quorum = lua.create_table().unwrap();
-        let config: Arc<Mutex<dyn ConfigAccessorPort>> =
-            Arc::new(Mutex::new(MockConfig::new()));
+        let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(MockConfig::new()));
         let event_bus = Arc::new(Mutex::new(EventBus::new()));
 
         register_config_api(&lua, &quorum, config, event_bus).unwrap();
@@ -306,8 +305,7 @@ mod tests {
     fn test_config_keys_function() {
         let lua = Lua::new();
         let quorum = lua.create_table().unwrap();
-        let config: Arc<Mutex<dyn ConfigAccessorPort>> =
-            Arc::new(Mutex::new(MockConfig::new()));
+        let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(MockConfig::new()));
         let event_bus = Arc::new(Mutex::new(EventBus::new()));
 
         register_config_api(&lua, &quorum, config, event_bus).unwrap();
@@ -338,8 +336,7 @@ mod tests {
     fn test_config_set_fires_event() {
         let lua = Lua::new();
         let quorum = lua.create_table().unwrap();
-        let config: Arc<Mutex<dyn ConfigAccessorPort>> =
-            Arc::new(Mutex::new(MockConfig::new()));
+        let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(MockConfig::new()));
         let event_bus = Arc::new(Mutex::new(EventBus::new()));
 
         // Register a listener for ConfigChanged
