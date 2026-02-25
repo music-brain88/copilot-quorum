@@ -8,6 +8,7 @@ use clap::Parser;
 use quorum_application::ContextLoaderPort;
 use quorum_application::ExecutionParams;
 use quorum_application::LlmGateway;
+#[cfg(feature = "scripting")]
 use quorum_application::ScriptingEnginePort;
 use quorum_application::ToolExecutorPort;
 use quorum_application::{QuorumConfig, RunAgentUseCase};

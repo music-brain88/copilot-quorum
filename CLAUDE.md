@@ -142,6 +142,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 - `ToolExecutorPort` (application/ports) - Tool execution interface
 - `StrategyExecutor` (domain/orchestration) - Orchestration strategy execution interface
 - `ToolValidator` (domain/tool) - Tool call validation logic
+- `ScriptingEnginePort` (application/ports) - Lua scripting engine interface
 
 ### Domain Modules
 
@@ -155,7 +156,8 @@ domain/src/
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
 ├── session/        # Message, LlmSessionRepository, LlmResponse, ContentBlock, StopReason
 ├── context/        # ProjectContext, KnownContextFile (/init用)
-└── config/         # OutputFormat
+├── config/         # OutputFormat
+└── scripting/      # ScriptEventType, ScriptEventData, ScriptValue
 ```
 
 ### Adding New Features
@@ -168,6 +170,7 @@ domain/src/
 - Custom tool: Add to `[tools.custom]` in `quorum.toml`
 - New agent capability: Extend `domain/agent/` and `RunAgentUseCase`
 - New context file type: Add to `domain/context/` KnownContextFile enum
+- New Lua API: Add to `infrastructure/scripting/`, register in `LuaScriptingEngine::new()`
 
 ### Vertical Slicing Principle
 
@@ -205,6 +208,27 @@ The agent system extends quorum to autonomous task execution with safety through
 - Low-risk ツールは `futures::join_all()` で並列実行、High-risk は順次 + Quorum Review
 
 詳細は [docs/reference/architecture.md](docs/reference/architecture.md) を参照。
+
+## Lua Scripting (Phase 1)
+
+User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-gated behind `scripting` (default ON).
+
+**Lua APIs**:
+- `quorum.on(event, callback)` — Event subscription (ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted)
+- `quorum.config.get(key)` / `quorum.config.set(key, value)` / `quorum.config.keys()` — Runtime config access via `ConfigAccessorPort`
+- `quorum.config["key"]` — Metatable proxy (`__index`/`__newindex`)
+- `quorum.keymap.set(mode, key, action)` — Custom keybindings (mode: normal/insert/command, action: string or Lua callback)
+
+**Key Components**:
+- `domain/scripting/`: ScriptEventType, ScriptEventData, ScriptValue
+- `application/ports/scripting_engine.rs`: ScriptingEnginePort trait, NoScriptingEngine, EventOutcome, KeymapAction
+- `infrastructure/scripting/`: LuaScriptingEngine (mlua), EventBus, ConfigAPI, KeymapAPI, Sandbox
+- `presentation/tui/mode.rs`: KeyAction::LuaCallback, CustomKeymap, `parse_key_descriptor()`
+- `cli/main.rs`: DI wiring with `Arc<Mutex<QuorumConfig>>` shared between AgentController and LuaScriptingEngine
+
+**Sandbox**: C module loading blocked (`package.loadlib = nil`, `package.cpath = ""`), standard Lua libs available.
+
+**Shared Config**: `AgentController` and `LuaScriptingEngine` share `Arc<Mutex<QuorumConfig>>` — Lua config changes propagate to agent at runtime.
 
 ## Feature Documentation
 
