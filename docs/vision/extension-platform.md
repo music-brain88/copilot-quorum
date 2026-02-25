@@ -1,6 +1,6 @@
 # Extension Platform / 拡張プラットフォーム
 
-> 🔴 **Status**: Not implemented — Concept phase
+> 🟡 **Status**: Phase 1 implemented (#193) — Phase 2+ in progress
 >
 > Based on [Discussion #58](https://github.com/music-brain88/copilot-quorum/discussions/58) Layer 5
 > and [Discussion #98](https://github.com/music-brain88/copilot-quorum/discussions/98)
@@ -10,10 +10,10 @@
 ## Overview / 概要
 
 copilot-quorum をユーザーが **スクリプトやプラグインで拡張できるプラットフォーム** にする構想。
-2 つの補完的な拡張モデル（In-Process スクリプティング + Protocol-Based 拡張）を検討中。
+2 つの補完的な拡張モデル（In-Process スクリプティング + Protocol-Based 拡張）を提供する。
 
-> **Note**: これは将来ビジョンであり、現時点では構想段階です。
-> Layer 2（Input Diversification）と Layer 3（Buffer/Tab System）の実装が先決条件です。
+> **Note**: Phase 1（Lua ランタイム + Config/Keymap API）は実装済みです（#193）。
+> Phase 2（TUI API: #230）、Phase 3（Plugin + Tools: #231）、TOML → Lua 一本化（#233）は計画中です。
 
 ---
 
@@ -54,38 +54,72 @@ Neovim の `init.lua` と同じアプローチ。Rust プロセス内で Lua VM 
 | Binary impact | +500KB |
 | Prior art | WezTerm, Neovim |
 
-#### Neovim との対比（構想）
+#### Neovim との対比
+
+**Phase 1 実装済み API** (`~/.config/copilot-quorum/init.lua`):
+
+```lua
+-- ✅ 実装済み — Phase 1 (#193)
+
+-- キーマップ設定（ビルトインアクション or Lua コールバック）
+quorum.keymap.set("normal", "Ctrl+s", "submit_input")
+quorum.keymap.set("normal", "Ctrl+p", function()
+    quorum.config.set("agent.strategy", "debate")
+end)
+
+-- イベントフック
+-- 対応イベント: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted
+quorum.on("SessionStarted", function(data)
+    print("Session started in mode: " .. data.mode)
+end)
+
+quorum.on("ConfigChanged", function(data)
+    print("Config changed: " .. data.key .. " = " .. data.new_value)
+end)
+
+-- 設定アクセス（関数形式 + メタテーブルショートカット）
+quorum.config.get("agent.strategy")          -- 関数形式
+quorum.config["agent.strategy"]              -- メタテーブル読み取り
+quorum.config.set("agent.strategy", "debate")
+quorum.config["agent.strategy"] = "debate"   -- メタテーブル書き込み
+quorum.config.keys()                         -- 全キー一覧
+```
+
+**Phase 2+ 構想 API**:
 
 ```lua
 -- ⚠️ 未実装 — 構想レベルの API イメージ
 
--- キーマップ設定
-quorum.keymap.set("normal", "s", ":solo<CR>")
-quorum.keymap.set("normal", "e", ":ens<CR>")
-
--- ユーザーコマンド定義
+-- ユーザーコマンド定義 (Phase 3: #231)
 quorum.command("review", function(args)
-  quorum.ask("Review this code: " .. args.input)
+    quorum.ask("Review this code: " .. args.input)
 end)
 
--- イベントフック
-quorum.on("tool_call", function(event)
-  if event.tool == "write_file" then
-    quorum.notify("Writing to " .. event.args.path)
-  end
-end)
+-- TUI レイアウト制御 (Phase 2: #230)
+quorum.tui.layout.preset = "wide"
+quorum.tui.input.submit_key = "ctrl+enter"
 
--- 設定アクセス
-quorum.config.set("agent.hil_mode", "interactive")
+-- カスタムツール登録 (Phase 3: #231)
+quorum.tools.register("my_tool", {
+    command = "echo {message}",
+    risk_level = "low",
+    parameters = { { name = "message", required = true } }
+})
+
+-- プロバイダ設定 (Phase 3-4: #233)
+quorum.providers.anthropic = {
+    api_key = os.getenv("ANTHROPIC_API_KEY"),
+    base_url = "https://api.anthropic.com",
+}
 ```
 
-| Neovim | copilot-quorum (構想) | Description |
-|--------|----------------------|-------------|
-| `vim.keymap.set()` | `quorum.keymap.set()` | キーマップ設定 |
-| `vim.api.nvim_create_user_command()` | `quorum.command()` | ユーザーコマンド定義 |
-| `vim.api.nvim_create_autocmd()` | `quorum.on()` | イベントフック |
-| `vim.opt` | `quorum.config` | 設定アクセス |
-| `init.lua` | `init.lua` (or `quorum.lua`) | ユーザー設定ファイル |
+| Neovim | copilot-quorum | Status | Description |
+|--------|---------------|--------|-------------|
+| `vim.keymap.set()` | `quorum.keymap.set()` | ✅ Phase 1 | キーマップ設定 |
+| `vim.api.nvim_create_autocmd()` | `quorum.on()` | ✅ Phase 1 | イベントフック |
+| `vim.opt` | `quorum.config` | ✅ Phase 1 | 設定アクセス（メタテーブル proxy） |
+| `init.lua` | `~/.config/copilot-quorum/init.lua` | ✅ Phase 1 | ユーザー設定ファイル |
+| `vim.api.nvim_create_user_command()` | `quorum.command()` | 🔴 Phase 3 | ユーザーコマンド定義 |
 
 ### Model 2: Protocol-Based Extension (denops-like)
 
@@ -143,24 +177,33 @@ copilot-quorum の拡張プロトコルとの関係は未決定：
 
 ---
 
-## ScriptingEngine Port / ScriptingEngine ポート（設計案）
+## ScriptingEngine Port / ScriptingEngine ポート
 
 ```rust
-// ⚠️ 未実装 — 設計案
-// application 層
+// ✅ 実装済み — application/src/ports/scripting_engine.rs
 
-/// Port for scripting engine integration
-#[async_trait]
-pub trait ScriptingEngine: Send + Sync {
-    fn load_config(&mut self, path: &Path) -> Result<(), ScriptError>;
-    fn get_keymaps(&self, mode: &InputMode) -> Vec<KeyMapping>;
-    fn get_commands(&self) -> Vec<UserCommand>;
-    async fn emit_event(&self, event: ReplEvent) -> Result<(), ScriptError>;
+pub trait ScriptingEnginePort: Send + Sync {
+    fn emit_event(&self, event: ScriptEventType, data: ScriptEventData)
+        -> Result<EventOutcome, ScriptError>;
+    fn load_script(&self, path: &Path) -> Result<(), ScriptError>;
+    fn is_available(&self) -> bool;
+    fn registered_keymaps(&self) -> Vec<(String, String, KeymapAction)>;
+    fn execute_callback(&self, callback_id: u64) -> Result<(), ScriptError>;
 }
 ```
 
-WezTerm パターンでモジュラー API 実装：
-`api_quorum.rs`, `api_keymap.rs`, `api_command.rs`, `api_buffer.rs`, `api_event.rs`
+WezTerm パターンでモジュラー API 実装（`infrastructure/src/scripting/`）：
+
+| モジュール | 状態 | 内容 |
+|-----------|------|------|
+| `lua_engine.rs` | ✅ 実装済み | メイン Lua 5.4 エンジン（mlua） |
+| `config_api.rs` | ✅ 実装済み | `quorum.config` API（メタテーブル proxy） |
+| `keymap_api.rs` | ✅ 実装済み | `quorum.keymap` API（string-based key descriptors） |
+| `event_bus.rs` | ✅ 実装済み | イベント登録・発火 |
+| `sandbox.rs` | ✅ 実装済み | C モジュールブロック |
+| `tui_api.rs` | 🔴 Phase 2 | `quorum.tui.*` API |
+| `tools_api.rs` | 🔴 Phase 3 | `quorum.tools.*` API |
+| `command_api.rs` | 🔴 Phase 3 | `quorum.command()` API |
 
 ---
 
@@ -177,19 +220,23 @@ Protocol-Based 拡張で検討が必要な copilot-quorum 固有の機能：
 
 ---
 
-## Prerequisites / 前提条件
-
-Extension Platform は以下の実装が先決条件：
+## Prerequisites & Roadmap / 前提条件・ロードマップ
 
 ```
-Layer 2: Input Diversification     ── 🟡 In progress
-  └─ $EDITOR 委譲、追加キーバインド
+Phase 1: Lua Runtime + Config/Keymap API (#193)  ── ✅ Done
+  └─ quorum.on(), quorum.config, quorum.keymap.set()
 
-Layer 3: Buffer/Tab System         ── 🟡 In progress
-  └─ Buffer API がスクリプティング API の前提
+Phase 1.5: ConfigAccessorPort 拡張 (#233 Step 2)  ── 🔴 Planned
+  └─ models 全キー + output + repl + context_budget を mutable 化
 
-Extension Platform (Layer 5)       ── 🔴 Concept
-  └─ Buffer API + キーバインド基盤の上に構築
+Phase 2: TUI Route/Layout API (#230)               ── 🔴 Planned
+  └─ quorum.tui.* で TUI セクション全体を Lua 化
+
+Phase 3: Plugin + Tools API (#231)                  ── 🔴 Planned
+  └─ quorum.tools.*, quorum.command()
+
+TOML → Lua 一本化 (#233)                            ── 🔴 Planned
+  └─ quorum.toml deprecated → 削除
 ```
 
 ---
@@ -211,9 +258,9 @@ Extension Platform (Layer 5)       ── 🔴 Concept
 
 ## Open Questions / 未解決の論点
 
-1. **拡張モデル**: In-Process (mlua) vs Protocol-Based vs ハイブリッド — どの組み合わせで始める？
+1. ~~**拡張モデル**: In-Process (mlua) vs Protocol-Based vs ハイブリッド~~ → **Phase 1 で In-Process (Lua/mlua) を採用**
 2. **MCP 互換性**: プラグインプロトコルを MCP と互換にするか独自にするか
-3. **スクリプト言語**: Lua vs Rhai vs 他（バイナリサイズ vs エコシステム）
+3. ~~**スクリプト言語**: Lua vs Rhai vs 他~~ → **Lua (mlua) に決定**
 4. **プラグイン配布**: Git リポジトリ / レジストリ / ファイル配置
 5. **API 安定性**: セマンティックバージョニング？Capability negotiation？
 6. **プラグインのライフサイクル**: 起動/停止/再起動の管理
@@ -224,6 +271,10 @@ Extension Platform (Layer 5)       ── 🔴 Concept
 
 ## Related
 
+- [#193](https://github.com/music-brain88/copilot-quorum/issues/193): Phase 1 — Lua Config Adapter (✅ Done)
+- [#230](https://github.com/music-brain88/copilot-quorum/issues/230): Phase 2 — TUI Route/Layout API
+- [#231](https://github.com/music-brain88/copilot-quorum/issues/231): Phase 3 — Plugin + Tools API
+- [#233](https://github.com/music-brain88/copilot-quorum/issues/233): TOML → Lua 一本化ロードマップ
 - [Discussion #58](https://github.com/music-brain88/copilot-quorum/discussions/58): Neovim-Style Extensible TUI（Layer 5 が本構想に対応）
 - [Discussion #98](https://github.com/music-brain88/copilot-quorum/discussions/98): Protocol-Based Extension Architecture — 詳細設計
 - [knowledge-architecture.md](knowledge-architecture.md): Knowledge Layer 構想

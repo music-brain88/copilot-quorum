@@ -9,8 +9,9 @@
 ## Overview / 概要
 
 copilot-quorum は CLI ツールとして動作し、ワンショット実行と対話的な REPL の 2 つのモードを提供します。
-設定は TOML ファイル（`quorum.toml`）で管理され、プロジェクトレベルとグローバルレベルの
-2 段階で設定できます。`/init` コマンドによるプロジェクトコンテキストの自動生成も可能です。
+設定は TOML ファイル（`quorum.toml`）と Lua スクリプト（`init.lua`）で管理され、
+プロジェクトレベルとグローバルレベルの 2 段階で設定できます。
+`/init` コマンドによるプロジェクトコンテキストの自動生成も可能です。
 
 エージェントの動作は 3 つの直交する軸（`ConsensusLevel`, `PhaseScope`, `OrchestrationStrategy`）で構成され、
 `SessionMode` に集約されて TUI から runtime で切り替え可能です。モデル設定は `[models]` セクションで一元管理されます。
@@ -164,8 +165,10 @@ REPL のプロンプトは現在の ConsensusLevel に応じて変わります:
 | 3 | `$XDG_CONFIG_HOME/copilot-quorum/config.toml` | XDG 設定 |
 | 4 | `~/.config/copilot-quorum/config.toml` | グローバル（フォールバック） |
 | 5 | Built-in defaults | デフォルト値 |
+| — | `~/.config/copilot-quorum/init.lua` | Lua スクリプト（起動後に実行、runtime で設定を上書き） |
 
-上位の設定が下位を上書きします。
+上位の設定が下位を上書きします。`init.lua` は TOML 設定のロード後に実行されるため、
+Lua スクリプトから `quorum.config.set()` で行った変更が最終的な値になります。
 
 ### Full Configuration Reference / 全設定項目
 
@@ -250,6 +253,82 @@ flex_threshold = 120           # レスポンシブ Minimal フォールバッ�
 # border = "rounded"           # "rounded", "plain", "none", "double"
 ```
 
+### Lua Scripting / Lua スクリプティング
+
+`~/.config/copilot-quorum/init.lua` で設定のカスタマイズとキーバインドの登録ができます。
+ファイルが存在しない場合はサイレントにスキップされます（エラーにはなりません）。
+
+> **Note**: Lua スクリプティングは `scripting` feature（デフォルト ON）で提供されます。
+
+#### init.lua の例
+
+```lua
+-- ~/.config/copilot-quorum/init.lua
+
+-- ━━━ 設定アクセス ━━━
+-- 関数形式
+quorum.config.set("agent.consensus_level", "solo")
+quorum.config.set("agent.strategy", "quorum")
+quorum.config.set("agent.phase_scope", "full")
+
+-- メタテーブルショートカット（読み書き両対応）
+local strategy = quorum.config["agent.strategy"]     -- 読み取り
+quorum.config["agent.strategy"] = "debate"           -- 書き込み
+
+-- 全キー一覧を取得
+local keys = quorum.config.keys()
+
+-- ━━━ キーバインド設定 ━━━
+-- ビルトインアクションにマッピング
+quorum.keymap.set("normal", "Ctrl+s", "submit_input")
+
+-- Lua コールバックにバインド
+quorum.keymap.set("normal", "Ctrl+d", function()
+    quorum.config.set("agent.strategy", "debate")
+end)
+
+-- ━━━ イベントフック ━━━
+-- 対応イベント: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted
+quorum.on("SessionStarted", function(data)
+    -- セッション開始時に Ensemble モードに切り替え
+    quorum.config["agent.consensus_level"] = "ensemble"
+end)
+
+quorum.on("ConfigChanged", function(data)
+    -- data.key, data.old_value, data.new_value が参照可能
+end)
+```
+
+#### Lua から設定可能なキー
+
+| キー | 型 | Read | Write | 値の例 |
+|------|-----|------|-------|--------|
+| `agent.consensus_level` | String | ✅ | ✅ | `"solo"`, `"ensemble"` |
+| `agent.phase_scope` | String | ✅ | ✅ | `"full"`, `"fast"`, `"plan-only"` |
+| `agent.strategy` | String | ✅ | ✅ | `"quorum"`, `"debate"` |
+| `agent.hil_mode` | String | ✅ | | `"interactive"`, `"auto_approve"`, `"auto_reject"` |
+| `agent.max_plan_revisions` | Integer | ✅ | | |
+| `models.exploration` | String | ✅ | | |
+| `models.decision` | String | ✅ | | |
+| `models.review` | StringList | ✅ | | |
+| `execution.max_iterations` | Integer | ✅ | | |
+| `execution.max_tool_turns` | Integer | ✅ | | |
+
+#### キーマップのモード
+
+| モード | 説明 |
+|--------|------|
+| `"normal"` | Normal モード（Vim-like） |
+| `"insert"` | Insert モード（テキスト入力） |
+| `"command"` | Command モード（`:` コマンド） |
+
+#### サンドボックス
+
+セキュリティのため、以下の制限が適用されます：
+- C モジュールのロードをブロック（`package.loadlib = nil`, `package.cpath = ""`）
+- 標準 Lua ライブラリ（`io`, `os`, `string`, `table` 等）は利用可能
+- `os.getenv()` で環境変数を参照可能
+
 ---
 
 ## Architecture / アーキテクチャ
@@ -264,6 +343,9 @@ flex_threshold = 120           # レスポンシブ Minimal フォールバッ�
 | `infrastructure/src/config/file_config.rs` | TOML 設定構造定義 |
 | `infrastructure/src/config/loader.rs` | 設定ローダー（優先順位処理） |
 | `domain/src/config/` | `OutputFormat` など設定ドメイン型 |
+| `domain/src/scripting/` | `ScriptEventType`, `ScriptEventData`, `ScriptValue` |
+| `application/src/ports/scripting_engine.rs` | `ScriptingEnginePort` trait |
+| `infrastructure/src/scripting/` | `LuaScriptingEngine`, Config/Keymap API, Sandbox |
 | `domain/src/context/` | `ProjectContext`, `KnownContextFile` |
 | `infrastructure/src/context/` | `LocalContextLoader` 実装 |
 
@@ -299,4 +381,4 @@ CLI Arguments / REPL Input
 - [Ensemble Mode](../concepts/ensemble-mode.md) - `/ens` コマンドと Ensemble 設定
 - [Tool System](../systems/tool-system.md) - ツール設定の詳細
 
-<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /council, /init, /config, /clear, /quit 等）と quorum.toml による設定管理。設定は4型に分割: SessionMode(domain, runtime-mutable: consensus_level/phase_scope/strategy)、ModelConfig(domain: exploration/decision/review)、AgentPolicy(domain: hil_mode等)、ExecutionParams(application: max_iterations等)。QuorumConfig(application)が4型コンテナとしてAgentControllerで使用。組み合わせバリデーション: SessionMode::validate_combination()。Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults。[tui.input] セクションで TUI の入力設定を管理。主要ファイルは application/src/use_cases/agent_controller.rs と application/src/config/ と infrastructure/src/config/。 -->
+<!-- LLM Context: CLI & Configuration は copilot-quorum のユーザーインターフェース。REPL コマンド（/help, /solo, /ens, /fast, /scope, /strategy, /council, /init, /config, /clear, /quit 等）と quorum.toml + init.lua による設定管理。設定は4型に分割: SessionMode(domain, runtime-mutable: consensus_level/phase_scope/strategy)、ModelConfig(domain: exploration/decision/review)、AgentPolicy(domain: hil_mode等)、ExecutionParams(application: max_iterations等)。QuorumConfig(application)が4型コンテナとしてAgentControllerで使用。組み合わせバリデーション: SessionMode::validate_combination()。Solo+Debate=Error、Debate全般=Warning(未実装)、Ensemble+Fast=Warning。設定優先順位は CLI > project > global > defaults → init.lua が最後に実行されて runtime 上書き。Lua scripting (Phase 1 #193): quorum.on(), quorum.config.{get,set,keys} + metatable proxy, quorum.keymap.set()。init.lua: ~/.config/copilot-quorum/init.lua。ScriptingEnginePort trait + LuaScriptingEngine (mlua, Lua 5.4)。サンドボックス: C module blocked。主要ファイルは application/src/use_cases/agent_controller.rs と application/src/config/ と infrastructure/src/config/ と infrastructure/src/scripting/。 -->
