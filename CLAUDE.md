@@ -209,15 +209,23 @@ The agent system extends quorum to autonomous task execution with safety through
 
 詳細は [docs/reference/architecture.md](docs/reference/architecture.md) を参照。
 
-## Lua Scripting (Phase 1)
+## Lua Scripting (Phase 1 + 1.5)
 
 User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-gated behind `scripting` (default ON).
 
 **Lua APIs**:
 - `quorum.on(event, callback)` — Event subscription (ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted)
-- `quorum.config.get(key)` / `quorum.config.set(key, value)` / `quorum.config.keys()` — Runtime config access via `ConfigAccessorPort`
+- `quorum.config.get(key)` / `quorum.config.set(key, value)` / `quorum.config.keys()` — Runtime config access via `ConfigAccessorPort` (20 keys, all read-write)
 - `quorum.config["key"]` — Metatable proxy (`__index`/`__newindex`)
 - `quorum.keymap.set(mode, key, action)` — Custom keybindings (mode: normal/insert/command, action: string or Lua callback)
+
+**Config Key Sections** (all mutable at runtime):
+- `agent.*` — consensus_level, phase_scope, strategy, hil_mode, max_plan_revisions
+- `models.*` — exploration, decision, review, participants, moderator, ask
+- `execution.*` — max_iterations, max_tool_turns
+- `output.*` — format, color
+- `repl.*` — show_progress, history_file
+- `context_budget.*` — max_entry_bytes, max_total_bytes, recent_full_count
 
 **Key Components**:
 - `domain/scripting/`: ScriptEventType, ScriptEventData, ScriptValue
