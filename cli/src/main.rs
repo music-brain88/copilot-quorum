@@ -350,7 +350,7 @@ async fn main() -> Result<()> {
     });
 
     // Build layer-specific configs from FileConfig + CLI
-    let (_output_config, repl_config) = build_configs(&cli, &config);
+    let (output_config, repl_config) = build_configs(&cli, &config);
 
     // Parse models from CLI --model flag (empty if not specified)
     let cli_models: Vec<Model> = cli.model.iter().map(|s| s.parse().unwrap()).collect();
@@ -490,7 +490,11 @@ async fn main() -> Result<()> {
             policy = policy.with_require_final_review(true);
         }
 
-        let quorum_config = QuorumConfig::new(mode, models, policy, execution);
+        let quorum_config = QuorumConfig::new(mode, models, policy, execution)
+            .with_output_format(output_config.format)
+            .with_color(output_config.color)
+            .with_show_progress(repl_config.show_progress)
+            .with_history_file(repl_config.history_file.clone());
         let shared_config = Arc::new(std::sync::Mutex::new(quorum_config));
 
         // Set up scripting engine (feature-gated)
@@ -561,7 +565,11 @@ async fn main() -> Result<()> {
         policy = policy.with_require_final_review(true);
     }
 
-    let quorum_config = QuorumConfig::new(mode, models, policy, execution);
+    let quorum_config = QuorumConfig::new(mode, models, policy, execution)
+        .with_output_format(output_config.format)
+        .with_color(output_config.color)
+        .with_show_progress(repl_config.show_progress)
+        .with_history_file(repl_config.history_file.clone());
 
     // Print header
     if repl_config.show_progress {

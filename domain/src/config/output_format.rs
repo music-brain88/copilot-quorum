@@ -17,6 +17,32 @@ pub enum OutputFormat {
     Json,
 }
 
+impl std::str::FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "full" => Ok(OutputFormat::Full),
+            "synthesis" => Ok(OutputFormat::Synthesis),
+            "json" => Ok(OutputFormat::Json),
+            _ => Err(format!(
+                "invalid output format '{}', valid: full, synthesis, json",
+                s
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutputFormat::Full => write!(f, "full"),
+            OutputFormat::Synthesis => write!(f, "synthesis"),
+            OutputFormat::Json => write!(f, "json"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
