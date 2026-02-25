@@ -239,18 +239,20 @@ impl AgentController {
 
     /// Send the welcome event
     pub fn send_welcome(&self) {
+        let guard = self.config();
         let moderator = self
             .moderator
             .clone()
-            .or_else(|| self.config().models().review.first().cloned());
+            .or_else(|| guard.models().review.first().cloned());
 
         let _ = self.tx.send(UiEvent::Welcome(WelcomeInfo {
-            decision_model: self.config().models().decision.clone(),
-            review_models: self.config().models().review.clone(),
+            decision_model: guard.models().decision.clone(),
+            review_models: guard.models().review.clone(),
             moderator,
-            working_dir: self.config().execution().working_dir.clone(),
-            consensus_level: self.config().mode().consensus_level,
+            working_dir: guard.execution().working_dir.clone(),
+            consensus_level: guard.mode().consensus_level,
         }));
+        drop(guard);
 
         // Emit InteractionSpawned for the initial root interaction so the TUI
         // can bind its placeholder tab to this interaction ID.  Without this,
@@ -370,21 +372,23 @@ impl AgentController {
                 }
             }
             "/config" => {
+                let guard = self.config();
                 let _ = self.tx.send(UiEvent::ConfigDisplay(ConfigSnapshot {
-                    exploration_model: self.config().models().exploration.clone(),
-                    decision_model: self.config().models().decision.clone(),
-                    review_models: self.config().models().review.clone(),
-                    consensus_level: self.config().mode().consensus_level,
-                    phase_scope: self.config().mode().phase_scope,
-                    orchestration_strategy: self.config().mode().strategy.to_string(),
-                    require_final_review: self.config().policy().require_final_review,
-                    max_iterations: self.config().execution().max_iterations,
-                    max_plan_revisions: self.config().policy().max_plan_revisions,
-                    hil_mode: self.config().policy().hil_mode,
-                    working_dir: self.config().execution().working_dir.clone(),
+                    exploration_model: guard.models().exploration.clone(),
+                    decision_model: guard.models().decision.clone(),
+                    review_models: guard.models().review.clone(),
+                    consensus_level: guard.mode().consensus_level,
+                    phase_scope: guard.mode().phase_scope,
+                    orchestration_strategy: guard.mode().strategy.to_string(),
+                    require_final_review: guard.policy().require_final_review,
+                    max_iterations: guard.execution().max_iterations,
+                    max_plan_revisions: guard.policy().max_plan_revisions,
+                    hil_mode: guard.policy().hil_mode,
+                    working_dir: guard.execution().working_dir.clone(),
                     verbose: self.verbose,
                     history_count: self.conversation_history.len(),
                 }));
+                drop(guard);
                 CommandAction::Continue
             }
             "/clear" => {

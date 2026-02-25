@@ -64,7 +64,7 @@ scraper = "0.22"
 libc = "0.2"
 
 # Lua scripting (optional, for scripting platform)
-mlua = { version = "0.10", features = ["lua54", "send"] }
+mlua = { version = "0.10", features = ["lua54", "send", "vendored"] }
 
 # AWS SDK (optional, for Bedrock provider)
 aws-config = { version = "1", features = ["behavior-version-latest"] }
