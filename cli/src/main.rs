@@ -8,6 +8,7 @@ use clap::Parser;
 use quorum_application::ContextLoaderPort;
 use quorum_application::ExecutionParams;
 use quorum_application::LlmGateway;
+use quorum_application::ScriptingEnginePort;
 use quorum_application::ToolExecutorPort;
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::{AgentPolicy, ConsensusLevel, Model, ModelConfig, OutputFormat, SessionMode};
@@ -489,6 +490,35 @@ async fn main() -> Result<()> {
         }
 
         let quorum_config = QuorumConfig::new(mode, models, policy, execution);
+        let shared_config = Arc::new(std::sync::Mutex::new(quorum_config));
+
+        // Set up scripting engine (feature-gated)
+        #[cfg(feature = "scripting")]
+        let scripting_engine: Arc<dyn quorum_application::ScriptingEnginePort> = {
+            match quorum_infrastructure::LuaScriptingEngine::new(shared_config.clone()) {
+                Ok(engine) => {
+                    // Load init.lua from user config directory
+                    if let Some(config_dir) = dirs::config_dir() {
+                        let init_lua = config_dir.join("copilot-quorum").join("init.lua");
+                        if init_lua.exists() {
+                            if let Err(e) = engine.load_script(&init_lua) {
+                                eprintln!("Warning: Failed to load {}: {}", init_lua.display(), e);
+                            } else {
+                                info!("Loaded init.lua from {}", init_lua.display());
+                            }
+                        }
+                    }
+                    Arc::new(engine)
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to initialize Lua scripting engine: {}", e);
+                    Arc::new(quorum_application::NoScriptingEngine)
+                }
+            }
+        };
+        #[cfg(not(feature = "scripting"))]
+        let scripting_engine: Arc<dyn quorum_application::ScriptingEnginePort> =
+            Arc::new(quorum_application::NoScriptingEngine);
 
         let tui_input_config = TuiInputConfig {
             max_input_height: config.tui.input.max_height,
@@ -506,11 +536,12 @@ async fn main() -> Result<()> {
             tool_executor.clone(),
             tool_schema.clone(),
             context_loader.clone(),
-            quorum_config,
+            shared_config,
             conversation_logger.clone(),
         )
         .with_tui_config(tui_input_config)
-        .with_layout_config(tui_layout_config);
+        .with_layout_config(tui_layout_config)
+        .with_scripting_engine(scripting_engine);
         if let Some(resolver) = reference_resolver {
             tui_app = tui_app.with_reference_resolver(Arc::new(resolver));
         }

@@ -12,6 +12,9 @@ pub use config::ExecutionParams;
 pub use config::QuorumConfig;
 pub use ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 pub use ports::config_accessor::{ConfigAccessError, ConfigAccessorPort, ConfigValue};
+pub use ports::scripting_engine::{
+    EventOutcome, KeymapAction, NoScriptingEngine, ScriptError, ScriptingEnginePort,
+};
 pub use ports::conversation_logger::{ConversationEvent, ConversationLogger, NoConversationLogger};
 pub use ports::{
     context_loader::ContextLoaderPort,

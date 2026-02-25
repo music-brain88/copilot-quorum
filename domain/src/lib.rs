@@ -25,6 +25,7 @@ pub mod interaction;
 pub mod orchestration;
 pub mod prompt;
 pub mod quorum;
+pub mod scripting;
 pub mod session;
 pub mod tool;
 pub mod util;
@@ -42,6 +43,7 @@ pub use agent::{
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
 pub use config::{ConfigKeyInfo, Mutability, OutputFormat, known_keys, lookup_key};
+pub use scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 pub use context::{
     ContextBudget, ContextMode, KnownContextFile, LoadedContextFile, ProjectContext,
     ResourceReference, TaskResultBuffer, extract_references,

@@ -86,6 +86,12 @@ pub struct TuiApp {
     // RefCell for interior mutability: dynamic model stream renderers are
     // registered during event handling (&self) but consumed during render (&self).
     content_registry: std::cell::RefCell<ContentRegistry>,
+
+    // -- Scripting engine (optional Lua runtime) --
+    scripting_engine: Arc<dyn quorum_application::ScriptingEnginePort>,
+
+    // -- Custom keybindings from Lua --
+    custom_keymap: mode::CustomKeymap,
 }
 
 impl TuiApp {
@@ -95,7 +101,7 @@ impl TuiApp {
         tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
         context_loader: Arc<dyn ContextLoaderPort>,
-        config: QuorumConfig,
+        config: Arc<Mutex<QuorumConfig>>,
     ) -> Self {
         Self::new_with_logger(
             gateway,
@@ -113,7 +119,7 @@ impl TuiApp {
         tool_executor: Arc<dyn ToolExecutorPort>,
         tool_schema: Arc<dyn ToolSchemaPort>,
         context_loader: Arc<dyn ContextLoaderPort>,
-        config: QuorumConfig,
+        config: Arc<Mutex<QuorumConfig>>,
         conversation_logger: Arc<dyn ConversationLogger>,
     ) -> Self {
         // Channels
@@ -156,6 +162,8 @@ impl TuiApp {
             tui_config: TuiInputConfig::default(),
             layout_config: TuiLayoutConfig::default(),
             content_registry: std::cell::RefCell::new(Self::build_default_registry()),
+            scripting_engine: Arc::new(quorum_application::NoScriptingEngine),
+            custom_keymap: mode::CustomKeymap::new(),
         }
     }
 
@@ -202,6 +210,17 @@ impl TuiApp {
 
     pub fn with_layout_config(mut self, config: TuiLayoutConfig) -> Self {
         self.layout_config = config;
+        self
+    }
+
+    /// Set the scripting engine and build custom keymaps from its registrations.
+    pub fn with_scripting_engine(
+        mut self,
+        engine: Arc<dyn quorum_application::ScriptingEnginePort>,
+    ) -> Self {
+        let keymaps = engine.registered_keymaps();
+        self.custom_keymap = mode::CustomKeymap::from_registered(&keymaps);
+        self.scripting_engine = engine;
         self
     }
 
@@ -586,6 +605,12 @@ impl TuiApp {
                     }
                 }
 
+                // Check custom keymap (from Lua) before built-in bindings
+                if let Some(custom_action) = self.custom_keymap.lookup(state.mode, &key) {
+                    state.pending_key = None;
+                    return self.handle_action(state, custom_action.clone());
+                }
+
                 let action = mode::handle_key_event(state.mode, key, state.pending_key);
                 if let KeyAction::PendingKey(c) = action {
                     state.pending_key = Some(c);
@@ -737,8 +762,22 @@ impl TuiApp {
                     command: "toggle_consensus".into(),
                 });
             }
+
+            // Lua callback — execute via scripting engine
+            KeyAction::LuaCallback(id) => {
+                if let Err(e) = self.execute_lua_callback(id) {
+                    state.set_flash(format!("Lua error: {}", e));
+                }
+            }
         }
         None
+    }
+
+    /// Execute a Lua callback by its ID through the scripting engine.
+    fn execute_lua_callback(&self, callback_id: u64) -> Result<(), String> {
+        self.scripting_engine
+            .execute_callback(callback_id)
+            .map_err(|e| e.message)
     }
 
     fn active_interaction_id(state: &TuiState) -> Option<InteractionId> {
