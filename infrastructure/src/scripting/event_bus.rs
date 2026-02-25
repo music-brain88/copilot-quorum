@@ -37,6 +37,7 @@ impl EventBus {
     }
 
     /// Clear all registered listeners (used on reload).
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.listeners.clear();
     }
@@ -60,10 +61,8 @@ impl EventBus {
             let callback: LuaFunction = lua.registry_value(key)?;
             let result: LuaValue = callback.call(data.clone())?;
 
-            if cancellable {
-                if let LuaValue::Boolean(false) = result {
-                    return Ok(false);
-                }
+            if cancellable && let LuaValue::Boolean(false) = result {
+                return Ok(false);
             }
         }
         Ok(true)

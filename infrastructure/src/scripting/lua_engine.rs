@@ -56,7 +56,7 @@ impl LuaScriptingEngine {
             let on_fn = lua
                 .create_function(move |lua, (event_name, callback): (String, LuaFunction)| {
                     // Validate event name
-                    if ScriptEventType::from_str(&event_name).is_none() {
+                    if event_name.parse::<ScriptEventType>().is_err() {
                         return Err(LuaError::external(format!(
                             "unknown event: '{}'. Valid events: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted",
                             event_name

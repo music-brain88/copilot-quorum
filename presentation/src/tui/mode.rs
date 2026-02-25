@@ -151,9 +151,6 @@ impl CustomKeymap {
         })
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 /// Map a built-in action name (from Lua) to a `KeyAction`.

@@ -42,15 +42,19 @@ impl ScriptEventType {
         matches!(self, Self::ScriptLoading)
     }
 
-    /// Parse an event name string into a ScriptEventType.
-    pub fn from_str(s: &str) -> Option<Self> {
+}
+
+impl std::str::FromStr for ScriptEventType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ScriptLoading" => Some(Self::ScriptLoading),
-            "ScriptLoaded" => Some(Self::ScriptLoaded),
-            "ConfigChanged" => Some(Self::ConfigChanged),
-            "ModeChanged" => Some(Self::ModeChanged),
-            "SessionStarted" => Some(Self::SessionStarted),
-            _ => None,
+            "ScriptLoading" => Ok(Self::ScriptLoading),
+            "ScriptLoaded" => Ok(Self::ScriptLoaded),
+            "ConfigChanged" => Ok(Self::ConfigChanged),
+            "ModeChanged" => Ok(Self::ModeChanged),
+            "SessionStarted" => Ok(Self::SessionStarted),
+            other => Err(format!("unknown event: '{}'", other)),
         }
     }
 }
@@ -122,14 +126,14 @@ mod tests {
         ];
         for event in &events {
             let name = event.as_str();
-            let parsed = ScriptEventType::from_str(name).unwrap();
+            let parsed: ScriptEventType = name.parse().unwrap();
             assert_eq!(&parsed, event);
         }
     }
 
     #[test]
     fn test_unknown_event_returns_none() {
-        assert_eq!(ScriptEventType::from_str("UnknownEvent"), None);
+        assert!("UnknownEvent".parse::<ScriptEventType>().is_err());
     }
 
     #[test]
