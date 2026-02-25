@@ -40,6 +40,7 @@ chrono = { workspace = true }
 dirs = "6.0"
 
 [features]
-default = ["web-tools"]
+default = ["web-tools", "scripting"]
 web-tools = ["quorum-infrastructure/web-tools"]
+scripting = ["quorum-infrastructure/scripting"]
 bedrock = ["quorum-infrastructure/bedrock"]

@@ -9,6 +9,8 @@ pub mod copilot;
 pub mod logging;
 pub mod providers;
 pub mod reference;
+#[cfg(feature = "scripting")]
+pub mod scripting;
 pub mod tools;
 
 // Re-export commonly used types
@@ -30,6 +32,8 @@ pub use providers::{
     ProviderAdapter, ProviderKind, copilot_adapter::CopilotProviderAdapter, routing::RoutingGateway,
 };
 pub use reference::GitHubReferenceResolver;
+#[cfg(feature = "scripting")]
+pub use scripting::LuaScriptingEngine;
 pub use tools::{
     JsonSchemaToolConverter, LocalToolExecutor, default_tool_spec, read_only_tool_spec,
 };

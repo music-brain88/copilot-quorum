@@ -89,6 +89,144 @@ pub enum KeyAction {
     Quit,
     ShowHelp,
     ToggleConsensus,
+
+    // -- Lua scripting --
+    LuaCallback(u64),
+}
+
+/// A table of custom keybindings registered from Lua scripts.
+///
+/// Maps `(InputMode, KeyCode, KeyModifiers)` to `KeyAction`.
+/// Checked **before** built-in bindings in `handle_key_event`.
+pub struct CustomKeymap {
+    entries: Vec<(InputMode, KeyCode, KeyModifiers, KeyAction)>,
+}
+
+impl CustomKeymap {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Build a custom keymap from scripting engine keymap registrations.
+    ///
+    /// Each entry is `(mode_name, key_descriptor, action)` from the engine.
+    /// Entries with unparseable key descriptors or unknown modes are silently skipped.
+    pub fn from_registered(keymaps: &[(String, String, quorum_application::KeymapAction)]) -> Self {
+        let mut entries = Vec::new();
+        for (mode_name, key_desc, action) in keymaps {
+            let mode = match mode_name.as_str() {
+                "normal" => InputMode::Normal,
+                "insert" => InputMode::Insert,
+                "command" => InputMode::Command,
+                _ => continue,
+            };
+            let Some((key_code, modifiers)) = parse_key_descriptor(key_desc) else {
+                continue;
+            };
+            let key_action = match action {
+                quorum_application::KeymapAction::Builtin(name) => builtin_action_by_name(name),
+                quorum_application::KeymapAction::LuaCallback(id) => KeyAction::LuaCallback(*id),
+            };
+            entries.push((mode, key_code, modifiers, key_action));
+        }
+        Self { entries }
+    }
+
+    /// Look up a custom binding for the given mode + key event.
+    pub fn lookup(&self, mode: InputMode, key: &KeyEvent) -> Option<&KeyAction> {
+        self.entries.iter().find_map(|(m, code, mods, action)| {
+            if *m == mode && *code == key.code && key.modifiers.contains(*mods) {
+                Some(action)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+/// Map a built-in action name (from Lua) to a `KeyAction`.
+fn builtin_action_by_name(name: &str) -> KeyAction {
+    match name {
+        "enter_insert" => KeyAction::EnterInsert,
+        "enter_command" => KeyAction::EnterCommand,
+        "exit_to_normal" => KeyAction::ExitToNormal,
+        "submit_input" => KeyAction::SubmitInput,
+        "submit_command" => KeyAction::SubmitCommand,
+        "scroll_up" => KeyAction::ScrollUp,
+        "scroll_down" => KeyAction::ScrollDown,
+        "scroll_to_top" => KeyAction::ScrollToTop,
+        "scroll_to_bottom" => KeyAction::ScrollToBottom,
+        "next_tab" => KeyAction::NextTab,
+        "prev_tab" => KeyAction::PrevTab,
+        "switch_solo" => KeyAction::SwitchSolo,
+        "switch_ensemble" => KeyAction::SwitchEnsemble,
+        "toggle_fast" => KeyAction::ToggleFast,
+        "switch_ask" => KeyAction::SwitchAsk,
+        "switch_discuss" => KeyAction::SwitchDiscuss,
+        "launch_editor" => KeyAction::LaunchEditor,
+        "quit" => KeyAction::Quit,
+        "show_help" => KeyAction::ShowHelp,
+        "insert_newline" => KeyAction::InsertNewline,
+        _ => KeyAction::None,
+    }
+}
+
+/// Parse a human-readable key descriptor string into (KeyCode, KeyModifiers).
+///
+/// Supports:
+/// - Simple keys: `"j"`, `"Esc"`, `"Enter"`, `"Space"`, `"Tab"`
+/// - Modified keys: `"Ctrl+s"`, `"Shift+Enter"`, `"Ctrl+Shift+p"`
+/// - Special keys: `"Backspace"`, `"Delete"`, `"Up"`, `"Down"`, `"F1"`–`"F12"`
+pub fn parse_key_descriptor(desc: &str) -> Option<(KeyCode, KeyModifiers)> {
+    if desc.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = desc.split('+').collect();
+    let (key_str, mod_parts) = parts.split_last()?;
+
+    if key_str.is_empty() {
+        return None;
+    }
+
+    let mut modifiers = KeyModifiers::NONE;
+    for part in mod_parts {
+        match *part {
+            "Ctrl" => modifiers |= KeyModifiers::CONTROL,
+            "Shift" => modifiers |= KeyModifiers::SHIFT,
+            "Alt" => modifiers |= KeyModifiers::ALT,
+            _ => return None,
+        }
+    }
+
+    let key_code = match *key_str {
+        "Esc" => KeyCode::Esc,
+        "Enter" => KeyCode::Enter,
+        "Tab" => KeyCode::Tab,
+        "Backspace" => KeyCode::Backspace,
+        "Delete" => KeyCode::Delete,
+        "Space" => KeyCode::Char(' '),
+        "Up" => KeyCode::Up,
+        "Down" => KeyCode::Down,
+        "Left" => KeyCode::Left,
+        "Right" => KeyCode::Right,
+        "Home" => KeyCode::Home,
+        "End" => KeyCode::End,
+        s if s.starts_with('F') && s.len() >= 2 => {
+            let num = s[1..].parse::<u8>().ok()?;
+            if (1..=12).contains(&num) {
+                KeyCode::F(num)
+            } else {
+                return None;
+            }
+        }
+        s if s.len() == 1 => KeyCode::Char(s.chars().next().unwrap()),
+        _ => return None,
+    };
+
+    Some((key_code, modifiers))
 }
 
 /// Map a key event + current mode to a semantic action.
@@ -382,5 +520,103 @@ mod tests {
             handle_key_event(InputMode::Normal, key_big_g, None),
             KeyAction::ScrollToBottom
         );
+    }
+
+    // -- Key descriptor parser tests --
+
+    #[test]
+    fn test_parse_simple_char() {
+        assert_eq!(
+            parse_key_descriptor("j"),
+            Some((KeyCode::Char('j'), KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn test_parse_ctrl_modifier() {
+        assert_eq!(
+            parse_key_descriptor("Ctrl+s"),
+            Some((KeyCode::Char('s'), KeyModifiers::CONTROL))
+        );
+    }
+
+    #[test]
+    fn test_parse_shift_enter() {
+        assert_eq!(
+            parse_key_descriptor("Shift+Enter"),
+            Some((KeyCode::Enter, KeyModifiers::SHIFT))
+        );
+    }
+
+    #[test]
+    fn test_parse_esc() {
+        assert_eq!(
+            parse_key_descriptor("Esc"),
+            Some((KeyCode::Esc, KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn test_parse_f_keys() {
+        assert_eq!(
+            parse_key_descriptor("F1"),
+            Some((KeyCode::F(1), KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn test_parse_ctrl_shift_combo() {
+        assert_eq!(
+            parse_key_descriptor("Ctrl+Shift+p"),
+            Some((
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_special_keys() {
+        assert_eq!(
+            parse_key_descriptor("Space"),
+            Some((KeyCode::Char(' '), KeyModifiers::NONE))
+        );
+        assert_eq!(
+            parse_key_descriptor("Tab"),
+            Some((KeyCode::Tab, KeyModifiers::NONE))
+        );
+        assert_eq!(
+            parse_key_descriptor("Backspace"),
+            Some((KeyCode::Backspace, KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn test_parse_arrow_keys() {
+        assert_eq!(
+            parse_key_descriptor("Up"),
+            Some((KeyCode::Up, KeyModifiers::NONE))
+        );
+        assert_eq!(
+            parse_key_descriptor("Down"),
+            Some((KeyCode::Down, KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_returns_none() {
+        assert_eq!(parse_key_descriptor(""), None);
+        assert_eq!(parse_key_descriptor("Ctrl+"), None);
+        assert_eq!(parse_key_descriptor("gibberish"), None);
+    }
+
+    #[test]
+    fn test_builtin_action_by_name() {
+        assert_eq!(
+            builtin_action_by_name("submit_input"),
+            KeyAction::SubmitInput
+        );
+        assert_eq!(builtin_action_by_name("quit"), KeyAction::Quit);
+        assert_eq!(builtin_action_by_name("unknown"), KeyAction::None);
     }
 }
