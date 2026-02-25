@@ -271,11 +271,24 @@ quorum.config.set("agent.consensus_level", "solo")
 quorum.config.set("agent.strategy", "quorum")
 quorum.config.set("agent.phase_scope", "full")
 
+-- モデル設定
+quorum.config.set("models.decision", "claude-opus-4.5")
+quorum.config.set("models.participants", {"claude-opus-4.5", "gpt-5.2-codex"})
+
+-- 出力・REPL 設定
+quorum.config.set("output.format", "synthesis")
+quorum.config.set("output.color", true)
+quorum.config.set("repl.show_progress", true)
+
+-- コンテキスト予算
+quorum.config.set("context_budget.max_entry_bytes", 20000)
+quorum.config.set("context_budget.max_total_bytes", 60000)
+
 -- メタテーブルショートカット（読み書き両対応）
 local strategy = quorum.config["agent.strategy"]     -- 読み取り
 quorum.config["agent.strategy"] = "debate"           -- 書き込み
 
--- 全キー一覧を取得
+-- 全キー一覧を取得（20 キー）
 local keys = quorum.config.keys()
 
 -- ━━━ キーバインド設定 ━━━
@@ -301,18 +314,30 @@ end)
 
 #### Lua から設定可能なキー
 
-| キー | 型 | Read | Write | 値の例 |
-|------|-----|------|-------|--------|
-| `agent.consensus_level` | String | ✅ | ✅ | `"solo"`, `"ensemble"` |
-| `agent.phase_scope` | String | ✅ | ✅ | `"full"`, `"fast"`, `"plan-only"` |
-| `agent.strategy` | String | ✅ | ✅ | `"quorum"`, `"debate"` |
-| `agent.hil_mode` | String | ✅ | | `"interactive"`, `"auto_approve"`, `"auto_reject"` |
-| `agent.max_plan_revisions` | Integer | ✅ | | |
-| `models.exploration` | String | ✅ | | |
-| `models.decision` | String | ✅ | | |
-| `models.review` | StringList | ✅ | | |
-| `execution.max_iterations` | Integer | ✅ | | |
-| `execution.max_tool_turns` | Integer | ✅ | | |
+全 20 キーが読み書き可能です（Phase 1.5）。
+
+| キー | 型 | 値の例 |
+|------|-----|--------|
+| `agent.consensus_level` | String | `"solo"`, `"ensemble"` |
+| `agent.phase_scope` | String | `"full"`, `"fast"`, `"plan-only"` |
+| `agent.strategy` | String | `"quorum"`, `"debate"` |
+| `agent.hil_mode` | String | `"interactive"`, `"auto_approve"`, `"auto_reject"` |
+| `agent.max_plan_revisions` | Integer | `3` |
+| `models.exploration` | String | `"claude-haiku-4.5"` |
+| `models.decision` | String | `"claude-sonnet-4.5"` |
+| `models.review` | StringList | `{"claude-sonnet-4.5", "gpt-5.2-codex"}` |
+| `models.participants` | StringList | `{"claude-opus-4.5", "gpt-5.2-codex"}` |
+| `models.moderator` | String | `"claude-opus-4.5"` |
+| `models.ask` | String | `"claude-sonnet-4.5"` |
+| `execution.max_iterations` | Integer | `50` |
+| `execution.max_tool_turns` | Integer | `10` |
+| `output.format` | String | `"full"`, `"synthesis"`, `"json"` |
+| `output.color` | Boolean | `true`, `false` |
+| `repl.show_progress` | Boolean | `true`, `false` |
+| `repl.history_file` | String | `"/path/to/history.txt"` |
+| `context_budget.max_entry_bytes` | Integer | `20000` |
+| `context_budget.max_total_bytes` | Integer | `60000` |
+| `context_budget.recent_full_count` | Integer | `3` |
 
 #### キーマップのモード
 

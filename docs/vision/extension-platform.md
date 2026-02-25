@@ -226,8 +226,8 @@ Protocol-Based 拡張で検討が必要な copilot-quorum 固有の機能：
 Phase 1: Lua Runtime + Config/Keymap API (#193)  ── ✅ Done
   └─ quorum.on(), quorum.config, quorum.keymap.set()
 
-Phase 1.5: ConfigAccessorPort 拡張 (#233 Step 2)  ── 🔴 Planned
-  └─ models 全キー + output + repl + context_budget を mutable 化
+Phase 1.5: ConfigAccessorPort 拡張 (#233 Step 2)  ── ✅ Done
+  └─ 全 20 キー mutable 化 (models, output, repl, context_budget)
 
 Phase 2: TUI Route/Layout API (#230)               ── 🔴 Planned
   └─ quorum.tui.* で TUI セクション全体を Lua 化
