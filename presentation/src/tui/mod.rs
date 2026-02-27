@@ -25,7 +25,10 @@ pub use content::{
 };
 pub use event::TuiEvent;
 pub use human_intervention::TuiHumanIntervention;
-pub use layout::{LayoutPreset, TuiLayoutConfig};
+pub use layout::{
+    parse_content_slot, parse_surface_id, content_slot_to_string, surface_id_to_string,
+    LayoutPreset, TuiLayoutConfig,
+};
 pub use mode::{InputMode, KeyAction};
 pub use presenter::TuiPresenter;
 pub use progress::TuiProgressBridge;

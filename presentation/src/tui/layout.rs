@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
+use quorum_application::CustomPresetConfig;
 use ratatui::layout::Direction;
 
 use super::content::ContentSlot;
@@ -20,19 +21,24 @@ use super::surface::SurfaceId;
 /// | Minimal  | Full-width conversation, no sidebar               |
 /// | Wide     | 60/20/20 three-pane horizontal split              |
 /// | Stacked  | 70/30 vertical split (conversation top, progress bottom) |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+/// | Custom   | Lua-registered preset with custom splits and direction |
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum LayoutPreset {
     #[default]
     Default,
     Minimal,
     Wide,
     Stacked,
+    /// Custom layout preset registered from Lua scripting.
+    Custom(String),
 }
 
 impl LayoutPreset {
     /// Default percentage splits for a given number of content panes.
     ///
     /// Returns a `Vec<u16>` of percentages that sum to 100.
+    /// For `Custom` presets, returns equal splits (the caller should use
+    /// [`TuiLayoutConfig::resolve_splits`] for the real values).
     pub fn default_splits(&self, pane_count: usize) -> Vec<u16> {
         match (self, pane_count) {
             (_, 0) => vec![],
@@ -55,12 +61,19 @@ impl LayoutPreset {
 
     /// Split direction for this preset.
     ///
-    /// Stacked uses vertical split; all others use horizontal.
+    /// Stacked uses vertical split; Custom falls back to horizontal
+    /// (the caller should use [`TuiLayoutConfig::resolve_direction`]
+    /// for the real direction).
     pub fn split_direction(&self) -> Direction {
         match self {
             Self::Stacked => Direction::Vertical,
             _ => Direction::Horizontal,
         }
+    }
+
+    /// Whether this is a built-in preset (not Custom).
+    pub fn is_builtin(&self) -> bool {
+        !matches!(self, Self::Custom(_))
     }
 }
 
@@ -88,6 +101,7 @@ impl fmt::Display for LayoutPreset {
             Self::Minimal => write!(f, "minimal"),
             Self::Wide => write!(f, "wide"),
             Self::Stacked => write!(f, "stacked"),
+            Self::Custom(name) => write!(f, "{}", name),
         }
     }
 }
@@ -198,6 +212,78 @@ pub fn parse_route_target(name: &str) -> Option<SurfaceId> {
     }
 }
 
+/// Parse a surface name from Lua API into a `SurfaceId`.
+///
+/// Supports all static names plus `"dynamic_pane:<name>"` for dynamic panes.
+pub fn parse_surface_id(name: &str) -> Option<SurfaceId> {
+    match name {
+        "main_pane" => Some(SurfaceId::MainPane),
+        "sidebar" => Some(SurfaceId::Sidebar),
+        "overlay" => Some(SurfaceId::Overlay),
+        "header" => Some(SurfaceId::Header),
+        "input" => Some(SurfaceId::Input),
+        "status_bar" => Some(SurfaceId::StatusBar),
+        "tab_bar" => Some(SurfaceId::TabBar),
+        "tool_pane" => Some(SurfaceId::ToolPane),
+        "tool_float" => Some(SurfaceId::ToolFloat),
+        s if s.starts_with("dynamic_pane:") => {
+            Some(SurfaceId::DynamicPane(s["dynamic_pane:".len()..].to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// Convert a `SurfaceId` to its string name (inverse of [`parse_surface_id`]).
+pub fn surface_id_to_string(id: &SurfaceId) -> String {
+    match id {
+        SurfaceId::MainPane => "main_pane".to_string(),
+        SurfaceId::Sidebar => "sidebar".to_string(),
+        SurfaceId::Overlay => "overlay".to_string(),
+        SurfaceId::Header => "header".to_string(),
+        SurfaceId::Input => "input".to_string(),
+        SurfaceId::StatusBar => "status_bar".to_string(),
+        SurfaceId::TabBar => "tab_bar".to_string(),
+        SurfaceId::ToolPane => "tool_pane".to_string(),
+        SurfaceId::ToolFloat => "tool_float".to_string(),
+        SurfaceId::DynamicPane(name) => format!("dynamic_pane:{}", name),
+    }
+}
+
+/// Parse a content slot name from Lua API into a `ContentSlot`.
+///
+/// Supports all static names plus `"model_stream:<name>"` and `"lua:<name>"`.
+pub fn parse_content_slot(name: &str) -> Option<ContentSlot> {
+    match name {
+        "conversation" => Some(ContentSlot::Conversation),
+        "progress" => Some(ContentSlot::Progress),
+        "notification" => Some(ContentSlot::Notification),
+        "hil_prompt" => Some(ContentSlot::HilPrompt),
+        "help" => Some(ContentSlot::Help),
+        "tool_log" => Some(ContentSlot::ToolLog),
+        s if s.starts_with("model_stream:") => {
+            Some(ContentSlot::ModelStream(s["model_stream:".len()..].to_string()))
+        }
+        s if s.starts_with("lua:") => {
+            Some(ContentSlot::LuaSlot(s["lua:".len()..].to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// Convert a `ContentSlot` to its string name (inverse of [`parse_content_slot`]).
+pub fn content_slot_to_string(slot: &ContentSlot) -> String {
+    match slot {
+        ContentSlot::Conversation => "conversation".to_string(),
+        ContentSlot::Progress => "progress".to_string(),
+        ContentSlot::Notification => "notification".to_string(),
+        ContentSlot::HilPrompt => "hil_prompt".to_string(),
+        ContentSlot::Help => "help".to_string(),
+        ContentSlot::ToolLog => "tool_log".to_string(),
+        ContentSlot::ModelStream(name) => format!("model_stream:{}", name),
+        ContentSlot::LuaSlot(name) => format!("lua:{}", name),
+    }
+}
+
 /// Route override entry — parsed from TOML `[tui.routes]`.
 #[derive(Debug, Clone)]
 pub struct RouteOverride {
@@ -228,6 +314,8 @@ pub struct TuiLayoutConfig {
     pub route_overrides: Vec<RouteOverride>,
     /// Per-strategy layout preset overrides (e.g., "quorum" → Stacked).
     pub strategy_presets: HashMap<String, LayoutPreset>,
+    /// Custom layout presets registered from Lua scripting.
+    pub custom_presets: HashMap<String, CustomPresetConfig>,
 }
 
 impl TuiLayoutConfig {
@@ -235,8 +323,31 @@ impl TuiLayoutConfig {
     pub fn preset_for_strategy(&self, strategy: &str) -> LayoutPreset {
         self.strategy_presets
             .get(strategy)
-            .copied()
-            .unwrap_or(self.preset)
+            .cloned()
+            .unwrap_or_else(|| self.preset.clone())
+    }
+
+    /// Resolve splits for the current preset (handles both built-in and custom).
+    pub fn resolve_splits(&self, pane_count: usize) -> Vec<u16> {
+        if let LayoutPreset::Custom(name) = &self.preset {
+            if let Some(config) = self.custom_presets.get(name) {
+                return config.splits.clone();
+            }
+        }
+        self.preset.default_splits(pane_count)
+    }
+
+    /// Resolve split direction for the current preset.
+    pub fn resolve_direction(&self) -> Direction {
+        if let LayoutPreset::Custom(name) = &self.preset {
+            if let Some(config) = self.custom_presets.get(name) {
+                return match config.direction.as_str() {
+                    "vertical" => Direction::Vertical,
+                    _ => Direction::Horizontal,
+                };
+            }
+        }
+        self.preset.split_direction()
     }
 }
 
@@ -248,6 +359,7 @@ impl Default for TuiLayoutConfig {
             surface_config: SurfaceConfig::default(),
             route_overrides: Vec::new(),
             strategy_presets: HashMap::new(),
+            custom_presets: HashMap::new(),
         }
     }
 }

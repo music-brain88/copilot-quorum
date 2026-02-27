@@ -14,7 +14,7 @@
 use super::content::ContentRegistry;
 use super::editor::{self, EditorContext, EditorResult};
 use super::event::{HilKind, HilRequest, RoutedTuiEvent, TuiCommand, TuiEvent};
-use super::layout::TuiLayoutConfig;
+use super::layout::{LayoutPreset, TuiLayoutConfig};
 use super::mode::{self, InputMode, KeyAction};
 use super::presenter::TuiPresenter;
 use super::progress::TuiProgressBridge;
@@ -45,7 +45,7 @@ use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
 use quorum_application::{
     AgentController, CommandAction, ContextLoaderPort, ConversationLogger, LlmGateway,
-    NoConversationLogger, ToolExecutorPort, ToolSchemaPort, UiEvent,
+    NoConversationLogger, ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
 };
 use quorum_domain::core::string::truncate;
 use quorum_domain::interaction::{InteractionForm, InteractionId};
@@ -92,6 +92,9 @@ pub struct TuiApp {
 
     // -- Custom keybindings from Lua --
     custom_keymap: mode::CustomKeymap,
+
+    // -- TUI accessor for Lua scripting --
+    tui_accessor: Option<Arc<Mutex<dyn TuiAccessorPort>>>,
 }
 
 impl TuiApp {
@@ -164,6 +167,7 @@ impl TuiApp {
             content_registry: std::cell::RefCell::new(Self::build_default_registry()),
             scripting_engine: Arc::new(quorum_application::NoScriptingEngine),
             custom_keymap: mode::CustomKeymap::new(),
+            tui_accessor: None,
         }
     }
 
@@ -224,6 +228,32 @@ impl TuiApp {
         self
     }
 
+    /// Set the TUI accessor for Lua scripting integration.
+    pub fn with_tui_accessor(mut self, accessor: Arc<Mutex<dyn TuiAccessorPort>>) -> Self {
+        self.tui_accessor = Some(accessor);
+        self
+    }
+
+    /// Apply pending changes from the TUI accessor (Lua scripting) to TuiState.
+    ///
+    /// Called each frame before rendering. Drains the accessor's pending changes
+    /// and applies route overrides, preset switches, content slot registrations,
+    /// and text updates.
+    fn apply_tui_changes(&self, state: &mut TuiState) {
+        let accessor = match &self.tui_accessor {
+            Some(a) => a,
+            None => return,
+        };
+
+        // Lock briefly, drain all pending changes, then release the lock.
+        let changes = {
+            let mut acc = accessor.lock().unwrap();
+            acc.take_pending_changes()
+        };
+
+        apply_pending_tui_changes(changes, state, &self.content_registry);
+    }
+
     /// Run the TUI main loop
     pub async fn run(&mut self) -> io::Result<()> {
         // Setup terminal
@@ -259,7 +289,7 @@ impl TuiApp {
         state.tui_config = self.tui_config.clone();
         state.layout_config = self.layout_config.clone();
         state.route = super::route::RouteTable::from_preset_and_overrides(
-            self.layout_config.preset,
+            self.layout_config.preset.clone(),
             &self.layout_config.route_overrides,
         );
         let mut event_stream = EventStream::new();
@@ -272,6 +302,9 @@ impl TuiApp {
         });
 
         loop {
+            // Apply pending Lua scripting changes before rendering
+            self.apply_tui_changes(&mut state);
+
             // Render
             terminal.draw(|frame| {
                 self.render(frame, &state);
@@ -423,15 +456,28 @@ impl TuiApp {
 
         let pane_surfaces = state.route.required_pane_surfaces();
         let show_tab_bar = state.tabs.len() > 1;
-        let layout = MainLayout::compute_with_layout(
-            frame.area(),
-            state.input_line_count() as u16,
-            state.tui_config.max_input_height,
-            show_tab_bar,
-            state.layout_config.preset,
-            state.layout_config.flex_threshold,
-            pane_surfaces.len(),
-        );
+        let layout = if state.layout_config.preset.is_builtin() {
+            MainLayout::compute_with_layout(
+                frame.area(),
+                state.input_line_count() as u16,
+                state.tui_config.max_input_height,
+                show_tab_bar,
+                state.layout_config.preset.clone(),
+                state.layout_config.flex_threshold,
+                pane_surfaces.len(),
+            )
+        } else {
+            let splits = state.layout_config.resolve_splits(pane_surfaces.len());
+            let direction = state.layout_config.resolve_direction();
+            MainLayout::compute_with_splits(
+                frame.area(),
+                state.input_line_count() as u16,
+                state.tui_config.max_input_height,
+                show_tab_bar,
+                &splits,
+                direction,
+            )
+        };
 
         // Build surface layout from the computed main layout + pane surfaces
         let surfaces = SurfaceLayout::from_main_layout(&layout, &pane_surfaces);
@@ -1503,6 +1549,70 @@ async fn controller_task(
     }
 }
 
+/// Apply pending TUI changes from the Lua scripting accessor to state and registry.
+///
+/// Extracted as a free function for testability — avoids needing to construct a full `TuiApp`.
+fn apply_pending_tui_changes(
+    changes: quorum_application::TuiPendingChanges,
+    state: &mut TuiState,
+    content_registry: &std::cell::RefCell<ContentRegistry>,
+) {
+    if changes.is_empty() {
+        return;
+    }
+
+    // 1. Register custom presets (before preset_switch may reference them)
+    for (name, config) in changes.new_presets {
+        state.layout_config.custom_presets.insert(name, config);
+    }
+
+    // 2. Switch preset (changes the route table base)
+    if let Some(preset_name) = changes.preset_switch {
+        state.layout_config.preset = match preset_name.as_str() {
+            "default" => LayoutPreset::Default,
+            "minimal" => LayoutPreset::Minimal,
+            "wide" => LayoutPreset::Wide,
+            "stacked" => LayoutPreset::Stacked,
+            _ => LayoutPreset::Custom(preset_name),
+        };
+        state.route = super::route::RouteTable::from_preset_and_overrides(
+            state.layout_config.preset.clone(),
+            &state.layout_config.route_overrides,
+        );
+    }
+
+    // 3. Apply route overrides (on top of the current preset)
+    if !changes.route_changes.is_empty() {
+        for (content_name, surface_name) in changes.route_changes {
+            if let (Some(content), Some(surface)) = (
+                super::layout::parse_content_slot(&content_name),
+                super::layout::parse_surface_id(&surface_name),
+            ) {
+                state
+                    .layout_config
+                    .route_overrides
+                    .push(super::layout::RouteOverride { content, surface });
+            }
+        }
+        state.route = super::route::RouteTable::from_preset_and_overrides(
+            state.layout_config.preset.clone(),
+            &state.layout_config.route_overrides,
+        );
+    }
+
+    // 4. Register new Lua content slots
+    for slot_name in changes.new_content_slots {
+        content_registry.borrow_mut().register_mut(Box::new(
+            super::widgets::lua_content::LuaContentRenderer::new(slot_name),
+        ));
+    }
+
+    // 5. Update Lua content text
+    for (slot_name, text) in changes.content_text_updates {
+        state.lua_content.insert(slot_name, text);
+    }
+}
+
 /// Extract the meaningful LLM analysis text from task output.
 ///
 /// Task output contains interleaved tool results and LLM text separated by `\n---\n`.
@@ -1573,5 +1683,110 @@ mod tests {
         // Text that has brackets but not at start of line
         let output = "The function returns [Ok] or [Err]: both are valid.";
         assert_eq!(extract_response_text(output), output);
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_pending_tui_changes tests
+    // -----------------------------------------------------------------------
+    use crate::tui::content::ContentSlot;
+    use quorum_application::{CustomPresetConfig, TuiPendingChanges};
+    use std::cell::RefCell;
+
+    fn empty_changes() -> TuiPendingChanges {
+        TuiPendingChanges {
+            route_changes: vec![],
+            preset_switch: None,
+            new_presets: vec![],
+            new_content_slots: vec![],
+            content_text_updates: vec![],
+        }
+    }
+
+    #[test]
+    fn test_apply_empty_changes_is_noop() {
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let preset_before = state.layout_config.preset.clone();
+        apply_pending_tui_changes(empty_changes(), &mut state, &registry);
+        assert_eq!(state.layout_config.preset, preset_before);
+    }
+
+    #[test]
+    fn test_apply_preset_switch() {
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let changes = TuiPendingChanges {
+            preset_switch: Some("minimal".to_string()),
+            ..empty_changes()
+        };
+        apply_pending_tui_changes(changes, &mut state, &registry);
+        assert_eq!(state.layout_config.preset, LayoutPreset::Minimal);
+    }
+
+    #[test]
+    fn test_apply_custom_preset_switch() {
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let changes = TuiPendingChanges {
+            new_presets: vec![(
+                "my_layout".to_string(),
+                CustomPresetConfig {
+                    splits: vec![70, 30],
+                    direction: "horizontal".to_string(),
+                },
+            )],
+            preset_switch: Some("my_layout".to_string()),
+            ..empty_changes()
+        };
+        apply_pending_tui_changes(changes, &mut state, &registry);
+        assert_eq!(
+            state.layout_config.preset,
+            LayoutPreset::Custom("my_layout".to_string())
+        );
+        assert!(state.layout_config.custom_presets.contains_key("my_layout"));
+    }
+
+    #[test]
+    fn test_apply_content_text_updates() {
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let changes = TuiPendingChanges {
+            content_text_updates: vec![("status".to_string(), "Hello from Lua".to_string())],
+            ..empty_changes()
+        };
+        apply_pending_tui_changes(changes, &mut state, &registry);
+        assert_eq!(
+            state.lua_content.get("status"),
+            Some(&"Hello from Lua".to_string())
+        );
+    }
+
+    #[test]
+    fn test_apply_new_content_slots() {
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let changes = TuiPendingChanges {
+            new_content_slots: vec!["my_panel".to_string()],
+            ..empty_changes()
+        };
+        apply_pending_tui_changes(changes, &mut state, &registry);
+        let reg = registry.borrow();
+        assert!(reg.get(&ContentSlot::LuaSlot("my_panel".to_string())).is_some());
+    }
+
+    #[test]
+    fn test_apply_route_changes() {
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let changes = TuiPendingChanges {
+            route_changes: vec![("progress".to_string(), "main_pane".to_string())],
+            ..empty_changes()
+        };
+        apply_pending_tui_changes(changes, &mut state, &registry);
+        assert_eq!(state.layout_config.route_overrides.len(), 1);
+        assert_eq!(
+            state.route.surface_for(&ContentSlot::Progress),
+            Some(SurfaceId::MainPane),
+        );
     }
 }

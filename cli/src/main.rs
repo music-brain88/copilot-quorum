@@ -274,6 +274,7 @@ fn build_tui_layout_config(config: &FileConfig) -> TuiLayoutConfig {
         surface_config,
         route_overrides,
         strategy_presets,
+        custom_presets: std::collections::HashMap::new(),
     }
 }
 
@@ -496,11 +497,18 @@ async fn main() -> Result<()> {
             .with_show_progress(repl_config.show_progress)
             .with_history_file(repl_config.history_file.clone());
         let shared_config = Arc::new(std::sync::Mutex::new(quorum_config));
+        let tui_accessor: Arc<std::sync::Mutex<dyn quorum_application::TuiAccessorPort>> =
+            Arc::new(std::sync::Mutex::new(
+                quorum_application::TuiAccessorState::with_default_routes(),
+            ));
 
         // Set up scripting engine (feature-gated)
         #[cfg(feature = "scripting")]
         let scripting_engine: Arc<dyn quorum_application::ScriptingEnginePort> = {
-            match quorum_infrastructure::LuaScriptingEngine::new(shared_config.clone()) {
+            match quorum_infrastructure::LuaScriptingEngine::new(
+                shared_config.clone(),
+                tui_accessor.clone(),
+            ) {
                 Ok(engine) => {
                     // Load init.lua from user config directory
                     if let Some(config_dir) = dirs::config_dir() {
@@ -546,7 +554,8 @@ async fn main() -> Result<()> {
         )
         .with_tui_config(tui_input_config)
         .with_layout_config(tui_layout_config)
-        .with_scripting_engine(scripting_engine);
+        .with_scripting_engine(scripting_engine)
+        .with_tui_accessor(tui_accessor);
         if let Some(resolver) = reference_resolver {
             tui_app = tui_app.with_reference_resolver(Arc::new(resolver));
         }
