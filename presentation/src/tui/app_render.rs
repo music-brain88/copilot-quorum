@@ -155,11 +155,7 @@ fn render_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
     );
 }
 
-fn render_hil_modal(
-    frame: &mut ratatui::Frame,
-    area: ratatui::layout::Rect,
-    state: &TuiState,
-) {
+fn render_hil_modal(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, state: &TuiState) {
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Paragraph, Wrap};

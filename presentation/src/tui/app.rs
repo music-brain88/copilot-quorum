@@ -34,8 +34,8 @@ use crossterm::{
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
 use quorum_application::{
-    AgentController, ContextLoaderPort, ConversationLogger, LlmGateway,
-    NoConversationLogger, ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
+    AgentController, ContextLoaderPort, ConversationLogger, LlmGateway, NoConversationLogger,
+    ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
 };
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -140,12 +140,11 @@ impl TuiApp {
         )
         .with_conversation_logger(conversation_logger);
 
-        let controller_handle =
-            tokio::spawn(super::app_controller::controller_task(
-                controller,
-                cmd_rx,
-                progress_tx,
-            ));
+        let controller_handle = tokio::spawn(super::app_controller::controller_task(
+            controller,
+            cmd_rx,
+            progress_tx,
+        ));
 
         Self {
             cmd_tx,
@@ -437,7 +436,6 @@ impl TuiApp {
 
         Ok(())
     }
-
 
     /// Handle a terminal (crossterm) event.
     /// Returns a `SideEffect` if the main loop needs to perform a terminal-level action.
