@@ -10,7 +10,7 @@ use std::collections::HashMap;
 ///
 /// Phase 1 events cover script loading, config changes, mode switches,
 /// and session lifecycle. Phase 2 adds TUI-related events (pane creation,
-/// layout changes). Future phases will add Agent and Knowledge events.
+/// layout changes). Phase 3 adds Agent lifecycle events (tool calls, phases, plans).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptEventType {
     /// Fired before init.lua is loaded. Returning `false` from a listener cancels loading.
@@ -27,6 +27,19 @@ pub enum ScriptEventType {
     PaneCreated,
     /// Fired when the layout preset switches.
     LayoutChanged,
+    /// Fired before a tool call is executed. Returning `false` cancels the tool call.
+    /// Inspired by Vim's BufWritePre (timing) + BufWriteCmd (cancel ability).
+    /// Data: tool_name, args (JSON string)
+    ToolCallBefore,
+    /// Fired after a tool call completes (success or failure).
+    /// Data: tool_name, success (bool), duration_ms (int), output_preview or error (string)
+    ToolCallAfter,
+    /// Fired when the agent transitions to a new phase.
+    /// Data: phase (string representation)
+    PhaseChanged,
+    /// Fired when the agent creates a plan.
+    /// Data: objective (string), task_count (int)
+    PlanCreated,
 }
 
 impl ScriptEventType {
@@ -40,12 +53,16 @@ impl ScriptEventType {
             Self::SessionStarted => "SessionStarted",
             Self::PaneCreated => "PaneCreated",
             Self::LayoutChanged => "LayoutChanged",
+            Self::ToolCallBefore => "ToolCallBefore",
+            Self::ToolCallAfter => "ToolCallAfter",
+            Self::PhaseChanged => "PhaseChanged",
+            Self::PlanCreated => "PlanCreated",
         }
     }
 
     /// Whether this event type supports cancellation (returning `false`).
     pub fn is_cancellable(&self) -> bool {
-        matches!(self, Self::ScriptLoading)
+        matches!(self, Self::ScriptLoading | Self::ToolCallBefore)
     }
 }
 
@@ -61,6 +78,10 @@ impl std::str::FromStr for ScriptEventType {
             "SessionStarted" => Ok(Self::SessionStarted),
             "PaneCreated" => Ok(Self::PaneCreated),
             "LayoutChanged" => Ok(Self::LayoutChanged),
+            "ToolCallBefore" => Ok(Self::ToolCallBefore),
+            "ToolCallAfter" => Ok(Self::ToolCallAfter),
+            "PhaseChanged" => Ok(Self::PhaseChanged),
+            "PlanCreated" => Ok(Self::PlanCreated),
             other => Err(format!("unknown event: '{}'", other)),
         }
     }
@@ -132,6 +153,10 @@ mod tests {
             ScriptEventType::SessionStarted,
             ScriptEventType::PaneCreated,
             ScriptEventType::LayoutChanged,
+            ScriptEventType::ToolCallBefore,
+            ScriptEventType::ToolCallAfter,
+            ScriptEventType::PhaseChanged,
+            ScriptEventType::PlanCreated,
         ];
         for event in &events {
             let name = event.as_str();
@@ -146,14 +171,18 @@ mod tests {
     }
 
     #[test]
-    fn test_only_script_loading_is_cancellable() {
+    fn test_cancellable_events() {
         assert!(ScriptEventType::ScriptLoading.is_cancellable());
+        assert!(ScriptEventType::ToolCallBefore.is_cancellable());
         assert!(!ScriptEventType::ScriptLoaded.is_cancellable());
         assert!(!ScriptEventType::ConfigChanged.is_cancellable());
         assert!(!ScriptEventType::ModeChanged.is_cancellable());
         assert!(!ScriptEventType::SessionStarted.is_cancellable());
         assert!(!ScriptEventType::PaneCreated.is_cancellable());
         assert!(!ScriptEventType::LayoutChanged.is_cancellable());
+        assert!(!ScriptEventType::ToolCallAfter.is_cancellable());
+        assert!(!ScriptEventType::PhaseChanged.is_cancellable());
+        assert!(!ScriptEventType::PlanCreated.is_cancellable());
     }
 
     #[test]

@@ -511,12 +511,37 @@ async fn main() -> Result<()> {
                 Ok(engine) => {
                     // Load init.lua from user config directory
                     if let Some(config_dir) = dirs::config_dir() {
-                        let init_lua = config_dir.join("copilot-quorum").join("init.lua");
+                        let copilot_config_dir = config_dir.join("copilot-quorum");
+                        let init_lua = copilot_config_dir.join("init.lua");
                         if init_lua.exists() {
                             if let Err(e) = engine.load_script(&init_lua) {
                                 eprintln!("Warning: Failed to load {}: {}", init_lua.display(), e);
                             } else {
                                 info!("Loaded init.lua from {}", init_lua.display());
+                            }
+                        }
+
+                        // Load plugins/*.lua in alphabetical order (Vim native packages style)
+                        let plugins_dir = copilot_config_dir.join("plugins");
+                        if plugins_dir.is_dir() {
+                            let mut plugin_files: Vec<PathBuf> = std::fs::read_dir(&plugins_dir)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|entry| entry.ok())
+                                .map(|entry| entry.path())
+                                .filter(|path| path.extension().is_some_and(|ext| ext == "lua"))
+                                .collect();
+                            plugin_files.sort();
+                            for plugin_path in &plugin_files {
+                                if let Err(e) = engine.load_script(plugin_path) {
+                                    eprintln!(
+                                        "Warning: Failed to load plugin {}: {}",
+                                        plugin_path.display(),
+                                        e
+                                    );
+                                } else {
+                                    info!("Loaded plugin: {}", plugin_path.display());
+                                }
                             }
                         }
                     }
