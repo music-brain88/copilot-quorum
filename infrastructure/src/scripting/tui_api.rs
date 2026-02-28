@@ -290,7 +290,7 @@ fn parse_splits(config_table: &LuaTable) -> LuaResult<Vec<u16>> {
     let mut splits = Vec::new();
     for value in splits_table.sequence_values::<i64>() {
         let v = value?;
-        if v < 0 || v > 100 {
+        if !(0..=100).contains(&v) {
             return Err(LuaError::external(format!(
                 "split value must be 0..100, got {}",
                 v

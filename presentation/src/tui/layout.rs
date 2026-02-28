@@ -327,23 +327,23 @@ impl TuiLayoutConfig {
 
     /// Resolve splits for the current preset (handles both built-in and custom).
     pub fn resolve_splits(&self, pane_count: usize) -> Vec<u16> {
-        if let LayoutPreset::Custom(name) = &self.preset {
-            if let Some(config) = self.custom_presets.get(name) {
-                return config.splits.clone();
-            }
+        if let LayoutPreset::Custom(name) = &self.preset
+            && let Some(config) = self.custom_presets.get(name)
+        {
+            return config.splits.clone();
         }
         self.preset.default_splits(pane_count)
     }
 
     /// Resolve split direction for the current preset.
     pub fn resolve_direction(&self) -> Direction {
-        if let LayoutPreset::Custom(name) = &self.preset {
-            if let Some(config) = self.custom_presets.get(name) {
-                return match config.direction.as_str() {
-                    "vertical" => Direction::Vertical,
-                    _ => Direction::Horizontal,
-                };
-            }
+        if let LayoutPreset::Custom(name) = &self.preset
+            && let Some(config) = self.custom_presets.get(name)
+        {
+            return match config.direction.as_str() {
+                "vertical" => Direction::Vertical,
+                _ => Direction::Horizontal,
+            };
         }
         self.preset.split_direction()
     }
