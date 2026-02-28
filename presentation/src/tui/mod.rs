@@ -5,6 +5,13 @@
 //! with channels for communication between the TUI event loop and the controller.
 
 mod app;
+mod app_action_handler;
+mod app_controller;
+mod app_event_dispatch;
+mod app_hil;
+mod app_render;
+mod app_tab_command;
+mod app_tui_changes;
 pub mod content;
 pub mod editor;
 mod event;
