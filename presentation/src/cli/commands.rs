@@ -51,10 +51,9 @@ The agent will:
 
 Use /discuss in the REPL to consult multiple models on a question.
 
-Configuration files are loaded from (in priority order):
-1. --config <path>     Explicit config file
-2. ./quorum.toml       Project-level config
-3. ~/.config/copilot-quorum/config.toml   Global config
+Configuration is done via Lua:
+  ~/.config/copilot-quorum/init.lua        Main config file
+  ~/.config/copilot-quorum/plugins/*.lua   Plugin scripts (alphabetical)
 
 Example:
   copilot-quorum                           # Start Solo mode REPL (default)
@@ -125,15 +124,7 @@ pub struct Cli {
     #[arg(long)]
     pub no_log_file: bool,
 
-    /// Path to configuration file
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<PathBuf>,
-
-    /// Disable loading of configuration files
-    #[arg(long)]
-    pub no_config: bool,
-
-    /// Show configuration file locations and exit
+    /// Show init.lua and plugin paths and exit
     #[arg(long)]
     pub show_config: bool,
 }

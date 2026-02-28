@@ -5,11 +5,11 @@
 
 use super::model_map;
 use super::session::BedrockSession;
-use crate::config::FileBedrockConfig;
 use crate::providers::{ProviderAdapter, ProviderKind};
 use async_trait::async_trait;
 use aws_sdk_bedrockruntime::Client as BedrockClient;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession};
+use quorum_domain::BedrockProviderConfig;
 use quorum_domain::Model;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -25,7 +25,7 @@ impl BedrockProviderAdapter {
     /// Create a new Bedrock provider adapter.
     ///
     /// Initializes AWS credentials and creates a Bedrock Runtime client.
-    pub async fn new(config: &FileBedrockConfig) -> Result<Self, GatewayError> {
+    pub async fn new(config: &BedrockProviderConfig) -> Result<Self, GatewayError> {
         let mut aws_config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(aws_config::Region::new(config.region.clone()));
 
@@ -48,7 +48,7 @@ impl BedrockProviderAdapter {
     ///
     /// Returns `None` if AWS credential initialization fails.
     /// Used for auto-detection during DI assembly.
-    pub async fn try_new(config: &FileBedrockConfig) -> Option<Self> {
+    pub async fn try_new(config: &BedrockProviderConfig) -> Option<Self> {
         match Self::new(config).await {
             Ok(adapter) => {
                 info!(region = %adapter.region, "Bedrock provider initialized");

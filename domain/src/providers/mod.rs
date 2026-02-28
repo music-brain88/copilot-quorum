@@ -1,22 +1,39 @@
-//! Provider configuration from TOML (`[providers]` section)
+//! Provider configuration types (provider-neutral, serde-free).
+//!
+//! These types define the shape of provider settings without depending
+//! on any serialization format (TOML, JSON, etc.).
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileBedrockConfig {
-    /// AWS region for Bedrock models (default: "us-east-1")
+/// Top-level provider configuration.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderConfig {
+    /// Default provider name: "copilot", "anthropic", "openai", "bedrock", "azure".
+    pub default: Option<String>,
+    /// Explicit model → provider routing overrides.
+    pub routing: HashMap<String, String>,
+    /// AWS Bedrock settings.
+    pub bedrock: BedrockProviderConfig,
+    /// Anthropic API settings.
+    pub anthropic: AnthropicProviderConfig,
+    /// OpenAI API settings.
+    pub openai: OpenAiProviderConfig,
+}
+
+/// AWS Bedrock provider configuration.
+#[derive(Debug, Clone)]
+pub struct BedrockProviderConfig {
+    /// AWS region (default: "us-east-1").
     pub region: String,
-    /// AWS profile name for credentials (default: "default")
+    /// AWS profile name for credentials.
     pub profile: Option<String>,
-    /// Max Tokens per response (default: 8192)
+    /// Max tokens per response (default: 8192).
     pub max_tokens: u32,
-    /// Enable cross-region inference (prefixes model ID with region)
+    /// Enable cross-region inference.
     pub cross_region: Option<bool>,
 }
 
-impl Default for FileBedrockConfig {
+impl Default for BedrockProviderConfig {
     fn default() -> Self {
         Self {
             region: "us-east-1".to_string(),
@@ -28,22 +45,21 @@ impl Default for FileBedrockConfig {
 }
 
 /// Anthropic API provider configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileAnthropicConfig {
+#[derive(Debug, Clone)]
+pub struct AnthropicProviderConfig {
     /// Environment variable name for the API key (default: "ANTHROPIC_API_KEY").
     pub api_key_env: String,
     /// Direct API key (not recommended — use env var instead).
     pub api_key: Option<String>,
     /// Base URL for the Anthropic API.
     pub base_url: String,
-    /// Default max tokens per response.
+    /// Max tokens per response (default: 8192).
     pub max_tokens: u32,
     /// Anthropic API version header.
     pub api_version: String,
 }
 
-impl Default for FileAnthropicConfig {
+impl Default for AnthropicProviderConfig {
     fn default() -> Self {
         Self {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
@@ -56,20 +72,19 @@ impl Default for FileAnthropicConfig {
 }
 
 /// OpenAI API provider configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileOpenAiConfig {
+#[derive(Debug, Clone)]
+pub struct OpenAiProviderConfig {
     /// Environment variable name for the API key (default: "OPENAI_API_KEY").
     pub api_key_env: String,
     /// Direct API key (not recommended — use env var instead).
     pub api_key: Option<String>,
-    /// Base URL for the OpenAI API (can be overridden for Azure OpenAI).
+    /// Base URL for the OpenAI API.
     pub base_url: String,
-    /// Default max tokens per response.
+    /// Max tokens per response (default: 8192).
     pub max_tokens: u32,
 }
 
-impl Default for FileOpenAiConfig {
+impl Default for OpenAiProviderConfig {
     fn default() -> Self {
         Self {
             api_key_env: "OPENAI_API_KEY".to_string(),
@@ -78,19 +93,4 @@ impl Default for FileOpenAiConfig {
             max_tokens: 8192,
         }
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FileProvidersConfig {
-    /// Default provider: "copilot", "anthropic", "openai", "bedrock", "azure".
-    pub default: Option<String>,
-    /// Anthropic API settings.
-    pub anthropic: FileAnthropicConfig,
-    /// OpenAI API settings.
-    pub openai: FileOpenAiConfig,
-    /// AWS Bedrock settings.
-    pub bedrock: FileBedrockConfig,
-    /// Explicit model → provider routing overrides.
-    pub routing: HashMap<String, String>,
 }

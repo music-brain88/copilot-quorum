@@ -28,13 +28,13 @@
 //!
 //! ```ignore
 //! use quorum_infrastructure::tools::CliToolProvider;
-//! use quorum_infrastructure::config::FileCliToolsConfig;
+//! use quorum_infrastructure::tools::cli::config::CliToolsConfig;
 //!
 //! // Create with default standard tools
 //! let provider = CliToolProvider::new();
 //!
 //! // Or create from configuration
-//! let config = FileCliToolsConfig::default();
+//! let config = CliToolsConfig::default();
 //! let provider = CliToolProvider::with_config(&config);
 //!
 //! // Check what's available
@@ -61,7 +61,7 @@ use quorum_domain::tool::{
     value_objects::{ToolError, ToolResult, ToolResultMetadata},
 };
 
-use crate::config::FileCliToolsConfig;
+use super::config::CliToolsConfig;
 
 /// Priority for CLI provider (medium-high)
 pub const CLI_PRIORITY: i32 = 50;
@@ -83,11 +83,11 @@ pub struct CliToolProvider {
 impl CliToolProvider {
     /// Create a new CLI provider with default aliases (standard tools)
     pub fn new() -> Self {
-        Self::with_config(&FileCliToolsConfig::default())
+        Self::with_config(&CliToolsConfig::default())
     }
 
     /// Create a CLI provider from configuration
-    pub fn with_config(config: &FileCliToolsConfig) -> Self {
+    pub fn with_config(config: &CliToolsConfig) -> Self {
         let aliases = config.aliases.clone();
 
         // Check which tools are actually available
@@ -506,7 +506,7 @@ mod tests {
             return;
         }
 
-        let mut config = FileCliToolsConfig::default();
+        let mut config = CliToolsConfig::default();
         config
             .aliases
             .insert("grep_search".to_string(), "rg".to_string());

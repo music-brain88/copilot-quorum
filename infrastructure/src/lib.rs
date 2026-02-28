@@ -14,10 +14,6 @@ pub mod scripting;
 pub mod tools;
 
 // Re-export commonly used types
-pub use config::{
-    ConfigLoader, FileAgentConfig, FileConfig, FileModelsConfig, FileOutputConfig,
-    FileOutputFormat, FileReplConfig,
-};
 pub use context::LocalContextLoader;
 pub use copilot::{
     error::{CopilotError, Result},

@@ -27,9 +27,9 @@
 //!
 //! ```ignore
 //! use quorum_infrastructure::tools::cli::{discover_enhanced_tools, DiscoveryResult};
-//! use quorum_infrastructure::config::FileCliToolsConfig;
+//! use quorum_infrastructure::tools::cli::config::CliToolsConfig;
 //!
-//! let config = FileCliToolsConfig::default();
+//! let config = CliToolsConfig::default();
 //! let result = discover_enhanced_tools(&config);
 //!
 //! if result.has_upgrades() {
@@ -53,7 +53,7 @@
 
 use std::collections::HashMap;
 
-use crate::config::{EnhancedToolConfig, FileCliToolsConfig};
+use super::config::{CliToolsConfig, EnhancedToolConfig};
 
 /// Information about a detected enhanced tool
 #[derive(Debug, Clone)]
@@ -113,7 +113,7 @@ impl DiscoveryResult {
 ///
 /// Checks if enhanced tools (rg, fd, bat, gh) are installed and
 /// compares against the current configuration.
-pub fn discover_enhanced_tools(config: &FileCliToolsConfig) -> DiscoveryResult {
+pub fn discover_enhanced_tools(config: &CliToolsConfig) -> DiscoveryResult {
     let mut result = DiscoveryResult::default();
 
     for (tool_name, enhanced) in &config.enhanced {
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_discover_enhanced_tools() {
-        let config = FileCliToolsConfig::default();
+        let config = CliToolsConfig::default();
         let result = discover_enhanced_tools(&config);
 
         // Result depends on what's installed

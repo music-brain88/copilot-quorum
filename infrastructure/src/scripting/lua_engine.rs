@@ -5,8 +5,8 @@
 
 use mlua::prelude::*;
 use quorum_application::{
-    ConfigAccessorPort, EventOutcome, KeymapAction, ScriptError, ScriptingEnginePort,
-    TuiAccessorPort,
+    ConfigAccessorPort, CustomToolDef, EventOutcome, KeymapAction, ScriptError,
+    ScriptingEnginePort, TuiAccessorPort,
 };
 use quorum_domain::scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 use std::path::Path;
@@ -17,6 +17,7 @@ use super::config_api::register_config_api;
 use super::event_bus::EventBus;
 use super::keymap_api::{KeymapBinding, KeymapRegistry, register_keymap_api};
 use super::sandbox::apply_sandbox;
+use super::tools_api::register_tools_api;
 use super::tui_api::register_tui_api;
 
 /// Lua 5.4 scripting engine implementing `ScriptingEnginePort`.
@@ -29,6 +30,8 @@ pub struct LuaScriptingEngine {
     keymap_registry: Arc<Mutex<KeymapRegistry>>,
     command_registry: Arc<Mutex<CommandRegistry>>,
     callback_store: Arc<Mutex<Vec<(u64, LuaRegistryKey)>>>,
+    pending_custom_tools: Arc<Mutex<Vec<CustomToolDef>>>,
+    provider_config: Arc<Mutex<quorum_domain::ProviderConfig>>,
 }
 
 impl LuaScriptingEngine {
@@ -51,6 +54,9 @@ impl LuaScriptingEngine {
         let command_registry = Arc::new(Mutex::new(CommandRegistry::new()));
         let callback_store: Arc<Mutex<Vec<(u64, LuaRegistryKey)>>> =
             Arc::new(Mutex::new(Vec::new()));
+        let pending_custom_tools: Arc<Mutex<Vec<CustomToolDef>>> = Arc::new(Mutex::new(Vec::new()));
+        let provider_config: Arc<Mutex<quorum_domain::ProviderConfig>> =
+            Arc::new(Mutex::new(quorum_domain::ProviderConfig::default()));
 
         // Apply sandbox
         apply_sandbox(&lua).map_err(|e| ScriptError {
@@ -110,6 +116,14 @@ impl LuaScriptingEngine {
         )
         .map_err(lua_to_script_error)?;
 
+        // Register quorum.tools API
+        register_tools_api(&lua, &quorum, Arc::clone(&pending_custom_tools))
+            .map_err(lua_to_script_error)?;
+
+        // Register quorum.providers API
+        super::providers_api::register_providers_api(&lua, &quorum, Arc::clone(&provider_config))
+            .map_err(lua_to_script_error)?;
+
         // Set quorum as global
         lua.globals()
             .set("quorum", quorum)
@@ -121,6 +135,8 @@ impl LuaScriptingEngine {
             keymap_registry,
             command_registry,
             callback_store,
+            pending_custom_tools,
+            provider_config,
         })
     }
 
@@ -305,6 +321,17 @@ impl ScriptingEnginePort for LuaScriptingEngine {
         }
 
         Ok(())
+    }
+
+    fn registered_custom_tools(&self) -> Vec<CustomToolDef> {
+        self.pending_custom_tools
+            .lock()
+            .map(|tools| tools.clone())
+            .unwrap_or_default()
+    }
+
+    fn provider_config(&self) -> Option<quorum_domain::ProviderConfig> {
+        self.provider_config.lock().ok().map(|cfg| cfg.clone())
     }
 }
 
