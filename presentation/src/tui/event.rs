@@ -50,6 +50,8 @@ pub enum TuiCommand {
     SetCancellation(tokio_util::sync::CancellationToken),
     /// Set reference resolver for automatic reference resolution
     SetReferenceResolver(std::sync::Arc<dyn quorum_application::ReferenceResolverPort>),
+    /// Set scripting engine for Lua command dispatch
+    SetScriptingEngine(std::sync::Arc<dyn quorum_application::ScriptingEnginePort>),
     /// Spawn a new interaction
     SpawnInteraction {
         form: InteractionForm,

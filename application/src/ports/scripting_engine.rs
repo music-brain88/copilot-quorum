@@ -64,6 +64,30 @@ pub trait ScriptingEnginePort: Send + Sync {
     ///
     /// Called by the presentation layer when `KeyAction::LuaCallback(id)` is triggered.
     fn execute_callback(&self, callback_id: u64) -> Result<(), ScriptError>;
+
+    /// Check if a tool call should proceed (ToolCallBefore event).
+    ///
+    /// Returns `true` if the tool call should continue, `false` to cancel it.
+    /// Called by `ExecuteTaskUseCase` before each tool execution.
+    fn on_tool_call_before(&self, _tool_name: &str, _args_json: &str) -> bool {
+        true
+    }
+
+    /// Retrieve registered custom commands.
+    ///
+    /// Returns a list of `(name, description, usage, callback_id)` tuples.
+    /// The `AgentController` checks this when encountering unknown slash commands.
+    fn registered_commands(&self) -> Vec<(String, String, String, u64)> {
+        Vec::new()
+    }
+
+    /// Execute a command callback by its registry ID, passing user-provided args.
+    ///
+    /// Called by `AgentController` when a registered Lua command is invoked.
+    fn execute_command_callback(&self, callback_id: u64, args: &str) -> Result<(), ScriptError> {
+        let _ = (callback_id, args);
+        Ok(())
+    }
 }
 
 /// Action bound to a custom keymap entry.

@@ -12,6 +12,7 @@ use quorum_domain::scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use super::command_api::{CommandRegistry, register_command_api};
 use super::config_api::register_config_api;
 use super::event_bus::EventBus;
 use super::keymap_api::{KeymapBinding, KeymapRegistry, register_keymap_api};
@@ -26,6 +27,7 @@ pub struct LuaScriptingEngine {
     lua: Mutex<Lua>,
     event_bus: Arc<Mutex<EventBus>>,
     keymap_registry: Arc<Mutex<KeymapRegistry>>,
+    command_registry: Arc<Mutex<CommandRegistry>>,
     callback_store: Arc<Mutex<Vec<(u64, LuaRegistryKey)>>>,
 }
 
@@ -38,6 +40,7 @@ impl LuaScriptingEngine {
     /// - `quorum.config.{get,set,keys}` + metatable proxy
     /// - `quorum.keymap.set(mode, key, action)` keybinding API
     /// - `quorum.tui.{routes,layout,content}` TUI manipulation API
+    /// - `quorum.command.register(name, opts)` custom command registration
     pub fn new(
         config: Arc<Mutex<dyn ConfigAccessorPort>>,
         tui_accessor: Arc<Mutex<dyn TuiAccessorPort>>,
@@ -45,6 +48,7 @@ impl LuaScriptingEngine {
         let lua = Lua::new();
         let event_bus = Arc::new(Mutex::new(EventBus::new()));
         let keymap_registry = Arc::new(Mutex::new(KeymapRegistry::new()));
+        let command_registry = Arc::new(Mutex::new(CommandRegistry::new()));
         let callback_store: Arc<Mutex<Vec<(u64, LuaRegistryKey)>>> =
             Arc::new(Mutex::new(Vec::new()));
 
@@ -64,7 +68,7 @@ impl LuaScriptingEngine {
                     // Validate event name
                     if event_name.parse::<ScriptEventType>().is_err() {
                         return Err(LuaError::external(format!(
-                            "unknown event: '{}'. Valid events: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, PaneCreated, LayoutChanged",
+                            "unknown event: '{}'. Valid events: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, PaneCreated, LayoutChanged, ToolCallBefore, ToolCallAfter, PhaseChanged, PlanCreated",
                             event_name
                         )));
                     }
@@ -97,6 +101,15 @@ impl LuaScriptingEngine {
         register_tui_api(&lua, &quorum, tui_accessor, Arc::clone(&event_bus))
             .map_err(lua_to_script_error)?;
 
+        // Register quorum.command API
+        register_command_api(
+            &lua,
+            &quorum,
+            Arc::clone(&command_registry),
+            Arc::clone(&callback_store),
+        )
+        .map_err(lua_to_script_error)?;
+
         // Set quorum as global
         lua.globals()
             .set("quorum", quorum)
@@ -106,6 +119,7 @@ impl LuaScriptingEngine {
             lua: Mutex::new(lua),
             event_bus,
             keymap_registry,
+            command_registry,
             callback_store,
         })
     }
@@ -233,6 +247,64 @@ impl ScriptingEnginePort for LuaScriptingEngine {
 
     fn execute_callback(&self, callback_id: u64) -> Result<(), ScriptError> {
         self.execute_callback(callback_id)
+    }
+
+    fn on_tool_call_before(&self, tool_name: &str, args_json: &str) -> bool {
+        let data = ScriptEventData::new()
+            .with_field("tool_name", ScriptValue::String(tool_name.to_string()))
+            .with_field("args", ScriptValue::String(args_json.to_string()));
+
+        match self.emit_event(ScriptEventType::ToolCallBefore, data) {
+            Ok(EventOutcome::Continue) => true,
+            Ok(EventOutcome::Cancelled) => false,
+            Err(_) => true, // On error, allow the tool call to proceed
+        }
+    }
+
+    fn registered_commands(&self) -> Vec<(String, String, String, u64)> {
+        let registry = match self.command_registry.lock() {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
+        registry
+            .entries()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.name.clone(),
+                    entry.description.clone(),
+                    entry.usage.clone(),
+                    entry.callback_id,
+                )
+            })
+            .collect()
+    }
+
+    fn execute_command_callback(&self, callback_id: u64, args: &str) -> Result<(), ScriptError> {
+        let lua = self.lua.lock().map_err(|e| ScriptError {
+            message: format!("lua lock poisoned: {}", e),
+        })?;
+        let store = self.callback_store.lock().map_err(|e| ScriptError {
+            message: format!("callback store lock poisoned: {}", e),
+        })?;
+
+        let registry_key = store
+            .iter()
+            .find(|(id, _)| *id == callback_id)
+            .map(|(_, key)| key);
+
+        if let Some(key) = registry_key {
+            let func: LuaFunction = lua.registry_value(key).map_err(lua_to_script_error)?;
+            func.call::<()>(args.to_string())
+                .map_err(lua_to_script_error)?;
+        } else {
+            return Err(ScriptError {
+                message: format!("command callback not found: {}", callback_id),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -501,5 +573,90 @@ mod tests {
         let result = engine.load_script(&script_path);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("bad.lua"));
+    }
+
+    #[test]
+    fn test_plugins_load_in_alphabetical_order() {
+        let engine = make_engine();
+
+        // Create a plugins directory with numbered lua files
+        let dir = tempfile::tempdir().unwrap();
+        let plugins_dir = dir.path().join("plugins");
+        std::fs::create_dir(&plugins_dir).unwrap();
+
+        // Write plugins that append to a global list (intentionally out of order)
+        std::fs::write(
+            plugins_dir.join("02_second.lua"),
+            "_G.load_order = (_G.load_order or '') .. 'second,'",
+        )
+        .unwrap();
+        std::fs::write(
+            plugins_dir.join("01_first.lua"),
+            "_G.load_order = (_G.load_order or '') .. 'first,'",
+        )
+        .unwrap();
+        std::fs::write(
+            plugins_dir.join("03_third.lua"),
+            "_G.load_order = (_G.load_order or '') .. 'third,'",
+        )
+        .unwrap();
+        // Non-lua file should be ignored
+        std::fs::write(plugins_dir.join("README.md"), "# Plugins").unwrap();
+
+        // Load plugins in sorted order (simulating main.rs logic)
+        let mut plugin_files: Vec<std::path::PathBuf> = std::fs::read_dir(&plugins_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "lua"))
+            .collect();
+        plugin_files.sort();
+        for path in &plugin_files {
+            engine.load_script(path).unwrap();
+        }
+
+        // Verify load order
+        let lua = engine.lua.lock().unwrap();
+        let order: String = lua.globals().get("load_order").unwrap();
+        assert_eq!(order, "first,second,third,");
+    }
+
+    #[test]
+    fn test_plugin_failure_does_not_block_others() {
+        let engine = make_engine();
+
+        let dir = tempfile::tempdir().unwrap();
+        let plugins_dir = dir.path().join("plugins");
+        std::fs::create_dir(&plugins_dir).unwrap();
+
+        std::fs::write(
+            plugins_dir.join("01_good.lua"),
+            "_G.loaded_plugins = (_G.loaded_plugins or '') .. 'good,'",
+        )
+        .unwrap();
+        std::fs::write(plugins_dir.join("02_bad.lua"), "this is invalid lua {{{{").unwrap();
+        std::fs::write(
+            plugins_dir.join("03_also_good.lua"),
+            "_G.loaded_plugins = (_G.loaded_plugins or '') .. 'also_good,'",
+        )
+        .unwrap();
+
+        let mut plugin_files: Vec<std::path::PathBuf> = std::fs::read_dir(&plugins_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "lua"))
+            .collect();
+        plugin_files.sort();
+
+        // Load each plugin, skipping failures (simulating main.rs behavior)
+        for path in &plugin_files {
+            let _ = engine.load_script(path); // Errors are logged, not propagated
+        }
+
+        // Good plugins should still have loaded
+        let lua = engine.lua.lock().unwrap();
+        let loaded: Option<String> = lua.globals().get("loaded_plugins").unwrap();
+        assert_eq!(loaded.unwrap(), "good,also_good,");
     }
 }

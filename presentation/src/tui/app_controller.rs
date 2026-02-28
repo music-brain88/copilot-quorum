@@ -98,6 +98,9 @@ pub(super) async fn controller_task(
                     TuiCommand::SetReferenceResolver(resolver) => {
                         controller.set_reference_resolver(resolver);
                     }
+                    TuiCommand::SetScriptingEngine(engine) => {
+                        controller.set_scripting_engine(engine);
+                    }
                     TuiCommand::SpawnInteraction {
                         form,
                         query,

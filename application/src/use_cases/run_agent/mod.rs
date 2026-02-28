@@ -30,6 +30,7 @@ use crate::ports::conversation_logger::{
 use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::reference_resolver::ReferenceResolverPort;
+use crate::ports::scripting_engine::ScriptingEnginePort;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::execute_task::ExecuteTaskUseCase;
@@ -56,6 +57,7 @@ pub struct RunAgentUseCase {
     pub(super) human_intervention: Option<Arc<dyn HumanInterventionPort>>,
     pub(super) reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
     pub(super) conversation_logger: Arc<dyn ConversationLogger>,
+    pub(super) scripting_engine: Option<Arc<dyn ScriptingEnginePort>>,
 }
 
 impl Clone for RunAgentUseCase {
@@ -69,6 +71,7 @@ impl Clone for RunAgentUseCase {
             human_intervention: self.human_intervention.clone(),
             reference_resolver: self.reference_resolver.clone(),
             conversation_logger: self.conversation_logger.clone(),
+            scripting_engine: self.scripting_engine.clone(),
         }
     }
 }
@@ -105,6 +108,7 @@ impl RunAgentUseCase {
             human_intervention: None,
             reference_resolver: None,
             conversation_logger: Arc::new(NoConversationLogger),
+            scripting_engine: None,
         }
     }
 
@@ -123,6 +127,7 @@ impl RunAgentUseCase {
             human_intervention: None,
             reference_resolver: None,
             conversation_logger: Arc::new(NoConversationLogger),
+            scripting_engine: None,
         }
     }
 
@@ -147,6 +152,12 @@ impl RunAgentUseCase {
     /// Set a conversation logger for structured event logging.
     pub fn with_conversation_logger(mut self, logger: Arc<dyn ConversationLogger>) -> Self {
         self.conversation_logger = logger;
+        self
+    }
+
+    /// Set a scripting engine for ToolCallBefore events in task execution.
+    pub fn with_scripting_engine(mut self, engine: Arc<dyn ScriptingEnginePort>) -> Self {
+        self.scripting_engine = Some(engine);
         self
     }
 
@@ -425,6 +436,9 @@ impl RunAgentUseCase {
                         info!("Ensemble planning result:\n{}", result.summary());
 
                         state.set_plan(selected.plan.clone());
+                        if let Some(plan) = &state.plan {
+                            progress.on_plan_created(plan);
+                        }
 
                         // Ensemble mode: voting is already done during plan generation
                         // Skip the separate review phase and mark as approved
@@ -514,6 +528,9 @@ impl RunAgentUseCase {
             };
 
             state.set_plan(plan);
+            if let Some(plan) = &state.plan {
+                progress.on_plan_created(plan);
+            }
 
             // Phase 3: Plan Review (Quorum) - controlled by PhaseScope
             if !input.mode.includes_plan_review() {
@@ -687,7 +704,7 @@ impl RunAgentUseCase {
             self.tool_executor.clone(),
             self.cancellation_token.clone(),
         );
-        let execute_uc = ExecuteTaskUseCase::new(
+        let mut execute_uc = ExecuteTaskUseCase::new(
             self.gateway.clone(),
             self.tool_executor.clone(),
             self.tool_schema.clone(),
@@ -695,6 +712,9 @@ impl RunAgentUseCase {
             Arc::new(reviewer),
             self.conversation_logger.clone(),
         );
+        if let Some(engine) = &self.scripting_engine {
+            execute_uc = execute_uc.with_scripting_engine(engine.clone());
+        }
 
         let execution_result = execute_uc
             .execute(&input, &mut state, &system_prompt, progress)

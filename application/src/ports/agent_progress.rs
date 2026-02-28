@@ -132,7 +132,12 @@ pub trait AgentProgressNotifier: Send + Sync {
     /// Called when LLM streaming ends.
     fn on_llm_stream_end(&self) {}
 
-    // ==================== Plan Revision Callbacks ====================
+    // ==================== Plan Lifecycle Callbacks ====================
+
+    /// Called when the agent creates a plan.
+    ///
+    /// Used by ScriptProgressBridge to emit `PlanCreated` events.
+    fn on_plan_created(&self, _plan: &Plan) {}
 
     /// Called when a plan revision is triggered after rejection
     fn on_plan_revision(&self, _revision: usize, _feedback: &str) {}
