@@ -36,7 +36,7 @@ pub fn lookup_key(key: &str) -> Option<&'static ConfigKeyInfo> {
     KNOWN_KEYS.iter().find(|k| k.key == key)
 }
 
-static KNOWN_KEYS: [ConfigKeyInfo; 20] = [
+static KNOWN_KEYS: [ConfigKeyInfo; 29] = [
     // ==================== agent.* (SessionMode + AgentPolicy) ====================
     ConfigKeyInfo {
         key: "agent.consensus_level",
@@ -163,6 +163,62 @@ static KNOWN_KEYS: [ConfigKeyInfo; 20] = [
         mutability: Mutability::Mutable,
         valid_values: &[],
     },
+    // ==================== tui.input.* ====================
+    ConfigKeyInfo {
+        key: "tui.input.submit_key",
+        description: "Key binding to submit input",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    ConfigKeyInfo {
+        key: "tui.input.newline_key",
+        description: "Key binding to insert newline",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    ConfigKeyInfo {
+        key: "tui.input.editor_key",
+        description: "Key to launch external editor",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    ConfigKeyInfo {
+        key: "tui.input.editor_action",
+        description: "Action after editor closes",
+        mutability: Mutability::Mutable,
+        valid_values: &["return_to_insert", "submit"],
+    },
+    ConfigKeyInfo {
+        key: "tui.input.max_height",
+        description: "Maximum input area height in lines",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    ConfigKeyInfo {
+        key: "tui.input.dynamic_height",
+        description: "Input area grows with content",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    ConfigKeyInfo {
+        key: "tui.input.context_header",
+        description: "Show context header in editor",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    // ==================== tui.layout.* ====================
+    ConfigKeyInfo {
+        key: "tui.layout.preset",
+        description: "TUI layout preset",
+        mutability: Mutability::Mutable,
+        valid_values: &["default", "minimal", "wide", "stacked"],
+    },
+    ConfigKeyInfo {
+        key: "tui.layout.flex_threshold",
+        description: "Responsive layout width threshold",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
 ];
 
 #[cfg(test)]
@@ -191,12 +247,12 @@ mod tests {
 
     #[test]
     fn test_all_keys_mutable() {
-        // Phase 1.5: all 20 keys are mutable
+        // All 29 keys are mutable
         let mutable: Vec<_> = known_keys()
             .iter()
             .filter(|k| k.mutability == Mutability::Mutable)
             .collect();
-        assert_eq!(mutable.len(), 20);
+        assert_eq!(mutable.len(), 29);
     }
 
     #[test]
@@ -227,5 +283,28 @@ mod tests {
         assert!(lookup_key("context_budget.max_entry_bytes").is_some());
         assert!(lookup_key("context_budget.max_total_bytes").is_some());
         assert!(lookup_key("context_budget.recent_full_count").is_some());
+    }
+
+    #[test]
+    fn test_tui_input_keys() {
+        assert!(lookup_key("tui.input.submit_key").is_some());
+        assert!(lookup_key("tui.input.newline_key").is_some());
+        assert!(lookup_key("tui.input.editor_key").is_some());
+        let editor_action = lookup_key("tui.input.editor_action").unwrap();
+        assert!(editor_action.valid_values.contains(&"return_to_insert"));
+        assert!(editor_action.valid_values.contains(&"submit"));
+        assert!(lookup_key("tui.input.max_height").is_some());
+        assert!(lookup_key("tui.input.dynamic_height").is_some());
+        assert!(lookup_key("tui.input.context_header").is_some());
+    }
+
+    #[test]
+    fn test_tui_layout_keys() {
+        let preset = lookup_key("tui.layout.preset").unwrap();
+        assert!(preset.valid_values.contains(&"default"));
+        assert!(preset.valid_values.contains(&"minimal"));
+        assert!(preset.valid_values.contains(&"wide"));
+        assert!(preset.valid_values.contains(&"stacked"));
+        assert!(lookup_key("tui.layout.flex_threshold").is_some());
     }
 }

@@ -8,6 +8,25 @@
 use quorum_domain::scripting::{ScriptEventData, ScriptEventType};
 use std::path::Path;
 
+/// Custom tool definition registered via Lua scripting.
+#[derive(Debug, Clone)]
+pub struct CustomToolDef {
+    pub name: String,
+    pub description: String,
+    pub command: String,
+    pub risk_level: String, // "low" or "high"
+    pub parameters: Vec<CustomToolParam>,
+}
+
+/// Parameter definition for a custom tool.
+#[derive(Debug, Clone)]
+pub struct CustomToolParam {
+    pub name: String,
+    pub param_type: String, // "string", "number", "boolean"
+    pub description: String,
+    pub required: bool,
+}
+
 /// Outcome of firing an event through the scripting engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventOutcome {
@@ -87,6 +106,21 @@ pub trait ScriptingEnginePort: Send + Sync {
     fn execute_command_callback(&self, callback_id: u64, args: &str) -> Result<(), ScriptError> {
         let _ = (callback_id, args);
         Ok(())
+    }
+
+    /// Retrieve custom tool definitions registered via Lua scripting.
+    ///
+    /// Returns tool definitions that were registered using `quorum.tools.register()`.
+    /// These are merged into the executor's tool spec at startup.
+    fn registered_custom_tools(&self) -> Vec<CustomToolDef> {
+        Vec::new()
+    }
+
+    /// Retrieve provider configuration set via Lua scripting.
+    ///
+    /// Returns the provider config snapshot after init.lua and plugins have run.
+    fn provider_config(&self) -> Option<quorum_domain::ProviderConfig> {
+        None
     }
 }
 

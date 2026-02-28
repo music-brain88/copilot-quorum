@@ -14,7 +14,8 @@ pub use ports::agent_progress::{AgentProgressNotifier, NoAgentProgress};
 pub use ports::config_accessor::{ConfigAccessError, ConfigAccessorPort, ConfigValue};
 pub use ports::conversation_logger::{ConversationEvent, ConversationLogger, NoConversationLogger};
 pub use ports::scripting_engine::{
-    EventOutcome, KeymapAction, NoScriptingEngine, ScriptError, ScriptingEnginePort,
+    CustomToolDef, CustomToolParam, EventOutcome, KeymapAction, NoScriptingEngine, ScriptError,
+    ScriptingEnginePort,
 };
 pub use ports::tui_accessor::{
     CustomPresetConfig, TuiAccessError, TuiAccessorPort, TuiPendingChanges,

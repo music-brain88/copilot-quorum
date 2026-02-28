@@ -453,8 +453,7 @@ pub enum ModelStreamStatus {
 
 /// TUI input configuration (presentation-layer view)
 ///
-/// This is the presentation-layer equivalent of `FileTuiInputConfig`.
-/// Values are typically populated from infrastructure config at startup.
+/// Values are populated from QuorumConfig (set via Lua init.lua) at startup.
 #[derive(Debug, Clone)]
 pub struct TuiInputConfig {
     /// Maximum height for the input area in text lines (default: 8)

@@ -23,11 +23,14 @@
 
 use async_trait::async_trait;
 use quorum_application::ports::tool_executor::ToolExecutorPort;
+use quorum_domain::RiskLevel;
 use quorum_domain::tool::{
-    entities::{ToolCall, ToolSpec},
+    entities::{ToolCall, ToolDefinition, ToolParameter, ToolSpec},
     provider::ToolProvider,
     value_objects::{ToolError, ToolResult},
 };
+
+use quorum_application::ports::scripting_engine::CustomToolDef;
 
 use super::{command, custom_provider::CustomToolProvider, file, search};
 
@@ -46,7 +49,7 @@ use super::{command, custom_provider::CustomToolProvider, file, search};
 ///
 /// # Custom Tools
 ///
-/// User-defined tools from `quorum.toml` are integrated via [`with_custom_tools()`](Self::with_custom_tools).
+/// User-defined tools from Lua scripting are integrated via [`with_custom_tool_defs()`](Self::with_custom_tool_defs).
 /// Custom tool calls are delegated to the embedded [`CustomToolProvider`].
 ///
 /// # Web Tools Integration
@@ -122,46 +125,29 @@ impl LocalToolExecutor {
         self
     }
 
-    /// Register custom tools from config.
-    ///
-    /// Custom tool definitions are added to the tool spec so they appear
-    /// in `ToolSchemaPort::all_tools_schema()` and `available_tools()`. Execution is delegated
-    /// to the embedded [`CustomToolProvider`].
-    pub fn with_custom_tools(
-        mut self,
-        configs: &std::collections::HashMap<String, crate::config::FileCustomToolConfig>,
-    ) -> Self {
-        if configs.is_empty() {
+    /// Register custom tools from Lua definitions.
+    pub fn with_custom_tool_defs(mut self, defs: &[CustomToolDef]) -> Self {
+        if defs.is_empty() {
             return self;
         }
 
-        let mut provider = CustomToolProvider::from_config(configs);
+        let mut provider = CustomToolProvider::from_custom_tool_defs(defs);
         if let Some(dir) = &self.working_dir {
             provider = provider.with_working_dir(dir.clone());
         }
 
-        // Register custom tool definitions in the tool spec so they appear
-        // in ToolSchemaPort::all_tools_schema() and available_tools()
-        for (name, config) in configs {
-            let risk_level = match config.risk_level.to_lowercase().as_str() {
-                "low" => quorum_domain::tool::entities::RiskLevel::Low,
-                _ => quorum_domain::tool::entities::RiskLevel::High,
+        for def in defs {
+            let risk_level = match def.risk_level.as_str() {
+                "low" => RiskLevel::Low,
+                _ => RiskLevel::High,
             };
-            let mut definition = quorum_domain::tool::entities::ToolDefinition::new(
-                name.clone(),
-                config.description.clone(),
-                risk_level,
-            );
-            let mut params: Vec<_> = config.parameters.iter().collect();
-            params.sort_by_key(|(n, _)| n.as_str());
-            for (param_name, param_config) in params {
+            let mut definition = ToolDefinition::new(&def.name, &def.description, risk_level);
+            let mut sorted_params = def.parameters.clone();
+            sorted_params.sort_by(|a, b| a.name.cmp(&b.name));
+            for p in &sorted_params {
                 definition = definition.with_parameter(
-                    quorum_domain::tool::entities::ToolParameter::new(
-                        param_name.clone(),
-                        param_config.description.clone(),
-                        param_config.required,
-                    )
-                    .with_type(param_config.param_type.clone()),
+                    ToolParameter::new(&p.name, &p.description, p.required)
+                        .with_type(&p.param_type),
                 );
             }
             self.tool_spec = self.tool_spec.register(definition);
