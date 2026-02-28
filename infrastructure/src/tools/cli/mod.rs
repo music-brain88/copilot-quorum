@@ -3,6 +3,7 @@
 //! Wraps external CLI tools (grep, find, rg, fd, etc.) as Quorum tools.
 //! Includes discovery for suggesting enhanced tools.
 
+pub mod config;
 mod discovery;
 mod provider;
 

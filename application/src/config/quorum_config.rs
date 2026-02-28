@@ -29,7 +29,7 @@ use quorum_domain::agent::validation::{ConfigIssue, Severity};
 use quorum_domain::config::config_key::lookup_key;
 use quorum_domain::{
     AgentPolicy, ConsensusLevel, HilMode, Model, ModelConfig, OrchestrationStrategy, OutputFormat,
-    PhaseScope, SessionMode,
+    PhaseScope, ProviderConfig, SessionMode,
 };
 
 /// Configuration container for buffer controllers.
@@ -47,6 +47,18 @@ pub struct QuorumConfig {
     color: bool,
     show_progress: bool,
     history_file: Option<String>,
+    provider_config: ProviderConfig,
+    // TUI input settings
+    tui_submit_key: String,
+    tui_newline_key: String,
+    tui_editor_key: String,
+    tui_editor_action: String,
+    tui_max_input_height: u16,
+    tui_dynamic_height: bool,
+    tui_context_header: bool,
+    // TUI layout settings
+    tui_layout_preset: String,
+    tui_flex_threshold: u16,
 }
 
 impl Default for QuorumConfig {
@@ -60,6 +72,16 @@ impl Default for QuorumConfig {
             color: true,
             show_progress: true,
             history_file: None,
+            provider_config: ProviderConfig::default(),
+            tui_submit_key: "enter".to_string(),
+            tui_newline_key: "shift+enter".to_string(),
+            tui_editor_key: "I".to_string(),
+            tui_editor_action: "return_to_insert".to_string(),
+            tui_max_input_height: 10,
+            tui_dynamic_height: true,
+            tui_context_header: true,
+            tui_layout_preset: "default".to_string(),
+            tui_flex_threshold: 120,
         }
     }
 }
@@ -81,6 +103,16 @@ impl QuorumConfig {
             color: true,
             show_progress: true,
             history_file: None,
+            provider_config: ProviderConfig::default(),
+            tui_submit_key: "enter".to_string(),
+            tui_newline_key: "shift+enter".to_string(),
+            tui_editor_key: "I".to_string(),
+            tui_editor_action: "return_to_insert".to_string(),
+            tui_max_input_height: 10,
+            tui_dynamic_height: true,
+            tui_context_header: true,
+            tui_layout_preset: "default".to_string(),
+            tui_flex_threshold: 120,
         }
     }
 
@@ -146,6 +178,56 @@ impl QuorumConfig {
         self.history_file.as_deref()
     }
 
+    /// Provider configuration (read-only).
+    pub fn provider_config(&self) -> &ProviderConfig {
+        &self.provider_config
+    }
+
+    /// Provider configuration (mutable).
+    pub fn provider_config_mut(&mut self) -> &mut ProviderConfig {
+        &mut self.provider_config
+    }
+
+    // ---- TUI input settings ----
+
+    pub fn tui_submit_key(&self) -> &str {
+        &self.tui_submit_key
+    }
+
+    pub fn tui_newline_key(&self) -> &str {
+        &self.tui_newline_key
+    }
+
+    pub fn tui_editor_key(&self) -> &str {
+        &self.tui_editor_key
+    }
+
+    pub fn tui_editor_action(&self) -> &str {
+        &self.tui_editor_action
+    }
+
+    pub fn tui_max_input_height(&self) -> u16 {
+        self.tui_max_input_height
+    }
+
+    pub fn tui_dynamic_height(&self) -> bool {
+        self.tui_dynamic_height
+    }
+
+    pub fn tui_context_header(&self) -> bool {
+        self.tui_context_header
+    }
+
+    // ---- TUI layout settings ----
+
+    pub fn tui_layout_preset(&self) -> &str {
+        &self.tui_layout_preset
+    }
+
+    pub fn tui_flex_threshold(&self) -> u16 {
+        self.tui_flex_threshold
+    }
+
     // ==================== Builder Methods (init-time) ====================
 
     /// Set the working directory.
@@ -187,6 +269,12 @@ impl QuorumConfig {
     /// Set history file path.
     pub fn with_history_file(mut self, path: Option<String>) -> Self {
         self.history_file = path;
+        self
+    }
+
+    /// Set provider configuration.
+    pub fn with_provider_config(mut self, config: ProviderConfig) -> Self {
+        self.provider_config = config;
         self
     }
 
@@ -293,6 +381,21 @@ impl ConfigAccessorPort for QuorumConfig {
             "context_budget.recent_full_count" => Ok(ConfigValue::Integer(
                 self.execution.context_budget.recent_full_count() as i64,
             )),
+            // ---- tui.input.* ----
+            "tui.input.submit_key" => Ok(ConfigValue::String(self.tui_submit_key.clone())),
+            "tui.input.newline_key" => Ok(ConfigValue::String(self.tui_newline_key.clone())),
+            "tui.input.editor_key" => Ok(ConfigValue::String(self.tui_editor_key.clone())),
+            "tui.input.editor_action" => Ok(ConfigValue::String(self.tui_editor_action.clone())),
+            "tui.input.max_height" => {
+                Ok(ConfigValue::Integer(self.tui_max_input_height as i64))
+            }
+            "tui.input.dynamic_height" => Ok(ConfigValue::Boolean(self.tui_dynamic_height)),
+            "tui.input.context_header" => Ok(ConfigValue::Boolean(self.tui_context_header)),
+            // ---- tui.layout.* ----
+            "tui.layout.preset" => Ok(ConfigValue::String(self.tui_layout_preset.clone())),
+            "tui.layout.flex_threshold" => {
+                Ok(ConfigValue::Integer(self.tui_flex_threshold as i64))
+            }
             _ => Err(ConfigAccessError::UnknownKey {
                 key: key.to_string(),
             }),
@@ -485,6 +588,75 @@ impl ConfigAccessorPort for QuorumConfig {
                     message: errors.join("; "),
                 })?;
                 self.execution.context_budget = budget;
+                Ok(vec![])
+            }
+            // ---- tui.input.* ----
+            "tui.input.submit_key" => {
+                let s = extract_string(key, value)?;
+                self.tui_submit_key = s;
+                Ok(vec![])
+            }
+            "tui.input.newline_key" => {
+                let s = extract_string(key, value)?;
+                self.tui_newline_key = s;
+                Ok(vec![])
+            }
+            "tui.input.editor_key" => {
+                let s = extract_string(key, value)?;
+                self.tui_editor_key = s;
+                Ok(vec![])
+            }
+            "tui.input.editor_action" => {
+                let s = extract_string(key, value)?;
+                match s.as_str() {
+                    "return_to_insert" | "submit" => {
+                        self.tui_editor_action = s;
+                        Ok(vec![])
+                    }
+                    _ => Err(ConfigAccessError::InvalidValue {
+                        key: key.to_string(),
+                        message: format!(
+                            "unknown editor_action '{}', valid: return_to_insert, submit",
+                            s
+                        ),
+                    }),
+                }
+            }
+            "tui.input.max_height" => {
+                let n = extract_positive_int(key, value)?;
+                self.tui_max_input_height = n as u16;
+                Ok(vec![])
+            }
+            "tui.input.dynamic_height" => {
+                let b = extract_bool(key, value)?;
+                self.tui_dynamic_height = b;
+                Ok(vec![])
+            }
+            "tui.input.context_header" => {
+                let b = extract_bool(key, value)?;
+                self.tui_context_header = b;
+                Ok(vec![])
+            }
+            // ---- tui.layout.* ----
+            "tui.layout.preset" => {
+                let s = extract_string(key, value)?;
+                match s.as_str() {
+                    "default" | "minimal" | "wide" | "stacked" => {
+                        self.tui_layout_preset = s;
+                        Ok(vec![])
+                    }
+                    _ => Err(ConfigAccessError::InvalidValue {
+                        key: key.to_string(),
+                        message: format!(
+                            "unknown preset '{}', valid: default, minimal, wide, stacked",
+                            s
+                        ),
+                    }),
+                }
+            }
+            "tui.layout.flex_threshold" => {
+                let n = extract_positive_int(key, value)?;
+                self.tui_flex_threshold = n as u16;
                 Ok(vec![])
             }
             _ => Err(ConfigAccessError::UnknownKey {
@@ -910,15 +1082,20 @@ mod tests {
     }
 
     #[test]
-    fn test_config_keys_returns_all_20() {
+    fn test_config_keys_returns_all_29() {
         let config = QuorumConfig::default();
         let keys = config.config_keys();
-        assert_eq!(keys.len(), 20);
-        // Spot-check new keys
+        assert_eq!(keys.len(), 29);
+        // Spot-check existing keys
         assert!(keys.contains(&"models.participants".to_string()));
         assert!(keys.contains(&"output.format".to_string()));
         assert!(keys.contains(&"repl.show_progress".to_string()));
         assert!(keys.contains(&"context_budget.max_entry_bytes".to_string()));
+        // Spot-check TUI keys
+        assert!(keys.contains(&"tui.input.submit_key".to_string()));
+        assert!(keys.contains(&"tui.input.max_height".to_string()));
+        assert!(keys.contains(&"tui.layout.preset".to_string()));
+        assert!(keys.contains(&"tui.layout.flex_threshold".to_string()));
     }
 
     #[test]
@@ -956,5 +1133,146 @@ mod tests {
             config.config_get("context_budget.max_entry_bytes").unwrap(),
             ConfigValue::Integer(20_000)
         );
+    }
+
+    #[test]
+    fn test_config_get_tui_defaults() {
+        let config = QuorumConfig::default();
+        assert_eq!(
+            config.config_get("tui.input.submit_key").unwrap(),
+            ConfigValue::String("enter".to_string())
+        );
+        assert_eq!(
+            config.config_get("tui.input.newline_key").unwrap(),
+            ConfigValue::String("shift+enter".to_string())
+        );
+        assert_eq!(
+            config.config_get("tui.input.editor_key").unwrap(),
+            ConfigValue::String("I".to_string())
+        );
+        assert_eq!(
+            config.config_get("tui.input.editor_action").unwrap(),
+            ConfigValue::String("return_to_insert".to_string())
+        );
+        assert_eq!(
+            config.config_get("tui.input.max_height").unwrap(),
+            ConfigValue::Integer(10)
+        );
+        assert_eq!(
+            config.config_get("tui.input.dynamic_height").unwrap(),
+            ConfigValue::Boolean(true)
+        );
+        assert_eq!(
+            config.config_get("tui.input.context_header").unwrap(),
+            ConfigValue::Boolean(true)
+        );
+        assert_eq!(
+            config.config_get("tui.layout.preset").unwrap(),
+            ConfigValue::String("default".to_string())
+        );
+        assert_eq!(
+            config.config_get("tui.layout.flex_threshold").unwrap(),
+            ConfigValue::Integer(120)
+        );
+    }
+
+    #[test]
+    fn test_config_set_tui_input_string_keys() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set(
+                "tui.input.submit_key",
+                ConfigValue::String("ctrl+enter".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.tui_submit_key(), "ctrl+enter");
+
+        config
+            .config_set(
+                "tui.input.newline_key",
+                ConfigValue::String("enter".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.tui_newline_key(), "enter");
+
+        config
+            .config_set(
+                "tui.input.editor_key",
+                ConfigValue::String("e".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.tui_editor_key(), "e");
+    }
+
+    #[test]
+    fn test_config_set_tui_editor_action_validation() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set(
+                "tui.input.editor_action",
+                ConfigValue::String("submit".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.tui_editor_action(), "submit");
+
+        let err = config
+            .config_set(
+                "tui.input.editor_action",
+                ConfigValue::String("invalid".to_string()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConfigAccessError::InvalidValue { .. }));
+    }
+
+    #[test]
+    fn test_config_set_tui_max_height() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set("tui.input.max_height", ConfigValue::Integer(15))
+            .unwrap();
+        assert_eq!(config.tui_max_input_height(), 15);
+    }
+
+    #[test]
+    fn test_config_set_tui_booleans() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set("tui.input.dynamic_height", ConfigValue::Boolean(false))
+            .unwrap();
+        assert!(!config.tui_dynamic_height());
+
+        config
+            .config_set("tui.input.context_header", ConfigValue::Boolean(false))
+            .unwrap();
+        assert!(!config.tui_context_header());
+    }
+
+    #[test]
+    fn test_config_set_tui_layout_preset_validation() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set(
+                "tui.layout.preset",
+                ConfigValue::String("wide".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.tui_layout_preset(), "wide");
+
+        let err = config
+            .config_set(
+                "tui.layout.preset",
+                ConfigValue::String("unknown".to_string()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConfigAccessError::InvalidValue { .. }));
+    }
+
+    #[test]
+    fn test_config_set_tui_flex_threshold() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set("tui.layout.flex_threshold", ConfigValue::Integer(160))
+            .unwrap();
+        assert_eq!(config.tui_flex_threshold(), 160);
     }
 }

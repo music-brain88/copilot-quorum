@@ -1,8 +1,7 @@
 use super::{ProviderAdapter, ProviderKind};
-use crate::config::FileProvidersConfig;
 use async_trait::async_trait;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
-use quorum_domain::Model;
+use quorum_domain::{Model, ProviderConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,7 +14,7 @@ pub struct RoutingGateway {
 }
 
 impl RoutingGateway {
-    pub fn new(providers: Vec<Arc<dyn ProviderAdapter>>, config: &FileProvidersConfig) -> Self {
+    pub fn new(providers: Vec<Arc<dyn ProviderAdapter>>, config: &ProviderConfig) -> Self {
         let mut explicit_model_routing = HashMap::new();
 
         for (model_name, provider_name) in &config.routing {
@@ -196,12 +195,12 @@ mod tests {
 
     // -- Helpers ---------------------------------------------------------------
 
-    fn default_config() -> FileProvidersConfig {
-        FileProvidersConfig::default()
+    fn default_config() -> ProviderConfig {
+        ProviderConfig::default()
     }
 
-    fn config_with_default(default: &str) -> FileProvidersConfig {
-        FileProvidersConfig {
+    fn config_with_default(default: &str) -> ProviderConfig {
+        ProviderConfig {
             default: Some(default.to_string()),
             ..Default::default()
         }
@@ -219,7 +218,7 @@ mod tests {
         ];
         let mut routing = HashMap::new();
         routing.insert("claude-sonnet-4.5".to_string(), "copilot".to_string());
-        let config = FileProvidersConfig {
+        let config = ProviderConfig {
             routing,
             ..Default::default()
         };
@@ -303,7 +302,7 @@ mod tests {
             "claude-sonnet-4.5".to_string(),
             "nonexistent-provider".to_string(),
         );
-        let config = FileProvidersConfig {
+        let config = ProviderConfig {
             routing,
             ..Default::default()
         };

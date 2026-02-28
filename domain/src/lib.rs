@@ -24,6 +24,7 @@ pub mod core;
 pub mod interaction;
 pub mod orchestration;
 pub mod prompt;
+pub mod providers;
 pub mod quorum;
 pub mod scripting;
 pub mod session;
@@ -62,6 +63,9 @@ pub use orchestration::{
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
 pub use prompt::{AgentPromptTemplate, PromptTemplate};
+pub use providers::{
+    AnthropicProviderConfig, BedrockProviderConfig, OpenAiProviderConfig, ProviderConfig,
+};
 pub use scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 pub use session::{
     entities::Message,

@@ -1,28 +1,13 @@
 //! Custom tool provider — user-defined CLI commands as tools.
 //!
-//! Reads custom tool definitions from `quorum.toml` and exposes them as
-//! first-class tools via the [`ToolProvider`] trait. Each custom tool wraps
-//! a shell command template with `{param_name}` placeholders.
+//! Custom tool definitions come from Lua scripting (`quorum.tools.register()`).
+//! Each custom tool wraps a shell command template with `{param_name}` placeholders.
 //!
 //! # Security
 //!
 //! All parameter values are shell-escaped before substitution to prevent
 //! command injection: single-quote wrapping on Unix, double-quote wrapping
 //! with character escaping on Windows.
-//!
-//! # Example Configuration
-//!
-//! ```toml
-//! [tools.custom.gh_create_issue]
-//! description = "Create a GitHub issue"
-//! command = "gh issue create --title {title} --body {body}"
-//! risk_level = "high"
-//!
-//! [tools.custom.gh_create_issue.parameters.title]
-//! type = "string"
-//! description = "Issue title"
-//! required = true
-//! ```
 
 use async_trait::async_trait;
 use quorum_domain::tool::{
@@ -34,7 +19,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::time::Instant;
 
-use crate::config::{FileCustomToolConfig, FileCustomToolParameter};
+use quorum_application::ports::scripting_engine::CustomToolDef;
 
 /// Priority for the custom tool provider (between CLI and MCP)
 pub const CUSTOM_PRIORITY: i32 = 75;
@@ -51,7 +36,7 @@ struct CustomTool {
     command_template: String,
 }
 
-/// Provider for user-defined custom tools from `quorum.toml`.
+/// Provider for user-defined custom tools (registered via Lua).
 ///
 /// Custom tools are shell commands with typed parameters. The provider
 /// handles parameter substitution (with escaping) and execution.
@@ -62,43 +47,35 @@ pub struct CustomToolProvider {
 }
 
 impl CustomToolProvider {
-    /// Create a new custom tool provider from config entries.
+    /// Create a custom tool provider from tool definitions.
     ///
-    /// Each entry in the map is a tool name → config pair from
-    /// `[tools.custom.<name>]` in `quorum.toml`.
-    pub fn from_config(configs: &HashMap<String, FileCustomToolConfig>) -> Self {
+    /// Tool definitions come from Lua scripting (`quorum.tools.register()`).
+    pub fn from_custom_tool_defs(defs: &[CustomToolDef]) -> Self {
         let mut tools = HashMap::new();
 
-        for (name, config) in configs {
-            let risk_level = match config.risk_level.to_lowercase().as_str() {
+        for def in defs {
+            let risk = match def.risk_level.as_str() {
                 "low" => RiskLevel::Low,
-                _ => RiskLevel::High, // Default to high (safe side)
+                _ => RiskLevel::High,
             };
 
-            let mut definition =
-                ToolDefinition::new(name.as_str(), config.description.as_str(), risk_level);
+            let mut definition = ToolDefinition::new(&def.name, &def.description, risk);
 
-            // Sort parameters by name for deterministic ordering
-            let mut params: Vec<(&String, &FileCustomToolParameter)> =
-                config.parameters.iter().collect();
-            params.sort_by_key(|(pname, _)| pname.as_str());
+            let mut sorted_params = def.parameters.clone();
+            sorted_params.sort_by(|a, b| a.name.cmp(&b.name));
 
-            for (param_name, param_config) in params {
+            for p in &sorted_params {
                 definition = definition.with_parameter(
-                    ToolParameter::new(
-                        param_name.as_str(),
-                        param_config.description.as_str(),
-                        param_config.required,
-                    )
-                    .with_type(param_config.param_type.as_str()),
+                    ToolParameter::new(&p.name, &p.description, p.required)
+                        .with_type(&p.param_type),
                 );
             }
 
             tools.insert(
-                name.clone(),
+                def.name.clone(),
                 CustomTool {
                     definition,
-                    command_template: config.command.clone(),
+                    command_template: def.command.clone(),
                 },
             );
         }
@@ -365,43 +342,37 @@ impl ToolProvider for CustomToolProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::FileCustomToolParameter;
+    use quorum_application::ports::scripting_engine::CustomToolParam;
 
-    fn make_config(
+    fn make_def(
+        name: &str,
         description: &str,
         command: &str,
         risk_level: &str,
         params: Vec<(&str, &str, bool)>,
-    ) -> FileCustomToolConfig {
-        let mut parameters = HashMap::new();
-        for (name, desc, required) in params {
-            parameters.insert(
-                name.to_string(),
-                FileCustomToolParameter {
-                    param_type: "string".to_string(),
-                    description: desc.to_string(),
-                    required,
-                },
-            );
-        }
-        FileCustomToolConfig {
+    ) -> CustomToolDef {
+        CustomToolDef {
+            name: name.to_string(),
             description: description.to_string(),
             command: command.to_string(),
             risk_level: risk_level.to_string(),
-            parameters,
+            parameters: params
+                .into_iter()
+                .map(|(n, d, r)| CustomToolParam {
+                    name: n.to_string(),
+                    param_type: "string".to_string(),
+                    description: d.to_string(),
+                    required: r,
+                })
+                .collect(),
         }
     }
 
     #[test]
     fn test_build_command_unclosed_brace() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "tool".to_string(),
-            make_config("Tool", "echo {msg", "low", vec![("msg", "Msg", true)]),
-        );
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def("tool", "Tool", "echo {msg", "low", vec![("msg", "Msg", true)])];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
-        // The {msg never closes, so it should be preserved as-is
         let call = ToolCall::new("tool").with_arg("msg", "hello");
         let cmd = provider.build_command("echo {msg", &call);
         assert_eq!(cmd, "echo {msg");
@@ -432,19 +403,16 @@ mod tests {
     }
 
     #[test]
-    fn test_from_config() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "my_tool".to_string(),
-            make_config(
-                "A test tool",
-                "echo {message}",
-                "low",
-                vec![("message", "The message", true)],
-            ),
-        );
+    fn test_from_defs() {
+        let defs = vec![make_def(
+            "my_tool",
+            "A test tool",
+            "echo {message}",
+            "low",
+            vec![("message", "The message", true)],
+        )];
 
-        let provider = CustomToolProvider::from_config(&configs);
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         assert_eq!(provider.tools.len(), 1);
 
         let tool = provider.tools.get("my_tool").unwrap();
@@ -456,36 +424,17 @@ mod tests {
     }
 
     #[test]
-    fn test_from_config_default_high_risk() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "risky".to_string(),
-            make_config(
-                "Risky tool",
-                "rm {path}",
-                "high",
-                vec![("path", "Path", true)],
-            ),
-        );
-
-        let provider = CustomToolProvider::from_config(&configs);
+    fn test_from_defs_default_high_risk() {
+        let defs = vec![make_def("risky", "Risky tool", "rm {path}", "high", vec![("path", "Path", true)])];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         let tool = provider.tools.get("risky").unwrap();
         assert_eq!(tool.definition.risk_level, RiskLevel::High);
     }
 
     #[test]
     fn test_build_command_simple() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "echo_tool".to_string(),
-            make_config(
-                "Echo",
-                "echo {message}",
-                "low",
-                vec![("message", "Msg", true)],
-            ),
-        );
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def("echo_tool", "Echo", "echo {message}", "low", vec![("message", "Msg", true)])];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
         let call = ToolCall::new("echo_tool").with_arg("message", "hello");
         let cmd = provider.build_command("echo {message}", &call);
@@ -494,17 +443,8 @@ mod tests {
 
     #[test]
     fn test_build_command_escaping() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "echo_tool".to_string(),
-            make_config(
-                "Echo",
-                "echo {message}",
-                "low",
-                vec![("message", "Msg", true)],
-            ),
-        );
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def("echo_tool", "Echo", "echo {message}", "low", vec![("message", "Msg", true)])];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
         let call = ToolCall::new("echo_tool").with_arg("message", "hello world; rm -rf /");
         let cmd = provider.build_command("echo {message}", &call);
@@ -513,73 +453,55 @@ mod tests {
 
     #[test]
     fn test_build_command_multiple_params() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "gh_issue".to_string(),
-            make_config(
-                "Create issue",
-                "gh issue create --title {title} --body {body}",
-                "high",
-                vec![("title", "Title", true), ("body", "Body", true)],
-            ),
-        );
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def(
+            "gh_issue",
+            "Create issue",
+            "gh issue create --title {title} --body {body}",
+            "high",
+            vec![("title", "Title", true), ("body", "Body", true)],
+        )];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
         let call = ToolCall::new("gh_issue")
             .with_arg("title", "Bug fix")
             .with_arg("body", "Fixed the bug");
         let cmd = provider.build_command("gh issue create --title {title} --body {body}", &call);
-        assert_eq!(
-            cmd,
-            "gh issue create --title 'Bug fix' --body 'Fixed the bug'"
-        );
+        assert_eq!(cmd, "gh issue create --title 'Bug fix' --body 'Fixed the bug'");
     }
 
     #[test]
     fn test_build_command_missing_optional() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "tool".to_string(),
-            make_config(
-                "Tool",
-                "cmd {required} {optional}",
-                "low",
-                vec![("required", "Req", true), ("optional", "Opt", false)],
-            ),
-        );
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def(
+            "tool",
+            "Tool",
+            "cmd {required} {optional}",
+            "low",
+            vec![("required", "Req", true), ("optional", "Opt", false)],
+        )];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
         let call = ToolCall::new("tool").with_arg("required", "value");
         let cmd = provider.build_command("cmd {required} {optional}", &call);
-        // Optional placeholder should be removed
         assert_eq!(cmd, "cmd value ");
     }
 
     #[tokio::test]
     async fn test_provider_is_available() {
-        let configs = HashMap::new();
-        let empty = CustomToolProvider::from_config(&configs);
+        let empty = CustomToolProvider::from_custom_tool_defs(&[]);
         assert!(!empty.is_available().await);
 
-        let mut configs = HashMap::new();
-        configs.insert("t".to_string(), make_config("T", "echo hi", "low", vec![]));
-        let with_tool = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def("t", "T", "echo hi", "low", vec![])];
+        let with_tool = CustomToolProvider::from_custom_tool_defs(&defs);
         assert!(with_tool.is_available().await);
     }
 
     #[tokio::test]
     async fn test_provider_discover_tools() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "tool_a".to_string(),
-            make_config("Tool A", "echo a", "low", vec![]),
-        );
-        configs.insert(
-            "tool_b".to_string(),
-            make_config("Tool B", "echo b", "high", vec![]),
-        );
-
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![
+            make_def("tool_a", "Tool A", "echo a", "low", vec![]),
+            make_def("tool_b", "Tool B", "echo b", "high", vec![]),
+        ];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         let tools = provider.discover_tools().await.unwrap();
         assert_eq!(tools.len(), 2);
 
@@ -590,18 +512,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_execute_echo() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "echo_tool".to_string(),
-            make_config(
-                "Echo tool",
-                "echo {message}",
-                "low",
-                vec![("message", "Message", true)],
-            ),
-        );
-
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def(
+            "echo_tool",
+            "Echo tool",
+            "echo {message}",
+            "low",
+            vec![("message", "Message", true)],
+        )];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         let call = ToolCall::new("echo_tool").with_arg("message", "hello");
         let result = provider.execute(&call).await;
 
@@ -611,8 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_execute_unknown_tool() {
-        let configs = HashMap::new();
-        let provider = CustomToolProvider::from_config(&configs);
+        let provider = CustomToolProvider::from_custom_tool_defs(&[]);
         let call = ToolCall::new("nonexistent");
         let result = provider.execute(&call).await;
 
@@ -622,18 +539,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_execute_missing_required_param() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "tool".to_string(),
-            make_config(
-                "Tool",
-                "echo {message}",
-                "low",
-                vec![("message", "Msg", true)],
-            ),
-        );
-
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def("tool", "Tool", "echo {message}", "low", vec![("message", "Msg", true)])];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         let call = ToolCall::new("tool"); // Missing 'message'
         let result = provider.execute(&call).await;
 
@@ -643,28 +550,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_priority() {
-        let configs = HashMap::new();
-        let provider = CustomToolProvider::from_config(&configs);
+        let provider = CustomToolProvider::from_custom_tool_defs(&[]);
         assert_eq!(provider.priority(), CUSTOM_PRIORITY);
     }
 
     #[tokio::test]
     async fn test_to_api_tools_includes_custom() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "my_custom_tool".to_string(),
-            make_config(
-                "My custom tool",
-                "echo {msg}",
-                "low",
-                vec![("msg", "Message", true)],
-            ),
-        );
-
-        let provider = CustomToolProvider::from_config(&configs);
+        let defs = vec![make_def(
+            "my_custom_tool",
+            "My custom tool",
+            "echo {msg}",
+            "low",
+            vec![("msg", "Message", true)],
+        )];
+        let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         let tools = provider.discover_tools().await.unwrap();
 
-        // Build a ToolSpec that includes the custom tool
         let mut spec = quorum_domain::tool::entities::ToolSpec::new();
         for tool in tools {
             spec = spec.register(tool);
