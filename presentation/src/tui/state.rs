@@ -3,6 +3,8 @@
 //! Single source of truth for everything the TUI renders.
 //! Updated by TuiPresenter (UiEvent → state) and TuiProgressBridge (progress → state).
 
+use std::collections::HashMap;
+
 use super::layout::TuiLayoutConfig;
 use super::mode::InputMode;
 use super::route::RouteTable;
@@ -45,6 +47,10 @@ pub struct TuiState {
     // -- Layout config --
     pub layout_config: TuiLayoutConfig,
 
+    // -- Lua content --
+    /// Text content for Lua-registered content slots.
+    pub lua_content: HashMap<String, String>,
+
     // -- Lifecycle --
     pub should_quit: bool,
 }
@@ -66,6 +72,7 @@ impl Default for TuiState {
             hil_prompt: None,
             tui_config: TuiInputConfig::default(),
             layout_config: TuiLayoutConfig::default(),
+            lua_content: HashMap::new(),
             should_quit: false,
         }
     }

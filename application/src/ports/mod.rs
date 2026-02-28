@@ -14,4 +14,6 @@ pub mod reference_resolver;
 pub mod scripting_engine;
 pub mod tool_executor;
 pub mod tool_schema;
+pub mod tui_accessor;
+pub mod tui_accessor_state;
 pub mod ui_event;

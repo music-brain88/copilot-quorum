@@ -9,8 +9,8 @@ use std::collections::HashMap;
 /// Events emitted during scripting lifecycle.
 ///
 /// Phase 1 events cover script loading, config changes, mode switches,
-/// and session lifecycle. Future phases will add TUI, Agent, and
-/// Knowledge events.
+/// and session lifecycle. Phase 2 adds TUI-related events (pane creation,
+/// layout changes). Future phases will add Agent and Knowledge events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptEventType {
     /// Fired before init.lua is loaded. Returning `false` from a listener cancels loading.
@@ -23,6 +23,10 @@ pub enum ScriptEventType {
     ModeChanged,
     /// Fired when a new session starts.
     SessionStarted,
+    /// Fired when a new pane is created dynamically (e.g., Lua content slot registration).
+    PaneCreated,
+    /// Fired when the layout preset switches.
+    LayoutChanged,
 }
 
 impl ScriptEventType {
@@ -34,6 +38,8 @@ impl ScriptEventType {
             Self::ConfigChanged => "ConfigChanged",
             Self::ModeChanged => "ModeChanged",
             Self::SessionStarted => "SessionStarted",
+            Self::PaneCreated => "PaneCreated",
+            Self::LayoutChanged => "LayoutChanged",
         }
     }
 
@@ -53,6 +59,8 @@ impl std::str::FromStr for ScriptEventType {
             "ConfigChanged" => Ok(Self::ConfigChanged),
             "ModeChanged" => Ok(Self::ModeChanged),
             "SessionStarted" => Ok(Self::SessionStarted),
+            "PaneCreated" => Ok(Self::PaneCreated),
+            "LayoutChanged" => Ok(Self::LayoutChanged),
             other => Err(format!("unknown event: '{}'", other)),
         }
     }
@@ -122,6 +130,8 @@ mod tests {
             ScriptEventType::ConfigChanged,
             ScriptEventType::ModeChanged,
             ScriptEventType::SessionStarted,
+            ScriptEventType::PaneCreated,
+            ScriptEventType::LayoutChanged,
         ];
         for event in &events {
             let name = event.as_str();
@@ -142,6 +152,8 @@ mod tests {
         assert!(!ScriptEventType::ConfigChanged.is_cancellable());
         assert!(!ScriptEventType::ModeChanged.is_cancellable());
         assert!(!ScriptEventType::SessionStarted.is_cancellable());
+        assert!(!ScriptEventType::PaneCreated.is_cancellable());
+        assert!(!ScriptEventType::LayoutChanged.is_cancellable());
     }
 
     #[test]

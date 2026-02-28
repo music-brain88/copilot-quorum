@@ -16,5 +16,6 @@ mod event_bus;
 mod keymap_api;
 mod lua_engine;
 mod sandbox;
+mod tui_api;
 
 pub use lua_engine::LuaScriptingEngine;

@@ -6,6 +6,7 @@
 use mlua::prelude::*;
 use quorum_application::{
     ConfigAccessorPort, EventOutcome, KeymapAction, ScriptError, ScriptingEnginePort,
+    TuiAccessorPort,
 };
 use quorum_domain::scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 use std::path::Path;
@@ -15,6 +16,7 @@ use super::config_api::register_config_api;
 use super::event_bus::EventBus;
 use super::keymap_api::{KeymapBinding, KeymapRegistry, register_keymap_api};
 use super::sandbox::apply_sandbox;
+use super::tui_api::register_tui_api;
 
 /// Lua 5.4 scripting engine implementing `ScriptingEnginePort`.
 ///
@@ -28,14 +30,18 @@ pub struct LuaScriptingEngine {
 }
 
 impl LuaScriptingEngine {
-    /// Create a new Lua scripting engine with the given config accessor.
+    /// Create a new Lua scripting engine with the given config and TUI accessors.
     ///
     /// Sets up the VM with:
     /// - Sandbox (C module blocking)
     /// - `quorum.on(event, callback)` event registration
     /// - `quorum.config.{get,set,keys}` + metatable proxy
     /// - `quorum.keymap.set(mode, key, action)` keybinding API
-    pub fn new(config: Arc<Mutex<dyn ConfigAccessorPort>>) -> Result<Self, ScriptError> {
+    /// - `quorum.tui.{routes,layout,content}` TUI manipulation API
+    pub fn new(
+        config: Arc<Mutex<dyn ConfigAccessorPort>>,
+        tui_accessor: Arc<Mutex<dyn TuiAccessorPort>>,
+    ) -> Result<Self, ScriptError> {
         let lua = Lua::new();
         let event_bus = Arc::new(Mutex::new(EventBus::new()));
         let keymap_registry = Arc::new(Mutex::new(KeymapRegistry::new()));
@@ -58,7 +64,7 @@ impl LuaScriptingEngine {
                     // Validate event name
                     if event_name.parse::<ScriptEventType>().is_err() {
                         return Err(LuaError::external(format!(
-                            "unknown event: '{}'. Valid events: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted",
+                            "unknown event: '{}'. Valid events: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, PaneCreated, LayoutChanged",
                             event_name
                         )));
                     }
@@ -86,6 +92,10 @@ impl LuaScriptingEngine {
             Arc::clone(&callback_store),
         )
         .map_err(lua_to_script_error)?;
+
+        // Register quorum.tui API
+        register_tui_api(&lua, &quorum, tui_accessor, Arc::clone(&event_bus))
+            .map_err(lua_to_script_error)?;
 
         // Set quorum as global
         lua.globals()
@@ -236,7 +246,7 @@ fn lua_to_script_error(e: LuaError) -> ScriptError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quorum_application::{ConfigAccessError, ConfigValue};
+    use quorum_application::{ConfigAccessError, ConfigValue, TuiAccessorState};
     use quorum_domain::ConfigIssue;
 
     struct TestConfig {
@@ -291,7 +301,9 @@ mod tests {
 
     fn make_engine() -> LuaScriptingEngine {
         let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(TestConfig::new()));
-        LuaScriptingEngine::new(config).unwrap()
+        let tui: Arc<Mutex<dyn TuiAccessorPort>> =
+            Arc::new(Mutex::new(TuiAccessorState::with_default_routes()));
+        LuaScriptingEngine::new(config, tui).unwrap()
     }
 
     #[test]

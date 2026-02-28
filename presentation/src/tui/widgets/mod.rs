@@ -9,6 +9,7 @@
 pub mod conversation;
 pub mod header;
 pub mod input;
+pub mod lua_content;
 pub mod model_stream;
 pub mod progress_panel;
 pub mod status_bar;
@@ -64,6 +65,7 @@ impl MainLayout {
     ///
     /// If `area.width < flex_threshold`, the preset falls back to Minimal.
     /// `pane_count` determines how many content panes to split the main area into.
+    /// For custom presets, use [`compute_with_splits`] instead.
     pub fn compute_with_layout(
         area: Rect,
         input_lines: u16,
@@ -91,6 +93,42 @@ impl MainLayout {
 
         let splits = effective_preset.default_splits(pane_count);
         let direction = effective_preset.split_direction();
+
+        let constraints: Vec<Constraint> = splits
+            .iter()
+            .map(|&pct| Constraint::Percentage(pct))
+            .collect();
+
+        let panes = if constraints.is_empty() {
+            vec![main_area]
+        } else {
+            Layout::default()
+                .direction(direction)
+                .constraints(constraints)
+                .split(main_area)
+                .to_vec()
+        };
+
+        Self {
+            header,
+            tab_bar,
+            panes,
+            input,
+            status_bar,
+        }
+    }
+
+    /// Compute layout with explicit splits and direction (for custom presets).
+    pub fn compute_with_splits(
+        area: Rect,
+        input_lines: u16,
+        max_input_height: u16,
+        show_tab_bar: bool,
+        splits: &[u16],
+        direction: Direction,
+    ) -> Self {
+        let (header, tab_bar, main_area, input, status_bar) =
+            Self::compute_outer_regions(area, input_lines, max_input_height, show_tab_bar);
 
         let constraints: Vec<Constraint> = splits
             .iter()
