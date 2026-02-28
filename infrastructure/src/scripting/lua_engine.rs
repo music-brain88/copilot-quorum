@@ -54,8 +54,7 @@ impl LuaScriptingEngine {
         let command_registry = Arc::new(Mutex::new(CommandRegistry::new()));
         let callback_store: Arc<Mutex<Vec<(u64, LuaRegistryKey)>>> =
             Arc::new(Mutex::new(Vec::new()));
-        let pending_custom_tools: Arc<Mutex<Vec<CustomToolDef>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let pending_custom_tools: Arc<Mutex<Vec<CustomToolDef>>> = Arc::new(Mutex::new(Vec::new()));
         let provider_config: Arc<Mutex<quorum_domain::ProviderConfig>> =
             Arc::new(Mutex::new(quorum_domain::ProviderConfig::default()));
 
@@ -122,12 +121,8 @@ impl LuaScriptingEngine {
             .map_err(lua_to_script_error)?;
 
         // Register quorum.providers API
-        super::providers_api::register_providers_api(
-            &lua,
-            &quorum,
-            Arc::clone(&provider_config),
-        )
-        .map_err(lua_to_script_error)?;
+        super::providers_api::register_providers_api(&lua, &quorum, Arc::clone(&provider_config))
+            .map_err(lua_to_script_error)?;
 
         // Set quorum as global
         lua.globals()
@@ -336,10 +331,7 @@ impl ScriptingEnginePort for LuaScriptingEngine {
     }
 
     fn provider_config(&self) -> Option<quorum_domain::ProviderConfig> {
-        self.provider_config
-            .lock()
-            .ok()
-            .map(|cfg| cfg.clone())
+        self.provider_config.lock().ok().map(|cfg| cfg.clone())
     }
 }
 

@@ -370,7 +370,13 @@ mod tests {
 
     #[test]
     fn test_build_command_unclosed_brace() {
-        let defs = vec![make_def("tool", "Tool", "echo {msg", "low", vec![("msg", "Msg", true)])];
+        let defs = vec![make_def(
+            "tool",
+            "Tool",
+            "echo {msg",
+            "low",
+            vec![("msg", "Msg", true)],
+        )];
         let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
         let call = ToolCall::new("tool").with_arg("msg", "hello");
@@ -425,7 +431,13 @@ mod tests {
 
     #[test]
     fn test_from_defs_default_high_risk() {
-        let defs = vec![make_def("risky", "Risky tool", "rm {path}", "high", vec![("path", "Path", true)])];
+        let defs = vec![make_def(
+            "risky",
+            "Risky tool",
+            "rm {path}",
+            "high",
+            vec![("path", "Path", true)],
+        )];
         let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         let tool = provider.tools.get("risky").unwrap();
         assert_eq!(tool.definition.risk_level, RiskLevel::High);
@@ -433,7 +445,13 @@ mod tests {
 
     #[test]
     fn test_build_command_simple() {
-        let defs = vec![make_def("echo_tool", "Echo", "echo {message}", "low", vec![("message", "Msg", true)])];
+        let defs = vec![make_def(
+            "echo_tool",
+            "Echo",
+            "echo {message}",
+            "low",
+            vec![("message", "Msg", true)],
+        )];
         let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
         let call = ToolCall::new("echo_tool").with_arg("message", "hello");
@@ -443,7 +461,13 @@ mod tests {
 
     #[test]
     fn test_build_command_escaping() {
-        let defs = vec![make_def("echo_tool", "Echo", "echo {message}", "low", vec![("message", "Msg", true)])];
+        let defs = vec![make_def(
+            "echo_tool",
+            "Echo",
+            "echo {message}",
+            "low",
+            vec![("message", "Msg", true)],
+        )];
         let provider = CustomToolProvider::from_custom_tool_defs(&defs);
 
         let call = ToolCall::new("echo_tool").with_arg("message", "hello world; rm -rf /");
@@ -466,7 +490,10 @@ mod tests {
             .with_arg("title", "Bug fix")
             .with_arg("body", "Fixed the bug");
         let cmd = provider.build_command("gh issue create --title {title} --body {body}", &call);
-        assert_eq!(cmd, "gh issue create --title 'Bug fix' --body 'Fixed the bug'");
+        assert_eq!(
+            cmd,
+            "gh issue create --title 'Bug fix' --body 'Fixed the bug'"
+        );
     }
 
     #[test]
@@ -539,7 +566,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_execute_missing_required_param() {
-        let defs = vec![make_def("tool", "Tool", "echo {message}", "low", vec![("message", "Msg", true)])];
+        let defs = vec![make_def(
+            "tool",
+            "Tool",
+            "echo {message}",
+            "low",
+            vec![("message", "Msg", true)],
+        )];
         let provider = CustomToolProvider::from_custom_tool_defs(&defs);
         let call = ToolCall::new("tool"); // Missing 'message'
         let result = provider.execute(&call).await;

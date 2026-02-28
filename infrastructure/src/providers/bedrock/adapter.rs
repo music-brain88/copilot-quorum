@@ -6,10 +6,10 @@
 use super::model_map;
 use super::session::BedrockSession;
 use crate::providers::{ProviderAdapter, ProviderKind};
-use quorum_domain::BedrockProviderConfig;
 use async_trait::async_trait;
 use aws_sdk_bedrockruntime::Client as BedrockClient;
 use quorum_application::ports::llm_gateway::{GatewayError, LlmSession};
+use quorum_domain::BedrockProviderConfig;
 use quorum_domain::Model;
 use std::sync::Arc;
 use tracing::{info, warn};

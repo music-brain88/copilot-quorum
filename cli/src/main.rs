@@ -13,10 +13,10 @@ use quorum_application::LlmGateway;
 #[cfg(feature = "scripting")]
 use quorum_application::ScriptingEnginePort;
 use quorum_application::ToolExecutorPort;
+use quorum_application::{ConfigAccessorPort, ConfigValue};
 use quorum_application::{QuorumConfig, RunAgentUseCase};
 use quorum_domain::ConsensusLevel;
 use quorum_domain::OutputFormat;
-use quorum_application::{ConfigAccessorPort, ConfigValue};
 #[cfg(feature = "bedrock")]
 use quorum_infrastructure::BedrockProviderAdapter;
 use quorum_infrastructure::{

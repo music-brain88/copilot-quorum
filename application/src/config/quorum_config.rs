@@ -386,16 +386,12 @@ impl ConfigAccessorPort for QuorumConfig {
             "tui.input.newline_key" => Ok(ConfigValue::String(self.tui_newline_key.clone())),
             "tui.input.editor_key" => Ok(ConfigValue::String(self.tui_editor_key.clone())),
             "tui.input.editor_action" => Ok(ConfigValue::String(self.tui_editor_action.clone())),
-            "tui.input.max_height" => {
-                Ok(ConfigValue::Integer(self.tui_max_input_height as i64))
-            }
+            "tui.input.max_height" => Ok(ConfigValue::Integer(self.tui_max_input_height as i64)),
             "tui.input.dynamic_height" => Ok(ConfigValue::Boolean(self.tui_dynamic_height)),
             "tui.input.context_header" => Ok(ConfigValue::Boolean(self.tui_context_header)),
             // ---- tui.layout.* ----
             "tui.layout.preset" => Ok(ConfigValue::String(self.tui_layout_preset.clone())),
-            "tui.layout.flex_threshold" => {
-                Ok(ConfigValue::Integer(self.tui_flex_threshold as i64))
-            }
+            "tui.layout.flex_threshold" => Ok(ConfigValue::Integer(self.tui_flex_threshold as i64)),
             _ => Err(ConfigAccessError::UnknownKey {
                 key: key.to_string(),
             }),
@@ -1196,10 +1192,7 @@ mod tests {
         assert_eq!(config.tui_newline_key(), "enter");
 
         config
-            .config_set(
-                "tui.input.editor_key",
-                ConfigValue::String("e".to_string()),
-            )
+            .config_set("tui.input.editor_key", ConfigValue::String("e".to_string()))
             .unwrap();
         assert_eq!(config.tui_editor_key(), "e");
     }
@@ -1251,10 +1244,7 @@ mod tests {
     fn test_config_set_tui_layout_preset_validation() {
         let mut config = QuorumConfig::default();
         config
-            .config_set(
-                "tui.layout.preset",
-                ConfigValue::String("wide".to_string()),
-            )
+            .config_set("tui.layout.preset", ConfigValue::String("wide".to_string()))
             .unwrap();
         assert_eq!(config.tui_layout_preset(), "wide");
 

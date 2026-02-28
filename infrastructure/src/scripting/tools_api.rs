@@ -71,9 +71,7 @@ pub fn register_tools_api(
             };
 
             pt.lock()
-                .map_err(|e| {
-                    LuaError::external(format!("pending_tools lock poisoned: {}", e))
-                })?
+                .map_err(|e| LuaError::external(format!("pending_tools lock poisoned: {}", e)))?
                 .push(tool_def);
             Ok(())
         })?,

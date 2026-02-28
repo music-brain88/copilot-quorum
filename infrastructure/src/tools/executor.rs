@@ -23,12 +23,12 @@
 
 use async_trait::async_trait;
 use quorum_application::ports::tool_executor::ToolExecutorPort;
+use quorum_domain::RiskLevel;
 use quorum_domain::tool::{
     entities::{ToolCall, ToolDefinition, ToolParameter, ToolSpec},
     provider::ToolProvider,
     value_objects::{ToolError, ToolResult},
 };
-use quorum_domain::RiskLevel;
 
 use quorum_application::ports::scripting_engine::CustomToolDef;
 
@@ -141,8 +141,7 @@ impl LocalToolExecutor {
                 "low" => RiskLevel::Low,
                 _ => RiskLevel::High,
             };
-            let mut definition =
-                ToolDefinition::new(&def.name, &def.description, risk_level);
+            let mut definition = ToolDefinition::new(&def.name, &def.description, risk_level);
             let mut sorted_params = def.parameters.clone();
             sorted_params.sort_by(|a, b| a.name.cmp(&b.name));
             for p in &sorted_params {
