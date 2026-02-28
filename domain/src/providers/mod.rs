@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 /// Top-level provider configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ProviderConfig {
     /// Default provider name: "copilot", "anthropic", "openai", "bedrock", "azure".
     pub default: Option<String>,
@@ -18,18 +18,6 @@ pub struct ProviderConfig {
     pub anthropic: AnthropicProviderConfig,
     /// OpenAI API settings.
     pub openai: OpenAiProviderConfig,
-}
-
-impl Default for ProviderConfig {
-    fn default() -> Self {
-        Self {
-            default: None,
-            routing: HashMap::new(),
-            bedrock: BedrockProviderConfig::default(),
-            anthropic: AnthropicProviderConfig::default(),
-            openai: OpenAiProviderConfig::default(),
-        }
-    }
 }
 
 /// AWS Bedrock provider configuration.
