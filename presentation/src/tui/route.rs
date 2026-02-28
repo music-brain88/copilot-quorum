@@ -146,6 +146,8 @@ impl RouteTable {
             LayoutPreset::Minimal => Self::minimal_layout(),
             LayoutPreset::Wide => Self::wide_layout(),
             LayoutPreset::Stacked => Self::stacked_layout(),
+            // Custom presets start with default routes
+            LayoutPreset::Custom(_) => Self::default_layout(),
         };
         for ov in overrides {
             table.set_route(ov.content.clone(), ov.surface.clone());

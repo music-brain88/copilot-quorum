@@ -16,6 +16,10 @@ pub use ports::conversation_logger::{ConversationEvent, ConversationLogger, NoCo
 pub use ports::scripting_engine::{
     EventOutcome, KeymapAction, NoScriptingEngine, ScriptError, ScriptingEnginePort,
 };
+pub use ports::tui_accessor::{
+    CustomPresetConfig, TuiAccessError, TuiAccessorPort, TuiPendingChanges,
+};
+pub use ports::tui_accessor_state::TuiAccessorState;
 pub use ports::{
     context_loader::ContextLoaderPort,
     human_intervention::{

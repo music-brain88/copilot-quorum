@@ -137,20 +137,20 @@ impl BedrockSession {
         let blocks: Vec<bedrock::ContentBlock> = response
             .content
             .iter()
-            .filter_map(|block| match block {
+            .map(|block| match block {
                 quorum_domain::ContentBlock::Text(text) => {
-                    Some(bedrock::ContentBlock::Text(text.clone()))
+                    bedrock::ContentBlock::Text(text.clone())
                 }
                 quorum_domain::ContentBlock::ToolUse { id, name, input } => {
                     let input_doc = types::json_to_document(&serde_json::json!(input));
-                    Some(bedrock::ContentBlock::ToolUse(
+                    bedrock::ContentBlock::ToolUse(
                         bedrock::ToolUseBlock::builder()
                             .tool_use_id(id)
                             .name(name)
                             .input(input_doc)
                             .build()
                             .expect("tool_use_id, name, input are required"),
-                    ))
+                    )
                 }
             })
             .collect();

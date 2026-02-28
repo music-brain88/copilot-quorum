@@ -24,6 +24,8 @@ pub enum ContentSlot {
     ToolLog,
     /// Dynamic: Ensemble model output stream (keyed by model name).
     ModelStream(String),
+    /// Dynamic: Lua-registered custom content slot (keyed by slot name).
+    LuaSlot(String),
 }
 
 /// Content rendering capability (analogous to ToolProvider).
