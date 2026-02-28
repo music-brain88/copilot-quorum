@@ -34,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::reference_resolver::ReferenceResolverPort;
+use crate::ports::scripting_engine::ScriptingEnginePort;
 use crate::ports::tool_schema::ToolSchemaPort;
 
 /// Entry in conversation history
@@ -87,6 +88,8 @@ pub struct AgentController {
     interaction_tree: InteractionTree,
     /// Currently active interaction ID
     active_interaction_id: InteractionId,
+    /// Scripting engine for Lua command dispatch
+    scripting_engine: Arc<dyn ScriptingEnginePort>,
 }
 
 impl AgentController {
@@ -109,6 +112,7 @@ impl AgentController {
         // Agent form is the default root interaction
         let active_interaction_id = interaction_tree.create_root(InteractionForm::Agent);
 
+        use crate::ports::scripting_engine::NoScriptingEngine;
         Self {
             gateway: gateway.clone(),
             use_case: RunAgentUseCase::with_context_loader(
@@ -129,6 +133,7 @@ impl AgentController {
             conversation_logger,
             interaction_tree,
             active_interaction_id,
+            scripting_engine: Arc::new(NoScriptingEngine),
         }
     }
 
@@ -223,6 +228,18 @@ impl AgentController {
     /// Set reference resolver for automatic reference resolution
     pub fn set_reference_resolver(&mut self, resolver: Arc<dyn ReferenceResolverPort>) {
         self.use_case = self.use_case.clone().with_reference_resolver(resolver);
+    }
+
+    /// Set scripting engine for Lua command dispatch
+    pub fn set_scripting_engine(&mut self, engine: Arc<dyn ScriptingEnginePort>) {
+        self.scripting_engine = engine.clone();
+        // Propagate to RunAgentUseCase for ToolCallBefore events
+        self.use_case = self.use_case.clone().with_scripting_engine(engine);
+    }
+
+    /// Get the scripting engine reference.
+    pub fn scripting_engine(&self) -> &Arc<dyn ScriptingEnginePort> {
+        &self.scripting_engine
     }
 
     /// Generate the prompt string for the REPL
@@ -407,9 +424,28 @@ impl AgentController {
                 CommandAction::Continue
             }
             _ => {
-                let _ = self.tx.send(UiEvent::UnknownCommand {
-                    command: command.to_string(),
-                });
+                // Check for Lua-registered custom commands
+                let cmd_name = command.strip_prefix('/').unwrap_or(command);
+                let lua_cmd = self
+                    .scripting_engine
+                    .registered_commands()
+                    .into_iter()
+                    .find(|(name, ..)| name == cmd_name);
+
+                if let Some((_name, _desc, _usage, callback_id)) = lua_cmd {
+                    if let Err(e) = self
+                        .scripting_engine
+                        .execute_command_callback(callback_id, args)
+                    {
+                        let _ = self.tx.send(UiEvent::CommandError {
+                            message: format!("Command /{} failed: {}", cmd_name, e),
+                        });
+                    }
+                } else {
+                    let _ = self.tx.send(UiEvent::UnknownCommand {
+                        command: command.to_string(),
+                    });
+                }
                 CommandAction::Continue
             }
         }
@@ -751,6 +787,7 @@ impl AgentController {
             config: self.config().clone(),
             tx: self.tx.clone(),
             verbose: self.verbose,
+            scripting_engine: self.scripting_engine.clone(),
         }
     }
 
@@ -861,6 +898,7 @@ pub struct SpawnContext {
     pub(crate) config: QuorumConfig,
     pub(crate) tx: mpsc::UnboundedSender<UiEvent>,
     pub(crate) verbose: bool,
+    pub(crate) scripting_engine: Arc<dyn ScriptingEnginePort>,
 }
 
 /// Completion result of a task (spawn or inline execution)
@@ -881,6 +919,14 @@ impl SpawnContext {
         full_query: String,
         progress: &dyn AgentProgressNotifier,
     ) -> TaskCompletion {
+        // Wrap progress with ScriptProgressBridge via CompositeProgress
+        use crate::ports::composite_progress::CompositeProgressNotifier;
+        use crate::ports::script_progress_bridge::ScriptProgressBridge;
+
+        let script_bridge = ScriptProgressBridge::new(self.scripting_engine.clone());
+        let composite = CompositeProgressNotifier::new(vec![progress, &script_bridge]);
+        let progress: &dyn AgentProgressNotifier = &composite;
+
         let result = match form {
             InteractionForm::Ask => self.execute_ask(&full_query, progress).await,
             InteractionForm::Discuss => self.execute_discuss(&full_query, progress).await,

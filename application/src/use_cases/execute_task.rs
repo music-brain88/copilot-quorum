@@ -7,6 +7,7 @@ use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
 use crate::ports::conversation_logger::{ConversationEvent, ConversationLogger};
 use crate::ports::llm_gateway::{LlmGateway, LlmSession, ToolResultMessage};
+use crate::ports::scripting_engine::ScriptingEnginePort;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
 use crate::use_cases::run_agent::{RunAgentError, RunAgentInput};
@@ -67,6 +68,7 @@ pub struct ExecuteTaskUseCase {
     cancellation_token: Option<CancellationToken>,
     action_reviewer: Arc<dyn ActionReviewer>,
     conversation_logger: Arc<dyn ConversationLogger>,
+    scripting_engine: Option<Arc<dyn ScriptingEnginePort>>,
 }
 
 impl ExecuteTaskUseCase {
@@ -85,6 +87,27 @@ impl ExecuteTaskUseCase {
             cancellation_token,
             action_reviewer,
             conversation_logger,
+            scripting_engine: None,
+        }
+    }
+
+    /// Set the scripting engine for ToolCallBefore events.
+    pub fn with_scripting_engine(mut self, engine: Arc<dyn ScriptingEnginePort>) -> Self {
+        self.scripting_engine = Some(engine);
+        self
+    }
+
+    /// Check ToolCallBefore: returns true if the tool call should proceed.
+    fn check_tool_call_before(
+        &self,
+        tool_name: &str,
+        args: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> bool {
+        if let Some(engine) = &self.scripting_engine {
+            let args_json = serde_json::to_string(args).unwrap_or_default();
+            engine.on_tool_call_before(tool_name, &args_json)
+        } else {
+            true
         }
     }
 
@@ -530,6 +553,25 @@ impl ExecuteTaskUseCase {
                 let mut exec_indices = Vec::new();
                 let mut futures = Vec::new();
                 for call in &low_risk_calls {
+                    // ToolCallBefore check: Lua filter can cancel tool calls
+                    if !self.check_tool_call_before(&call.tool_name, &call.arguments) {
+                        debug!(
+                            "Tool call {} cancelled by ToolCallBefore listener",
+                            call.tool_name
+                        );
+                        if let Some(native_id) = call.native_id.clone() {
+                            tool_result_messages.push(ToolResultMessage {
+                                tool_use_id: native_id,
+                                tool_name: call.tool_name.clone(),
+                                output: "Tool call cancelled by ToolCallBefore listener"
+                                    .to_string(),
+                                is_error: false,
+                                is_rejected: true,
+                            });
+                        }
+                        continue;
+                    }
+
                     exec_counter += 1;
                     let exec_id = format!("{}-exec-{}", task_id_str, exec_counter);
                     let mut exec = ToolExecution::new(
@@ -647,6 +689,25 @@ impl ExecuteTaskUseCase {
             // Execute high-risk calls sequentially (with action review)
             let mut high_risk_rejected_count = 0;
             for call in &high_risk_calls {
+                // ToolCallBefore check: Lua filter can cancel tool calls before HiL
+                if !self.check_tool_call_before(&call.tool_name, &call.arguments) {
+                    debug!(
+                        "High-risk tool call {} cancelled by ToolCallBefore listener",
+                        call.tool_name
+                    );
+                    high_risk_rejected_count += 1;
+                    if let Some(native_id) = call.native_id.clone() {
+                        tool_result_messages.push(ToolResultMessage {
+                            tool_use_id: native_id,
+                            tool_name: call.tool_name.clone(),
+                            output: "Tool call cancelled by ToolCallBefore listener".to_string(),
+                            is_error: false,
+                            is_rejected: true,
+                        });
+                    }
+                    continue;
+                }
+
                 exec_counter += 1;
                 let exec_id = format!("{}-exec-{}", task_id_str, exec_counter);
                 let mut exec = ToolExecution::new(

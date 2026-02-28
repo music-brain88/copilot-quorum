@@ -216,6 +216,10 @@ impl TuiApp {
     ) -> Self {
         let keymaps = engine.registered_keymaps();
         self.custom_keymap = mode::CustomKeymap::from_registered(&keymaps);
+        // Share scripting engine with the controller for Lua command dispatch
+        let _ = self
+            .cmd_tx
+            .send(TuiCommand::SetScriptingEngine(engine.clone()));
         self.scripting_engine = engine;
         self
     }

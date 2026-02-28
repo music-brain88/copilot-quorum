@@ -9,8 +9,10 @@
 //! - `sandbox` — C module blocking for safety
 //! - `config_api` — `quorum.config` get/set/keys + metatable proxy
 //! - `keymap_api` — `quorum.keymap.set(mode, key, action)`
+//! - `command_api` — `quorum.command.register(name, opts)`
 //! - `lua_engine` — Main engine struct tying everything together
 
+mod command_api;
 mod config_api;
 mod event_bus;
 mod keymap_api;

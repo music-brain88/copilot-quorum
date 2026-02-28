@@ -44,6 +44,8 @@ pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
 
 // Extracted use cases (Phase 1 + Phase 4)
 pub use ports::action_reviewer::{ActionReviewer, ReviewDecision};
+pub use ports::composite_progress::CompositeProgressNotifier;
+pub use ports::script_progress_bridge::ScriptProgressBridge;
 pub use use_cases::execute_task::ExecuteTaskUseCase;
 pub use use_cases::gather_context::GatherContextUseCase;
 
