@@ -292,7 +292,7 @@ impl TuiState {
     }
 
     /// Get the active interaction ID from the currently active pane.
-    pub fn active_interaction_id(&self) -> Option<quorum_domain::InteractionId> {
+    pub(super) fn active_interaction_id(&self) -> Option<quorum_domain::InteractionId> {
         match self.tabs.active_pane().kind {
             super::tab::PaneKind::Interaction(_, Some(id)) => Some(id),
             super::tab::PaneKind::Interaction(_, None) => None,
