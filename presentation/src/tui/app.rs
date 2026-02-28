@@ -1771,7 +1771,10 @@ mod tests {
         };
         apply_pending_tui_changes(changes, &mut state, &registry);
         let reg = registry.borrow();
-        assert!(reg.get(&ContentSlot::LuaSlot("my_panel".to_string())).is_some());
+        assert!(
+            reg.get(&ContentSlot::LuaSlot("my_panel".to_string()))
+                .is_some()
+        );
     }
 
     #[test]

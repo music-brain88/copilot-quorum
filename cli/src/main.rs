@@ -497,10 +497,9 @@ async fn main() -> Result<()> {
             .with_show_progress(repl_config.show_progress)
             .with_history_file(repl_config.history_file.clone());
         let shared_config = Arc::new(std::sync::Mutex::new(quorum_config));
-        let tui_accessor: Arc<std::sync::Mutex<dyn quorum_application::TuiAccessorPort>> =
-            Arc::new(std::sync::Mutex::new(
-                quorum_application::TuiAccessorState::with_default_routes(),
-            ));
+        let tui_accessor: Arc<std::sync::Mutex<dyn quorum_application::TuiAccessorPort>> = Arc::new(
+            std::sync::Mutex::new(quorum_application::TuiAccessorState::with_default_routes()),
+        );
 
         // Set up scripting engine (feature-gated)
         #[cfg(feature = "scripting")]

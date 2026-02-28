@@ -170,7 +170,9 @@ fn register_layout_api(
         let register_fn =
             lua.create_function(move |_lua, (name, config_table): (String, LuaTable)| {
                 let splits = parse_splits(&config_table)?;
-                let direction: String = config_table.get("direction").unwrap_or_else(|_| "horizontal".to_string());
+                let direction: String = config_table
+                    .get("direction")
+                    .unwrap_or_else(|_| "horizontal".to_string());
 
                 let config = CustomPresetConfig { splits, direction };
 
@@ -245,15 +247,16 @@ fn register_content_api(
     // quorum.tui.content.set_text(slot_name, text)
     {
         let accessor = Arc::clone(&tui_accessor);
-        let set_text_fn = lua.create_function(move |_lua, (slot_name, text): (String, String)| {
-            let mut guard = accessor
-                .lock()
-                .map_err(|e| LuaError::external(format!("tui_accessor lock poisoned: {}", e)))?;
-            guard
-                .content_set_text(&slot_name, &text)
-                .map_err(|e| LuaError::external(e.to_string()))?;
-            Ok(())
-        })?;
+        let set_text_fn =
+            lua.create_function(move |_lua, (slot_name, text): (String, String)| {
+                let mut guard = accessor.lock().map_err(|e| {
+                    LuaError::external(format!("tui_accessor lock poisoned: {}", e))
+                })?;
+                guard
+                    .content_set_text(&slot_name, &text)
+                    .map_err(|e| LuaError::external(e.to_string()))?;
+                Ok(())
+            })?;
         content_table.set("set_text", set_text_fn)?;
     }
 
@@ -315,10 +318,7 @@ mod tests {
         (lua, accessor)
     }
 
-    fn register(
-        lua: &Lua,
-        accessor: Arc<Mutex<dyn TuiAccessorPort>>,
-    ) -> LuaResult<()> {
+    fn register(lua: &Lua, accessor: Arc<Mutex<dyn TuiAccessorPort>>) -> LuaResult<()> {
         let quorum = lua.create_table()?;
         let event_bus = Arc::new(Mutex::new(EventBus::new()));
         register_tui_api(lua, &quorum, accessor, event_bus)?;
@@ -418,10 +418,7 @@ mod tests {
         let (lua, accessor) = setup();
         register(&lua, accessor).unwrap();
 
-        let result: String = lua
-            .load(r#"quorum.tui.layout.current()"#)
-            .eval()
-            .unwrap();
+        let result: String = lua.load(r#"quorum.tui.layout.current()"#).eval().unwrap();
         assert_eq!(result, "default");
     }
 
@@ -434,10 +431,7 @@ mod tests {
             .exec()
             .unwrap();
 
-        let result: String = lua
-            .load(r#"quorum.tui.layout.current()"#)
-            .eval()
-            .unwrap();
+        let result: String = lua.load(r#"quorum.tui.layout.current()"#).eval().unwrap();
         assert_eq!(result, "wide");
     }
 
@@ -469,10 +463,7 @@ mod tests {
         .exec()
         .unwrap();
 
-        let result: String = lua
-            .load(r#"quorum.tui.layout.current()"#)
-            .eval()
-            .unwrap();
+        let result: String = lua.load(r#"quorum.tui.layout.current()"#).eval().unwrap();
         assert_eq!(result, "triple");
     }
 

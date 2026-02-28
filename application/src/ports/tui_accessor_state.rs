@@ -80,8 +80,7 @@ impl TuiAccessorPort for TuiAccessorState {
         }
 
         // Update mirror
-        self.routes
-            .insert(content.to_string(), surface.to_string());
+        self.routes.insert(content.to_string(), surface.to_string());
 
         // Buffer change
         self.pending
@@ -147,11 +146,8 @@ impl TuiAccessorPort for TuiAccessorState {
             });
         }
 
-        self.custom_presets
-            .insert(name.to_string(), config.clone());
-        self.pending
-            .new_presets
-            .push((name.to_string(), config));
+        self.custom_presets.insert(name.to_string(), config.clone());
+        self.pending.new_presets.push((name.to_string(), config));
         Ok(())
     }
 
@@ -171,9 +167,7 @@ impl TuiAccessorPort for TuiAccessorState {
         }
 
         self.registered_slots.push(slot_name.to_string());
-        self.pending
-            .new_content_slots
-            .push(slot_name.to_string());
+        self.pending.new_content_slots.push(slot_name.to_string());
         Ok(())
     }
 
@@ -227,7 +221,11 @@ mod tests {
     fn test_route_set_validates_content_name() {
         let mut state = TuiAccessorState::new();
         assert!(state.route_set("conversation", "sidebar").is_ok());
-        assert!(state.route_set("model_stream:claude", "dynamic_pane:claude").is_ok());
+        assert!(
+            state
+                .route_set("model_stream:claude", "dynamic_pane:claude")
+                .is_ok()
+        );
         assert!(state.route_set("lua:my_panel", "sidebar").is_ok());
 
         let err = state.route_set("invalid_slot", "sidebar").unwrap_err();
@@ -237,9 +235,7 @@ mod tests {
     #[test]
     fn test_route_set_validates_surface_name() {
         let mut state = TuiAccessorState::new();
-        let err = state
-            .route_set("conversation", "nonexistent")
-            .unwrap_err();
+        let err = state.route_set("conversation", "nonexistent").unwrap_err();
         assert!(matches!(err, TuiAccessError::UnknownSurface { .. }));
     }
 
@@ -314,9 +310,7 @@ mod tests {
             splits: vec![50, 50],
             direction: "diagonal".to_string(),
         };
-        let err = state
-            .layout_register_preset("broken", config)
-            .unwrap_err();
+        let err = state.layout_register_preset("broken", config).unwrap_err();
         assert!(matches!(err, TuiAccessError::InvalidConfig { .. }));
     }
 
@@ -347,9 +341,7 @@ mod tests {
     #[test]
     fn test_content_set_text_unregistered_fails() {
         let mut state = TuiAccessorState::new();
-        let err = state
-            .content_set_text("nonexistent", "text")
-            .unwrap_err();
+        let err = state.content_set_text("nonexistent", "text").unwrap_err();
         assert!(matches!(err, TuiAccessError::UnknownContent { .. }));
     }
 

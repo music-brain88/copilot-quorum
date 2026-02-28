@@ -226,9 +226,9 @@ pub fn parse_surface_id(name: &str) -> Option<SurfaceId> {
         "tab_bar" => Some(SurfaceId::TabBar),
         "tool_pane" => Some(SurfaceId::ToolPane),
         "tool_float" => Some(SurfaceId::ToolFloat),
-        s if s.starts_with("dynamic_pane:") => {
-            Some(SurfaceId::DynamicPane(s["dynamic_pane:".len()..].to_string()))
-        }
+        s if s.starts_with("dynamic_pane:") => Some(SurfaceId::DynamicPane(
+            s["dynamic_pane:".len()..].to_string(),
+        )),
         _ => None,
     }
 }
@@ -260,12 +260,10 @@ pub fn parse_content_slot(name: &str) -> Option<ContentSlot> {
         "hil_prompt" => Some(ContentSlot::HilPrompt),
         "help" => Some(ContentSlot::Help),
         "tool_log" => Some(ContentSlot::ToolLog),
-        s if s.starts_with("model_stream:") => {
-            Some(ContentSlot::ModelStream(s["model_stream:".len()..].to_string()))
-        }
-        s if s.starts_with("lua:") => {
-            Some(ContentSlot::LuaSlot(s["lua:".len()..].to_string()))
-        }
+        s if s.starts_with("model_stream:") => Some(ContentSlot::ModelStream(
+            s["model_stream:".len()..].to_string(),
+        )),
+        s if s.starts_with("lua:") => Some(ContentSlot::LuaSlot(s["lua:".len()..].to_string())),
         _ => None,
     }
 }
