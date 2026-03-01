@@ -208,7 +208,9 @@ fn lua_to_config_value(value: LuaValue) -> LuaResult<ConfigValue> {
                 list.push(s.to_str()?.to_string());
             }
             if list.is_empty() {
-                return Err(LuaError::external("empty table is not a valid config value"));
+                return Err(LuaError::external(
+                    "empty table is not a valid config value",
+                ));
             }
             Ok(ConfigValue::StringList(list))
         }
@@ -401,10 +403,7 @@ mod tests {
         let value = config.lock().unwrap().config_get("models.review").unwrap();
         assert_eq!(
             value,
-            ConfigValue::StringList(vec![
-                "claude-opus-4.6".to_string(),
-                "gpt-5.3".to_string()
-            ])
+            ConfigValue::StringList(vec!["claude-opus-4.6".to_string(), "gpt-5.3".to_string()])
         );
     }
 
