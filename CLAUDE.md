@@ -66,8 +66,8 @@ Boot sequence: Rust defaults → Lua (init.lua + plugins) → CLI arg overrides
 -- Role-based model selection
 quorum.config.set("models.exploration", "gpt-5.2-codex")       -- Context gathering + low-risk tools
 quorum.config.set("models.decision", "claude-sonnet-4.5")      -- Planning + high-risk tools
-quorum.config.set("models.review", "claude-opus-4.5,gpt-5.2-codex,gemini-3-pro-preview")
--- quorum.config.set("models.participants", "claude-opus-4.5,gpt-5.2-codex")  -- Quorum Discussion
+quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview" })
+-- quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.2-codex" })  -- Quorum Discussion
 -- quorum.config.set("models.moderator", "claude-opus-4.5")    -- Quorum Synthesis
 -- quorum.config.set("models.ask", "claude-sonnet-4.5")        -- Ask (Q&A) interaction
 

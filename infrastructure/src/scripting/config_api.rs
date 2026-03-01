@@ -199,6 +199,21 @@ fn lua_to_config_value(value: LuaValue) -> LuaResult<ConfigValue> {
         LuaValue::Integer(n) => Ok(ConfigValue::Integer(n)),
         LuaValue::Boolean(b) => Ok(ConfigValue::Boolean(b)),
         LuaValue::Number(n) => Ok(ConfigValue::Integer(n as i64)),
+        LuaValue::Table(table) => {
+            let mut list = Vec::new();
+            for pair in table.sequence_values::<LuaString>() {
+                let s = pair.map_err(|_| {
+                    LuaError::external("table elements must be strings for string list config")
+                })?;
+                list.push(s.to_str()?.to_string());
+            }
+            if list.is_empty() {
+                return Err(LuaError::external(
+                    "empty table is not a valid config value",
+                ));
+            }
+            Ok(ConfigValue::StringList(list))
+        }
         other => Err(LuaError::external(format!(
             "unsupported config value type: {:?}",
             other
@@ -227,6 +242,10 @@ mod tests {
             data.insert(
                 "agent.consensus_level".to_string(),
                 ConfigValue::String("solo".to_string()),
+            );
+            data.insert(
+                "models.review".to_string(),
+                ConfigValue::StringList(vec!["model-a".to_string(), "model-b".to_string()]),
             );
             Self { data }
         }
@@ -365,5 +384,46 @@ mod tests {
         assert_eq!(changed_key, "agent.strategy");
         let changed_new: String = lua.globals().get("changed_new").unwrap();
         assert_eq!(changed_new, "debate");
+    }
+
+    #[test]
+    fn test_config_set_string_list_from_table() {
+        let lua = Lua::new();
+        let quorum = lua.create_table().unwrap();
+        let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(MockConfig::new()));
+        let event_bus = Arc::new(Mutex::new(EventBus::new()));
+
+        register_config_api(&lua, &quorum, config.clone(), event_bus).unwrap();
+        lua.globals().set("quorum", &quorum).unwrap();
+
+        lua.load(r#"quorum.config.set("models.review", { "claude-opus-4.6", "gpt-5.3" })"#)
+            .exec()
+            .unwrap();
+
+        let value = config.lock().unwrap().config_get("models.review").unwrap();
+        assert_eq!(
+            value,
+            ConfigValue::StringList(vec!["claude-opus-4.6".to_string(), "gpt-5.3".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_config_get_string_list_returns_table() {
+        let lua = Lua::new();
+        let quorum = lua.create_table().unwrap();
+        let config: Arc<Mutex<dyn ConfigAccessorPort>> = Arc::new(Mutex::new(MockConfig::new()));
+        let event_bus = Arc::new(Mutex::new(EventBus::new()));
+
+        register_config_api(&lua, &quorum, config, event_bus).unwrap();
+        lua.globals().set("quorum", &quorum).unwrap();
+
+        let result: Vec<String> = lua
+            .load(r#"quorum.config.get("models.review")"#)
+            .eval::<LuaTable>()
+            .unwrap()
+            .sequence_values::<String>()
+            .collect::<LuaResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(result, vec!["model-a", "model-b"]);
     }
 }
