@@ -147,9 +147,12 @@ pub struct SessionChannel {
     session_id: String,
     router: Arc<MessageRouter>,
     conversation_logger: Arc<dyn ConversationLogger>,
+    /// Maps `toolCallId` → `toolName` from `tool.execution_start` events,
+    /// used to resolve the tool name when `tool.execution_complete` arrives.
+    tool_names: HashMap<String, String>,
 }
 
-/// Extract tool name from a `tool.execution_complete` event.
+/// Extract tool name directly from event fields (without toolCallId correlation).
 ///
 /// Tries multiple field paths for robustness:
 /// 1. Top-level `toolName` (Copilot CLI standard)
@@ -157,7 +160,7 @@ pub struct SessionChannel {
 /// 3. `data.toolName`
 /// 4. `data.name`
 /// 5. `data.tool.name` (nested structure)
-fn extract_tool_name(event: &serde_json::Value) -> &str {
+fn extract_tool_name_from_event(event: &serde_json::Value) -> Option<&str> {
     let data = event.get("data");
     event
         .get("toolName")
@@ -175,17 +178,61 @@ fn extract_tool_name(event: &serde_json::Value) -> &str {
                     })
             })
         })
-        .unwrap_or("unknown")
+}
+
+/// Extract `data.toolCallId` from a tool event.
+fn extract_tool_call_id(event: &serde_json::Value) -> Option<&str> {
+    event
+        .get("data")
+        .and_then(|d| d.get("toolCallId"))
+        .and_then(|v| v.as_str())
 }
 
 impl SessionChannel {
+    /// Record tool name from a `tool.execution_start` event for later correlation.
+    ///
+    /// The Copilot CLI sends `toolName` in the start event but not in the
+    /// complete event. We store `toolCallId → toolName` so that
+    /// `log_internal_tool_execution()` can resolve the name on completion.
+    fn record_tool_start(&mut self, event: &serde_json::Value) {
+        if let (Some(call_id), Some(name)) = (
+            extract_tool_call_id(event),
+            extract_tool_name_from_event(event),
+        ) {
+            self.tool_names.insert(call_id.to_string(), name.to_string());
+        }
+    }
+
+    /// Resolve tool name for a `tool.execution_complete` event.
+    ///
+    /// Priority:
+    /// 1. `data.toolCallId` → look up in `tool_names` map (from start event)
+    /// 2. Direct field extraction from the event itself (fallback)
+    /// 3. `"unknown"` if nothing matches
+    fn resolve_tool_name(&self, event: &serde_json::Value) -> String {
+        // First: try toolCallId correlation from start events
+        if let Some(call_id) = extract_tool_call_id(event) {
+            if let Some(name) = self.tool_names.get(call_id) {
+                return name.clone();
+            }
+        }
+        // Fallback: direct field extraction
+        extract_tool_name_from_event(event)
+            .unwrap_or("unknown")
+            .to_string()
+    }
+
     /// Log a Copilot CLI internal tool execution event to the conversation logger.
     ///
     /// Extracts tool name, output size, and status from the `tool.execution_complete`
     /// event and records it as an `internal_tool_complete` conversation event.
-    fn log_internal_tool_execution(&self, event: &serde_json::Value) {
+    fn log_internal_tool_execution(&mut self, event: &serde_json::Value) {
         let data = event.get("data");
-        let tool_name = extract_tool_name(event);
+        let tool_name = self.resolve_tool_name(event);
+        // Clean up the toolCallId mapping after resolution
+        if let Some(call_id) = extract_tool_call_id(event) {
+            self.tool_names.remove(call_id);
+        }
         let mut payload = serde_json::json!({
             "session_id": self.session_id,
             "tool": tool_name,
@@ -300,9 +347,12 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_start"
                     | "tool.execution_partial_result" => {
                         trace!("Stream: {}", event_type);
+                    }
+                    "tool.execution_start" => {
+                        self.record_tool_start(&event);
+                        trace!("Stream: tool.execution_start");
                     }
                     "tool.execution_complete" => {
                         let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
@@ -442,9 +492,12 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_start"
                     | "tool.execution_partial_result" => {
                         trace!("Tool stream: {}", event_type);
+                    }
+                    "tool.execution_start" => {
+                        self.record_tool_start(&event);
+                        trace!("Tool stream: tool.execution_start");
                     }
                     other => {
                         let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
@@ -565,9 +618,12 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_start"
                     | "tool.execution_partial_result" => {
                         trace!("Stream: {}", event_type);
+                    }
+                    "tool.execution_start" => {
+                        self.record_tool_start(&event);
+                        trace!("Stream: tool.execution_start");
                     }
                     "tool.execution_complete" => {
                         let size = serde_json::to_string(&event).map(|s| s.len()).unwrap_or(0);
@@ -1092,6 +1148,7 @@ impl MessageRouter {
             session_id: session_id.clone(),
             router: Arc::clone(self),
             conversation_logger: Arc::clone(&self.conversation_logger),
+            tool_names: HashMap::new(),
         };
 
         Ok((session_id, channel))
@@ -1263,7 +1320,7 @@ mod tests {
         );
     }
 
-    // Tests for extract_tool_name (Issue #181)
+    // Tests for extract_tool_name_from_event (Issue #181)
 
     #[test]
     fn extract_tool_name_from_top_level_tool_name() {
@@ -1272,7 +1329,7 @@ mod tests {
             "toolName": "apply_patch",
             "result": {}
         });
-        assert_eq!(extract_tool_name(&event), "apply_patch");
+        assert_eq!(extract_tool_name_from_event(&event), Some("apply_patch"));
     }
 
     #[test]
@@ -1282,7 +1339,7 @@ mod tests {
             "name": "read_file",
             "result": {}
         });
-        assert_eq!(extract_tool_name(&event), "read_file");
+        assert_eq!(extract_tool_name_from_event(&event), Some("read_file"));
     }
 
     #[test]
@@ -1294,7 +1351,7 @@ mod tests {
                 "result": "output"
             }
         });
-        assert_eq!(extract_tool_name(&event), "shell");
+        assert_eq!(extract_tool_name_from_event(&event), Some("shell"));
     }
 
     #[test]
@@ -1306,7 +1363,7 @@ mod tests {
                 "output": "found"
             }
         });
-        assert_eq!(extract_tool_name(&event), "grep_search");
+        assert_eq!(extract_tool_name_from_event(&event), Some("grep_search"));
     }
 
     #[test]
@@ -1318,26 +1375,199 @@ mod tests {
                 "result": {}
             }
         });
-        assert_eq!(extract_tool_name(&event), "web_fetch");
+        assert_eq!(extract_tool_name_from_event(&event), Some("web_fetch"));
     }
 
     #[test]
-    fn extract_tool_name_returns_unknown_for_missing() {
+    fn extract_tool_name_returns_none_for_missing() {
         let event = serde_json::json!({
             "type": "tool.execution_complete",
             "data": { "result": "output" }
         });
-        assert_eq!(extract_tool_name(&event), "unknown");
+        assert_eq!(extract_tool_name_from_event(&event), None);
     }
 
     #[test]
     fn extract_tool_name_prefers_top_level_over_data() {
-        // Top-level toolName should take precedence
         let event = serde_json::json!({
             "type": "tool.execution_complete",
             "toolName": "top_level_tool",
             "data": { "toolName": "data_tool" }
         });
-        assert_eq!(extract_tool_name(&event), "top_level_tool");
+        assert_eq!(extract_tool_name_from_event(&event), Some("top_level_tool"));
+    }
+
+    // Tests for extract_tool_call_id
+
+    #[test]
+    fn extract_tool_call_id_from_data() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": { "toolCallId": "call_abc123" }
+        });
+        assert_eq!(extract_tool_call_id(&event), Some("call_abc123"));
+    }
+
+    #[test]
+    fn extract_tool_call_id_returns_none_when_missing() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": { "result": "output" }
+        });
+        assert_eq!(extract_tool_call_id(&event), None);
+    }
+
+    // Tests for toolCallId correlation (real Copilot CLI event structure)
+    //
+    // These tests verify the start→complete correlation logic using
+    // the HashMap directly, since SessionChannel requires a live
+    // MessageRouter with TCP connections.
+
+    #[test]
+    fn tool_call_id_correlation_start_then_complete() {
+        // Real Copilot CLI flow: start has toolName, complete does not
+        let mut tool_names: HashMap<String, String> = HashMap::new();
+
+        let start_event = serde_json::json!({
+            "type": "tool.execution_start",
+            "data": {
+                "toolCallId": "call_FRQIX6oZmZJYkbqJqZBuZREq",
+                "toolName": "read_file",
+                "arguments": { "path": "/home/user/Cargo.toml" }
+            }
+        });
+
+        // Simulate record_tool_start
+        if let (Some(call_id), Some(name)) = (
+            extract_tool_call_id(&start_event),
+            extract_tool_name_from_event(&start_event),
+        ) {
+            tool_names.insert(call_id.to_string(), name.to_string());
+        }
+
+        // Simulate resolve_tool_name for complete event
+        let complete_event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": {
+                "toolCallId": "call_FRQIX6oZmZJYkbqJqZBuZREq",
+                "result": { "content": "file contents..." },
+                "success": true
+            }
+        });
+        let call_id = extract_tool_call_id(&complete_event).unwrap();
+        let resolved = tool_names
+            .get(call_id)
+            .map(|s| s.as_str())
+            .or_else(|| extract_tool_name_from_event(&complete_event))
+            .unwrap_or("unknown");
+        assert_eq!(resolved, "read_file");
+    }
+
+    #[test]
+    fn tool_call_id_correlation_unknown_without_start() {
+        let tool_names: HashMap<String, String> = HashMap::new();
+
+        let complete_event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": {
+                "toolCallId": "call_unknown",
+                "result": { "content": "output" },
+                "success": true
+            }
+        });
+        let call_id = extract_tool_call_id(&complete_event).unwrap();
+        let resolved = tool_names
+            .get(call_id)
+            .map(|s| s.as_str())
+            .or_else(|| extract_tool_name_from_event(&complete_event))
+            .unwrap_or("unknown");
+        assert_eq!(resolved, "unknown");
+    }
+
+    #[test]
+    fn tool_call_id_correlation_multiple_tools() {
+        let mut tool_names: HashMap<String, String> = HashMap::new();
+
+        // Two different tool starts
+        let start_a = serde_json::json!({
+            "data": { "toolCallId": "call_aaa", "toolName": "read_file" }
+        });
+        let start_b = serde_json::json!({
+            "data": { "toolCallId": "call_bbb", "toolName": "glob_search" }
+        });
+        for ev in [&start_a, &start_b] {
+            if let (Some(id), Some(name)) =
+                (extract_tool_call_id(ev), extract_tool_name_from_event(ev))
+            {
+                tool_names.insert(id.to_string(), name.to_string());
+            }
+        }
+
+        // Complete events arrive in different order
+        let complete_b = serde_json::json!({
+            "data": { "toolCallId": "call_bbb", "success": true }
+        });
+        let complete_a = serde_json::json!({
+            "data": { "toolCallId": "call_aaa", "success": true }
+        });
+
+        let resolve = |ev: &serde_json::Value| -> String {
+            extract_tool_call_id(ev)
+                .and_then(|id| tool_names.get(id))
+                .map(|s| s.to_string())
+                .or_else(|| extract_tool_name_from_event(ev).map(|s| s.to_string()))
+                .unwrap_or_else(|| "unknown".to_string())
+        };
+
+        assert_eq!(resolve(&complete_b), "glob_search");
+        assert_eq!(resolve(&complete_a), "read_file");
+    }
+
+    #[test]
+    fn tool_call_id_real_copilot_cli_events() {
+        // Test with actual Copilot CLI event shapes captured from logs
+        let mut tool_names: HashMap<String, String> = HashMap::new();
+
+        let start = serde_json::json!({
+            "type": "tool.execution_start",
+            "id": "f9ac3120-246a-4851-b8fe-15b2eec6a565",
+            "parentId": "66cb6507-efae-418f-a699-54723cec5b6e",
+            "timestamp": "2026-03-03T15:46:05.901Z",
+            "data": {
+                "toolCallId": "call_FRQIX6oZmZJYkbqJqZBuZREq",
+                "toolName": "read_file",
+                "arguments": { "path": "/home/archie/workspace/copilot-quorum/Cargo.toml" }
+            }
+        });
+        if let (Some(id), Some(name)) = (
+            extract_tool_call_id(&start),
+            extract_tool_name_from_event(&start),
+        ) {
+            tool_names.insert(id.to_string(), name.to_string());
+        }
+
+        let complete = serde_json::json!({
+            "type": "tool.execution_complete",
+            "id": "27e1f6a6-6ba4-4dfb-bbcc-d7b83a22e251",
+            "parentId": "2439aafc-200e-440c-8f8a-5596f4279521",
+            "timestamp": "2026-03-03T15:38:43.412Z",
+            "data": {
+                "interactionId": "ce472ca8-5fb6-45c0-ad9d-b20d3e1628f7",
+                "model": "gpt-5.3-codex",
+                "result": { "content": "[workspace]...", "detailedContent": "[workspace]..." },
+                "success": true,
+                "toolCallId": "call_FRQIX6oZmZJYkbqJqZBuZREq"
+            }
+        });
+        let call_id = extract_tool_call_id(&complete).unwrap();
+        let resolved = tool_names
+            .get(call_id)
+            .map(|s| s.as_str())
+            .or_else(|| extract_tool_name_from_event(&complete))
+            .unwrap_or("unknown");
+        assert_eq!(resolved, "read_file");
+
+        // Also verify that extract_tool_name_from_event finds nothing in the complete event
+        assert_eq!(extract_tool_name_from_event(&complete), None);
     }
 }
