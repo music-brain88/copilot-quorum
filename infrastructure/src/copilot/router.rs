@@ -149,6 +149,35 @@ pub struct SessionChannel {
     conversation_logger: Arc<dyn ConversationLogger>,
 }
 
+/// Extract tool name from a `tool.execution_complete` event.
+///
+/// Tries multiple field paths for robustness:
+/// 1. Top-level `toolName` (Copilot CLI standard)
+/// 2. Top-level `name`
+/// 3. `data.toolName`
+/// 4. `data.name`
+/// 5. `data.tool.name` (nested structure)
+fn extract_tool_name(event: &serde_json::Value) -> &str {
+    let data = event.get("data");
+    event
+        .get("toolName")
+        .and_then(|v| v.as_str())
+        .or_else(|| event.get("name").and_then(|v| v.as_str()))
+        .or_else(|| {
+            data.and_then(|d| {
+                d.get("toolName")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| d.get("name").and_then(|v| v.as_str()))
+                    .or_else(|| {
+                        d.get("tool")
+                            .and_then(|t| t.get("name"))
+                            .and_then(|v| v.as_str())
+                    })
+            })
+        })
+        .unwrap_or("unknown")
+}
+
 impl SessionChannel {
     /// Log a Copilot CLI internal tool execution event to the conversation logger.
     ///
@@ -156,23 +185,28 @@ impl SessionChannel {
     /// event and records it as an `internal_tool_complete` conversation event.
     fn log_internal_tool_execution(&self, event: &serde_json::Value) {
         let data = event.get("data");
-        let tool_name = data
-            .and_then(|d| d.get("toolName").or_else(|| d.get("name")))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+        let tool_name = extract_tool_name(event);
         let mut payload = serde_json::json!({
             "session_id": self.session_id,
             "tool": tool_name,
             "source": "copilot_cli",
         });
-        if let Some(d) = data {
-            if let Some(result) = d.get("result").or_else(|| d.get("output")) {
-                let size = serde_json::to_string(result).map(|s| s.len()).unwrap_or(0);
-                payload["output_bytes"] = serde_json::json!(size);
-            }
-            if let Some(status) = d.get("status").and_then(|v| v.as_str()) {
-                payload["status"] = serde_json::json!(status);
-            }
+        // Try top-level result/output first, then data.result/output
+        let result = event
+            .get("result")
+            .or_else(|| event.get("output"))
+            .or_else(|| data.and_then(|d| d.get("result").or_else(|| d.get("output"))));
+        if let Some(r) = result {
+            let size = serde_json::to_string(r).map(|s| s.len()).unwrap_or(0);
+            payload["output_bytes"] = serde_json::json!(size);
+        }
+        // Try top-level status first, then data.status
+        let status = event
+            .get("status")
+            .and_then(|v| v.as_str())
+            .or_else(|| data.and_then(|d| d.get("status").and_then(|v| v.as_str())));
+        if let Some(s) = status {
+            payload["status"] = serde_json::json!(s);
         }
         self.conversation_logger
             .log(ConversationEvent::new("internal_tool_complete", payload));
@@ -1227,5 +1261,83 @@ mod tests {
             extract_event_text(&event).as_deref(),
             Some("Here is the plan.")
         );
+    }
+
+    // Tests for extract_tool_name (Issue #181)
+
+    #[test]
+    fn extract_tool_name_from_top_level_tool_name() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "toolName": "apply_patch",
+            "result": {}
+        });
+        assert_eq!(extract_tool_name(&event), "apply_patch");
+    }
+
+    #[test]
+    fn extract_tool_name_from_top_level_name() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "name": "read_file",
+            "result": {}
+        });
+        assert_eq!(extract_tool_name(&event), "read_file");
+    }
+
+    #[test]
+    fn extract_tool_name_from_data_tool_name() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": {
+                "toolName": "shell",
+                "result": "output"
+            }
+        });
+        assert_eq!(extract_tool_name(&event), "shell");
+    }
+
+    #[test]
+    fn extract_tool_name_from_data_name() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": {
+                "name": "grep_search",
+                "output": "found"
+            }
+        });
+        assert_eq!(extract_tool_name(&event), "grep_search");
+    }
+
+    #[test]
+    fn extract_tool_name_from_nested_tool_name() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": {
+                "tool": { "name": "web_fetch" },
+                "result": {}
+            }
+        });
+        assert_eq!(extract_tool_name(&event), "web_fetch");
+    }
+
+    #[test]
+    fn extract_tool_name_returns_unknown_for_missing() {
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": { "result": "output" }
+        });
+        assert_eq!(extract_tool_name(&event), "unknown");
+    }
+
+    #[test]
+    fn extract_tool_name_prefers_top_level_over_data() {
+        // Top-level toolName should take precedence
+        let event = serde_json::json!({
+            "type": "tool.execution_complete",
+            "toolName": "top_level_tool",
+            "data": { "toolName": "data_tool" }
+        });
+        assert_eq!(extract_tool_name(&event), "top_level_tool");
     }
 }
