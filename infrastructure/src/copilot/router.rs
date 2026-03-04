@@ -199,7 +199,8 @@ impl SessionChannel {
             extract_tool_call_id(event),
             extract_tool_name_from_event(event),
         ) {
-            self.tool_names.insert(call_id.to_string(), name.to_string());
+            self.tool_names
+                .insert(call_id.to_string(), name.to_string());
         }
     }
 
@@ -211,10 +212,10 @@ impl SessionChannel {
     /// 3. `"unknown"` if nothing matches
     fn resolve_tool_name(&self, event: &serde_json::Value) -> String {
         // First: try toolCallId correlation from start events
-        if let Some(call_id) = extract_tool_call_id(event) {
-            if let Some(name) = self.tool_names.get(call_id) {
-                return name.clone();
-            }
+        if let Some(call_id) = extract_tool_call_id(event)
+            && let Some(name) = self.tool_names.get(call_id)
+        {
+            return name.clone();
         }
         // Fallback: direct field extraction
         extract_tool_name_from_event(event)
