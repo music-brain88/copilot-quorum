@@ -159,6 +159,7 @@ impl<'a> Widget for ToolLogWidget<'a> {
             )));
         }
 
+        super::apply_visual_highlight(&mut lines, self.state, &ContentSlot::ToolLog);
         let block = super::focus_block(self.state, &ContentSlot::ToolLog, " Tool Log ");
 
         Paragraph::new(lines).block(block).render(area, buf);

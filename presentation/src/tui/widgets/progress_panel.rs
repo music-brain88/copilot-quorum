@@ -367,6 +367,7 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
             )));
         }
 
+        super::apply_visual_highlight(&mut lines, self.state, &ContentSlot::Progress);
         let block = super::focus_block(self.state, &ContentSlot::Progress, " Progress ");
 
         Paragraph::new(lines).block(block).render(area, buf);

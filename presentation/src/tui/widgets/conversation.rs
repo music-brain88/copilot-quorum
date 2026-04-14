@@ -1,7 +1,6 @@
 //! Conversation widget — message history + streaming text
 
 use crate::tui::content::{ContentRenderer, ContentSlot};
-use crate::tui::mode::InputMode;
 use crate::tui::state::{MessageRole, TuiState};
 use ratatui::{
     buffer::Buffer,
@@ -114,21 +113,7 @@ impl<'a> ConversationWidget<'a> {
             )));
         }
 
-        // Visual-mode highlight: reverse-video the lines within the selection
-        // when Conversation is focused. NOTE: line indices address unwrapped
-        // source lines — see VisualSelection doc comment for caveats.
-        if self.state.mode == InputMode::Visual
-            && self.state.focused_slot == ContentSlot::Conversation
-            && let Some(sel) = self.state.visual_selection
-        {
-            let (start, end) = sel.range();
-            let end = end.min(lines.len().saturating_sub(1));
-            for (i, line) in lines.iter_mut().enumerate() {
-                if i >= start && i <= end {
-                    line.style = line.style.add_modifier(Modifier::REVERSED);
-                }
-            }
-        }
+        super::apply_visual_highlight(&mut lines, self.state, &ContentSlot::Conversation);
 
         Text::from(lines)
     }

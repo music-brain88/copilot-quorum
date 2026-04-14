@@ -138,6 +138,7 @@ impl<'a> Widget for ModelStreamWidget<'a> {
 
         let title = format!(" {} ", short_name);
         let slot = ContentSlot::ModelStream(self.model_name.to_string());
+        super::apply_visual_highlight(&mut lines, self.state, &slot);
         let block = super::focus_block(self.state, &slot, &title);
 
         Paragraph::new(lines)

@@ -94,11 +94,34 @@ impl<'a> Widget for StatusBarWidget<'a> {
             0
         };
 
+        // Visual selection position indicator (Visual mode only)
+        let sel_width = if self.state.mode == crate::tui::mode::InputMode::Visual {
+            if let Some(sel) = self.state.visual_selection {
+                let (s, e) = sel.range();
+                let text = format!(" L{}→L{} ({} lines) ", s + 1, e + 1, e - s + 1);
+                let w = text.len() as u16;
+                let span = Span::styled(
+                    text,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                );
+                let line = Line::from(vec![span]);
+                buf.set_line(area.x + mode_width + focus_width, area.y, &line, w);
+                w
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
         // Render right-side hints, right-aligned — skip if it would collide
-        // with the mode + focus indicators.
+        // with the mode + focus + sel indicators.
         let right_width = right_text.len() as u16;
         let right_x = area.right().saturating_sub(right_width + 1);
-        if right_x > area.x + mode_width + focus_width {
+        if right_x > area.x + mode_width + focus_width + sel_width {
             let right_line = Line::from(vec![right_span]);
             buf.set_line(right_x, area.y, &right_line, right_width + 1);
         }
