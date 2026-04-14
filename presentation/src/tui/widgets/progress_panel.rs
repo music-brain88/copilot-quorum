@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 /// ContentRenderer adapter for the progress panel.
@@ -367,10 +367,7 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
             )));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Progress ")
-            .style(Style::default().fg(Color::White));
+        let block = super::focus_block(self.state, &ContentSlot::Progress, " Progress ");
 
         Paragraph::new(lines).block(block).render(area, buf);
     }

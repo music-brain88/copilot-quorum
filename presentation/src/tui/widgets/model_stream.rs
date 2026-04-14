@@ -10,7 +10,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 /// ContentRenderer for a specific model's streaming output.
@@ -136,10 +136,9 @@ impl<'a> Widget for ModelStreamWidget<'a> {
             .next()
             .unwrap_or(self.model_name);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {} ", short_name))
-            .style(Style::default().fg(Color::White));
+        let title = format!(" {} ", short_name);
+        let slot = ContentSlot::ModelStream(self.model_name.to_string());
+        let block = super::focus_block(self.state, &slot, &title);
 
         Paragraph::new(lines)
             .block(block)

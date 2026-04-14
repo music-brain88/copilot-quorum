@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 /// ContentRenderer adapter for the conversation pane.
@@ -156,10 +156,7 @@ impl<'a> Widget for ConversationWidget<'a> {
             0
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Conversation ")
-            .style(Style::default().fg(Color::White));
+        let block = super::focus_block(self.state, &ContentSlot::Conversation, " Conversation ");
 
         paragraph.block(block).scroll((scroll, 0)).render(area, buf);
     }

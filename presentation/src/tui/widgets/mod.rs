@@ -17,8 +17,58 @@ pub mod tab_bar;
 pub mod tool_log;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Borders};
 
+use super::content::ContentSlot;
 use super::layout::LayoutPreset;
+use super::mode::InputMode;
+use super::state::TuiState;
+
+/// Build a bordered `Block` for a content pane with focus-aware styling.
+///
+/// All pane widgets should route through this helper so pane focus is
+/// visualized consistently across the TUI. Given the current `TuiState`
+/// and the pane's own `ContentSlot`, this decides border color + title
+/// style based on whether the pane is focused and whether Visual mode
+/// is active.
+pub(super) fn focus_block<'a>(state: &TuiState, slot: &ContentSlot, title: &'a str) -> Block<'a> {
+    let is_focused = &state.focused_slot == slot;
+    let in_visual = state.mode == InputMode::Visual;
+    let (border_style, title_style) = focus_styles(is_focused, in_visual);
+
+    Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(title, title_style))
+        .style(border_style)
+}
+
+/// Resolve (border_style, title_style) for a pane given focus + mode flags.
+///
+/// Visual language:
+/// - Unfocused: dim gray border + gray title so non-active panes recede.
+/// - Focused (Normal/Insert/Command): cyan border + bold cyan title.
+/// - Focused + Visual: magenta — matches `InputMode::Visual.color()` so the
+///   selected pane and the mode indicator agree.
+fn focus_styles(is_focused: bool, in_visual: bool) -> (Style, Style) {
+    if !is_focused {
+        let dim = Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM);
+        return (dim, dim);
+    }
+    let accent = if in_visual {
+        Color::Magenta
+    } else {
+        Color::Cyan
+    };
+    let border = Style::default().fg(accent);
+    let title = Style::default()
+        .fg(accent)
+        .add_modifier(Modifier::BOLD);
+    (border, title)
+}
 
 /// Compute the main layout regions from a terminal area.
 ///

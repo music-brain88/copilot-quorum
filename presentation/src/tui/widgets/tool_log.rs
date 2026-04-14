@@ -11,7 +11,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 use super::progress_panel::{format_duration, render_tool_execution_line, truncate_str};
@@ -159,10 +159,7 @@ impl<'a> Widget for ToolLogWidget<'a> {
             )));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Tool Log ")
-            .style(Style::default().fg(Color::White));
+        let block = super::focus_block(self.state, &ContentSlot::ToolLog, " Tool Log ");
 
         Paragraph::new(lines).block(block).render(area, buf);
     }
