@@ -2096,7 +2096,10 @@ mod tests {
             Some(RoutedMessage::ExternalToolCall { arguments, .. }) => {
                 assert_eq!(arguments, serde_json::Value::Null);
             }
-            other => panic!("expected Some(ExternalToolCall) with Null args, got {:?}", other),
+            other => panic!(
+                "expected Some(ExternalToolCall) with Null args, got {:?}",
+                other
+            ),
         }
 
         // ケース3: data自体が無い

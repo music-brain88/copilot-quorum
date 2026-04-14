@@ -669,8 +669,7 @@ impl LlmSession for CopilotSession {
                     None => ToolCallResult::success(""),
                 };
                 let result_type = tool_result.result_type.clone();
-                let response =
-                    JsonRpcResponseOut::new(request_id, tool_result.into_rpc_value());
+                let response = JsonRpcResponseOut::new(request_id, tool_result.into_rpc_value());
                 let response_json = serde_json::to_string(&response).unwrap_or_default();
 
                 self.router
