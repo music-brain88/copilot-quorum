@@ -1121,25 +1121,24 @@ impl MessageRouter {
                                 .unwrap_or_else(|e| e.into_inner());
                             pending.remove(&id)
                         };
-                        if let Some(tx) = creation_tx {
-                            if let Some(result) = response.result.as_ref() {
-                                if let Some(sid) = result.get("sessionId").and_then(|v| v.as_str())
-                                {
-                                    let mut routes_w =
-                                        routes.write().unwrap_or_else(|e| e.into_inner());
-                                    routes_w.insert(sid.to_string(), tx);
-                                    debug!(
-                                        "Router: route pre-registered for session {} \
-                                         (before response delivery)",
-                                        sid
-                                    );
-                                } else {
-                                    debug!(
-                                        "Router: session.create response id={} \
-                                         missing result.sessionId — tx dropped",
-                                        id
-                                    );
-                                }
+                        if let Some(tx) = creation_tx
+                            && let Some(result) = response.result.as_ref()
+                        {
+                            if let Some(sid) = result.get("sessionId").and_then(|v| v.as_str()) {
+                                let mut routes_w =
+                                    routes.write().unwrap_or_else(|e| e.into_inner());
+                                routes_w.insert(sid.to_string(), tx);
+                                debug!(
+                                    "Router: route pre-registered for session {} \
+                                     (before response delivery)",
+                                    sid
+                                );
+                            } else {
+                                debug!(
+                                    "Router: session.create response id={} \
+                                     missing result.sessionId — tx dropped",
+                                    id
+                                );
                             }
                             // Error responses: tx is simply dropped; caller
                             // will get the error via oneshot below and treat

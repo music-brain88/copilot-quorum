@@ -143,6 +143,9 @@ mod tests {
     }
 
     impl MockProvider {
+        // TODO(#249): rename to `new_arc` and drop this allow — this returns
+        // `Arc<dyn ProviderAdapter>` for test-mock convenience, not `Self`.
+        #[allow(clippy::new_ret_no_self)]
         fn new(kind: ProviderKind) -> Arc<dyn ProviderAdapter> {
             Arc::new(Self {
                 kind,

@@ -967,10 +967,10 @@ mod tests {
 
         fn get_session_responses(&self, model: &str) -> Vec<ScriptedResponse> {
             // Try model-specific queue first
-            if let Some(queue) = self.session_queues.lock().unwrap().get_mut(model) {
-                if let Some(responses) = queue.pop_front() {
-                    return responses;
-                }
+            if let Some(queue) = self.session_queues.lock().unwrap().get_mut(model)
+                && let Some(responses) = queue.pop_front()
+            {
+                return responses;
             }
             // Try fallback
             if let Some(responses) = self.fallback_responses.lock().unwrap().pop_front() {
