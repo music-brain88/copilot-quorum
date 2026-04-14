@@ -169,6 +169,11 @@ pub struct CopilotToolDefinition {
     /// official Copilot SDK wire format (Go: `Tool.Parameters`,
     /// Node.js: `tool.parameters`).
     pub parameters: serde_json::Value,
+    /// Copilot CLI 1.0.25+ ships built-in tools (e.g. `web_fetch`,
+    /// `web_search`). Setting this to `true` tells the daemon to let
+    /// our external tool replace the built-in of the same name instead
+    /// of rejecting the registration.
+    pub overrides_built_in_tool: bool,
 }
 
 impl CopilotToolDefinition {
@@ -181,6 +186,7 @@ impl CopilotToolDefinition {
             name: value.get("name")?.as_str()?.to_string(),
             description: value.get("description")?.as_str()?.to_string(),
             parameters: value.get("input_schema")?.clone(),
+            overrides_built_in_tool: true,
         })
     }
 }
@@ -452,6 +458,7 @@ mod tests {
                     },
                     "required": ["path"]
                 }),
+                overrides_built_in_tool: true,
             }]),
             available_tools: None,
         };
@@ -521,12 +528,25 @@ mod tests {
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.description, "Read file contents");
         assert_eq!(tool.parameters["type"], "object");
+        assert!(tool.overrides_built_in_tool);
     }
 
     #[test]
     fn copilot_tool_definition_from_api_tool_missing_field() {
         let bad = serde_json::json!({"name": "foo"});
         assert!(CopilotToolDefinition::from_api_tool(&bad).is_none());
+    }
+
+    #[test]
+    fn copilot_tool_definition_serializes_overrides_built_in_tool() {
+        let api_tool = serde_json::json!({
+            "name": "web_fetch",
+            "description": "Fetch a URL",
+            "input_schema": {"type": "object"}
+        });
+        let tool = CopilotToolDefinition::from_api_tool(&api_tool).unwrap();
+        let json = serde_json::to_value(&tool).unwrap();
+        assert_eq!(json["overridesBuiltInTool"], true);
     }
 
     #[test]
