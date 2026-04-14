@@ -68,10 +68,30 @@ pub enum StreamingOutcome {
     /// `text_so_far` contains any text the LLM emitted before the tool call.
     /// The caller should execute the tool and send results back via
     /// [`MessageRouter::send_response`](super::router::MessageRouter::send_response).
+    ///
+    /// **Legacy path** — used by built-in tools (`report_intent`, `create_plan`
+    /// pre-1.0.25).  For user-defined tools in Copilot CLI 1.0.25+, see
+    /// [`ExternalToolCall`](Self::ExternalToolCall) instead.
     ToolCall {
         text_so_far: String,
         request_id: u64,
         params: ToolCallParams,
+    },
+    /// An `external_tool.requested` session event was received — the LLM
+    /// wants a **user-defined** tool invoked via the CLI 1.0.25+ path.
+    ///
+    /// Unlike [`ToolCall`](Self::ToolCall), the `request_id` here is a UUID
+    /// string assigned by the CLI, and the response must be sent via
+    /// [`MessageRouter::respond_to_external_tool`](super::router::MessageRouter::respond_to_external_tool)
+    /// rather than a JSON-RPC response.
+    ExternalToolCall {
+        text_so_far: String,
+        /// UUID assigned by the CLI for this external tool request.
+        request_id: String,
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        arguments: serde_json::Value,
     },
 }
 

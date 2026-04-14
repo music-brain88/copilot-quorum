@@ -19,8 +19,9 @@
 
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
-    CreateSessionParams, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, JsonRpcResponseOut,
-    ToolCallParams, ToolCallResult,
+    CreateSessionParams, CreateSessionResult, ExternalToolResult, HandlePendingToolCallParams,
+    HandlePermissionRequestParams, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcResponseOut, PermissionResult, ToolCallParams, ToolCallResult,
 };
 use crate::copilot::transport::{MessageKind, StreamingOutcome, classify_message};
 use quorum_application::ports::conversation_logger::{
@@ -38,8 +39,58 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
-/// Timeout for session creation (waiting for `session.start` event).
+/// Timeout for `session.create` — waiting for the JSON-RPC response
+/// (which carries `result.sessionId`).
+///
+/// The Copilot CLI typically replies within ~1.5s. This cap protects
+/// against pathological hangs without punishing slow first-boots. We do
+/// **not** wait for the `session.start` notification — session_id comes
+/// back in the response envelope directly, so there is nothing to
+/// correlate against the notification.
 const SESSION_CREATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Decide how to respond to a `permission.requested` event from Copilot CLI.
+///
+/// The CLI side hands us the `kind` of the requested action (from the
+/// `permissionRequest.kind` field of the event) and blocks the tool loop
+/// until we reply via `session.permissions.handlePendingPermissionRequest`.
+///
+/// This router-level policy runs **before** any higher-level HiL or Lua
+/// hook, so it should be conservative but non-blocking: pick an
+/// `approved` / `denied-*` variant synchronously from the event kind alone.
+fn decide_permission_result(kind: &str) -> PermissionResult {
+    match kind {
+        // Read-only actions — no side effects, safe to auto-approve.
+        "read" | "url" => PermissionResult::Approved,
+
+        // `shell` is needed by ensemble planning to run git/grep/ls for
+        // context gathering, and the Copilot CLI's internal skills are
+        // forwarded as `custom-tool` permission requests. Approved here
+        // until per-command HiL wiring lands.
+        "shell" | "custom-tool" => PermissionResult::Approved,
+
+        // Mutating side effects on the user's environment / external
+        // systems. Deny with feedback so the LLM knows to take another
+        // path instead of retrying the same action.
+        "write" | "mcp" => PermissionResult::DeniedInteractivelyByUser {
+            feedback: Some(format!(
+                "Permission kind '{kind}' is blocked at the router level. \
+                 Use read-only tools (read_file, grep_search, glob_search) \
+                 or surface the change to the user for manual application."
+            )),
+        },
+
+        // Unknown future kinds — deny conservatively so a new CLI version
+        // can't surprise us with unreviewed side-effecting actions.
+        _ => PermissionResult::DeniedInteractivelyByUser {
+            feedback: Some(format!(
+                "Unknown permission kind '{kind}' was denied by the default \
+                 router policy. This kind is not recognised by the current \
+                 quorum version."
+            )),
+        },
+    }
+}
 
 /// A message routed to a specific session's channel.
 ///
@@ -60,16 +111,30 @@ pub enum RoutedMessage {
     ///
     /// Used by **Native Tool Use** and the **Agent System** — the LLM decides
     /// to invoke a tool, and the CLI forwards the request to us for execution.
+    ///
+    /// **Legacy path** — CLI 1.0.25 now uses `external_tool.requested` events
+    /// for user-defined tools (see [`ExternalToolCall`](Self::ExternalToolCall));
+    /// this path is retained for built-in tools and backwards compatibility.
     ToolCall {
         request_id: u64,
         params: ToolCallParams,
     },
-}
-
-/// Information extracted from a `session.start` event.
-#[derive(Debug)]
-struct SessionStartEvent {
-    session_id: String,
+    /// An `external_tool.requested` session event from CLI 1.0.25+.
+    ///
+    /// User-defined tools (registered via `session.create`'s `tools` field)
+    /// are invoked through this path instead of the legacy `tool.call` RPC.
+    /// The `request_id` is a **UUID string** (not a JSON-RPC numeric id);
+    /// the response must be sent via
+    /// [`MessageRouter::respond_to_external_tool`].
+    ExternalToolCall {
+        /// UUID string — correlates the CLI's `external_tool.requested` with
+        /// our `session.tools.handlePendingToolCall` reply.
+        request_id: String,
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        arguments: serde_json::Value,
+    },
 }
 
 /// Try to extract text content from a session event's data payload.
@@ -186,6 +251,33 @@ fn extract_tool_call_id(event: &serde_json::Value) -> Option<&str> {
         .get("data")
         .and_then(|d| d.get("toolCallId"))
         .and_then(|v| v.as_str())
+}
+
+/// Parse an `external_tool.requested` event into a routable message.
+///
+/// Returns `None` when any required field (`requestId`, `toolCallId`,
+/// `toolName`, `arguments`) is missing so the caller can fall back to the
+/// generic `SessionEvent` routing.  `session_id` is passed in rather than
+/// pulled from the event because the outer routing layer already tracks it.
+fn parse_external_tool_requested(
+    session_id: &str,
+    event: &serde_json::Value,
+) -> Option<RoutedMessage> {
+    let data = event.get("data")?;
+    let request_id = data.get("requestId").and_then(|v| v.as_str())?.to_string();
+    let tool_call_id = data.get("toolCallId").and_then(|v| v.as_str())?.to_string();
+    let tool_name = data.get("toolName").and_then(|v| v.as_str())?.to_string();
+    let arguments = data
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Some(RoutedMessage::ExternalToolCall {
+        request_id,
+        session_id: session_id.to_string(),
+        tool_call_id,
+        tool_name,
+        arguments,
+    })
 }
 
 impl SessionChannel {
@@ -348,7 +440,9 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_partial_result" => {
+                    | "tool.execution_partial_result"
+                    | "permission.requested"
+                    | "permission.completed" => {
                         trace!("Stream: {}", event_type);
                     }
                     "tool.execution_start" => {
@@ -383,6 +477,25 @@ impl SessionChannel {
                         ToolCallResult::error("Tool not available in this session context");
                     let response = JsonRpcResponseOut::new(request_id, result.into_rpc_value());
                     let _ = self.router.send_response(&response).await;
+                }
+                RoutedMessage::ExternalToolCall {
+                    request_id,
+                    session_id,
+                    tool_name,
+                    ..
+                } => {
+                    warn!(
+                        "Unexpected external_tool.requested in read_streaming: {}, rejecting",
+                        tool_name
+                    );
+                    let _ = self
+                        .router
+                        .respond_to_external_tool(
+                            &session_id,
+                            &request_id,
+                            Err("Tool not available in this session context".to_string()),
+                        )
+                        .await;
                 }
             }
         }
@@ -493,7 +606,9 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_partial_result" => {
+                    | "tool.execution_partial_result"
+                    | "permission.requested"
+                    | "permission.completed" => {
                         trace!("Tool stream: {}", event_type);
                     }
                     "tool.execution_start" => {
@@ -519,6 +634,26 @@ impl SessionChannel {
                         text_so_far: full_content,
                         request_id,
                         params,
+                    });
+                }
+                RoutedMessage::ExternalToolCall {
+                    request_id,
+                    session_id,
+                    tool_call_id,
+                    tool_name,
+                    arguments,
+                } => {
+                    debug!(
+                        "External tool call received: {} (request_id={})",
+                        tool_name, request_id
+                    );
+                    return Ok(StreamingOutcome::ExternalToolCall {
+                        text_so_far: full_content,
+                        request_id,
+                        session_id,
+                        tool_call_id,
+                        tool_name,
+                        arguments,
                     });
                 }
             }
@@ -619,7 +754,9 @@ impl SessionChannel {
                     | "session.usage_info"
                     | "assistant.usage"
                     | "assistant.reasoning"
-                    | "tool.execution_partial_result" => {
+                    | "tool.execution_partial_result"
+                    | "permission.requested"
+                    | "permission.completed" => {
                         trace!("Stream: {}", event_type);
                     }
                     "tool.execution_start" => {
@@ -655,6 +792,25 @@ impl SessionChannel {
                     let response = JsonRpcResponseOut::new(request_id, result.into_rpc_value());
                     let _ = self.router.send_response(&response).await;
                 }
+                RoutedMessage::ExternalToolCall {
+                    request_id,
+                    session_id,
+                    tool_name,
+                    ..
+                } => {
+                    warn!(
+                        "Unexpected external_tool.requested in read_streaming_with_cancellation: {}, rejecting",
+                        tool_name
+                    );
+                    let _ = self
+                        .router
+                        .respond_to_external_tool(
+                            &session_id,
+                            &request_id,
+                            Err("Tool not available in this session context".to_string()),
+                        )
+                        .await;
+                }
             }
         }
     }
@@ -682,9 +838,23 @@ impl Drop for SessionChannel {
 /// 3. **Route** incoming JSON-RPC messages by `session_id` to per-session
 ///    [`SessionChannel`]s via `mpsc::UnboundedSender`.
 /// 4. **Correlate** request–response pairs via `oneshot` channels (used by
-///    [`request`](Self::request)).
-/// 5. **Serialize** session creation through [`create_lock`](Self) to prevent
-///    `session.start` event mix-ups.
+///    [`request`](Self::request)) — this includes `session.create`, whose
+///    response envelope carries `result.sessionId` directly.
+///
+/// # Session creation
+///
+/// `session.create` is a plain JSON-RPC request–response: the response
+/// body contains `result.sessionId`, which we register in [`routes`](Self)
+/// before returning the [`SessionChannel`] to the caller.
+///
+/// The `session.start` **notification** that the CLI also emits is
+/// informational only (lifecycle hook) — we no longer use it for session
+/// identification. Earlier versions of this router correlated callers to
+/// the notification via a FIFO queue, which broke when Copilot CLI
+/// v1.0.25 began processing `session.create` requests in parallel and
+/// emitting `session.start` events out-of-order. The response-based
+/// path is order-independent and handles CLI error responses (e.g.
+/// "Model X is not available") surfaced as [`CopilotError::InvalidModel`].
 ///
 /// # Feature usage
 ///
@@ -708,12 +878,16 @@ pub struct MessageRouter {
     /// Request-response correlation (request_id -> oneshot sender).
     pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
 
-    /// Channel for session.start events (consumed during session creation).
-    _session_start_tx: mpsc::UnboundedSender<SessionStartEvent>,
-    session_start_rx: Mutex<mpsc::UnboundedReceiver<SessionStartEvent>>,
-
-    /// Serializes session creation (prevent concurrent session.start confusion).
-    create_lock: Mutex<()>,
+    /// In-flight `session.create` calls (request_id -> mpsc sender).
+    ///
+    /// Holds the route tx for each pending `session.create` so the reader
+    /// loop can register `routes[session_id] = tx` **atomically** with
+    /// response delivery — before the next notification iteration can run.
+    /// This closes the race where `session.start` (or any early event) is
+    /// emitted before `create_session()` has learnt its session_id from
+    /// the response and would otherwise arrive at a still-empty routes map.
+    pending_session_creations:
+        Arc<std::sync::RwLock<HashMap<u64, mpsc::UnboundedSender<RoutedMessage>>>>,
 
     /// Writer (serialized writes, independent of reader).
     ///
@@ -815,26 +989,32 @@ impl MessageRouter {
             Arc::new(std::sync::RwLock::new(HashMap::new()));
         let pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(RwLock::new(HashMap::new()));
-        let (session_start_tx, session_start_rx) = mpsc::unbounded_channel();
+        let pending_session_creations: Arc<
+            std::sync::RwLock<HashMap<u64, mpsc::UnboundedSender<RoutedMessage>>>,
+        > = Arc::new(std::sync::RwLock::new(HashMap::new()));
         let writer = Arc::new(Mutex::new(BufWriter::new(write_half)));
 
-        // Clone refs for the background reader task
         let routes_bg = Arc::clone(&routes);
         let pending_bg = Arc::clone(&pending_responses);
-        let start_tx_bg = session_start_tx.clone();
+        let pending_creations_bg = Arc::clone(&pending_session_creations);
         let writer_bg = Arc::clone(&writer);
 
         let reader_handle = tokio::spawn(async move {
-            Self::reader_loop(read_half, routes_bg, pending_bg, start_tx_bg, writer_bg).await;
+            Self::reader_loop(
+                read_half,
+                routes_bg,
+                pending_bg,
+                pending_creations_bg,
+                writer_bg,
+            )
+            .await;
         });
 
         let router = Arc::new(Self {
             _reader_handle: reader_handle,
             routes,
             pending_responses,
-            _session_start_tx: session_start_tx,
-            session_start_rx: Mutex::new(session_start_rx),
-            create_lock: Mutex::new(()),
+            pending_session_creations,
             writer,
             child,
             conversation_logger,
@@ -849,9 +1029,11 @@ impl MessageRouter {
     /// occurs. Each incoming JSON-RPC message is classified by
     /// [`classify_message`] and dispatched:
     ///
-    /// - **Response** → `pending_responses` oneshot (request correlation)
-    /// - **Notification `session.start`** → `session_start_tx` (session creation)
-    /// - **Notification (other)** → `routes[session_id]` → [`SessionChannel`]
+    /// - **Response** → `pending_responses` oneshot (request correlation,
+    ///   including `session.create` responses that carry `result.sessionId`)
+    /// - **Notification (all)** → `routes[session_id]` → [`SessionChannel`]
+    ///   (including `session.start`, which is just informational — the
+    ///   session_id is already known from the `session.create` response)
     /// - **IncomingRequest `tool.call`** → `routes[session_id]` → [`SessionChannel`]
     ///
     /// When the loop exits, all senders are dropped so that receivers observe
@@ -860,7 +1042,9 @@ impl MessageRouter {
         read_half: OwnedReadHalf,
         routes: Arc<std::sync::RwLock<HashMap<String, mpsc::UnboundedSender<RoutedMessage>>>>,
         pending_responses: Arc<RwLock<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
-        session_start_tx: mpsc::UnboundedSender<SessionStartEvent>,
+        pending_session_creations: Arc<
+            std::sync::RwLock<HashMap<u64, mpsc::UnboundedSender<RoutedMessage>>>,
+        >,
         writer: Arc<Mutex<BufWriter<OwnedWriteHalf>>>,
     ) {
         let mut reader = BufReader::new(read_half);
@@ -926,6 +1110,41 @@ impl MessageRouter {
                                 continue;
                             }
                         };
+
+                        // If this is a `session.create` response, register the
+                        // route BEFORE delivering to the oneshot. This closes
+                        // the race where a subsequent notification iteration
+                        // would see an empty routes map and drop the event.
+                        let creation_tx = {
+                            let mut pending = pending_session_creations
+                                .write()
+                                .unwrap_or_else(|e| e.into_inner());
+                            pending.remove(&id)
+                        };
+                        if let Some(tx) = creation_tx
+                            && let Some(result) = response.result.as_ref()
+                        {
+                            if let Some(sid) = result.get("sessionId").and_then(|v| v.as_str()) {
+                                let mut routes_w =
+                                    routes.write().unwrap_or_else(|e| e.into_inner());
+                                routes_w.insert(sid.to_string(), tx);
+                                debug!(
+                                    "Router: route pre-registered for session {} \
+                                     (before response delivery)",
+                                    sid
+                                );
+                            } else {
+                                debug!(
+                                    "Router: session.create response id={} \
+                                     missing result.sessionId — tx dropped",
+                                    id
+                                );
+                            }
+                            // Error responses: tx is simply dropped; caller
+                            // will get the error via oneshot below and treat
+                            // the session as never-created.
+                        }
+
                         let sender = {
                             let mut pending = pending_responses.write().await;
                             pending.remove(&id)
@@ -1019,21 +1238,39 @@ impl MessageRouter {
                                     .unwrap_or("")
                                     .to_string();
 
-                                // Check for session.start
-                                if event_type == "session.start" {
-                                    debug!("Router: session.start for {}", sid);
-                                    let _ = session_start_tx
-                                        .send(SessionStartEvent { session_id: sid });
-                                    continue;
+                                // Auto-respond to permission requests so the
+                                // CLI's built-in skills (shell / write / read /
+                                // mcp / url / custom-tool) don't block waiting
+                                // for a handler we never had wired up.
+                                if event_type == "permission.requested" {
+                                    Self::handle_permission_request(&sid, &ev, Arc::clone(&writer));
+                                    // Fall through so the event still reaches
+                                    // the session channel for observability.
                                 }
 
-                                // Route to session channel
+                                // Route to session channel.  User-defined tool
+                                // invocations (CLI 1.0.25+) arrive as
+                                // `external_tool.requested` events and are
+                                // promoted to a dedicated RoutedMessage variant
+                                // so callers can dispatch them distinctly from
+                                // the legacy `tool.call` path.
+                                let routed_message = if event_type == "external_tool.requested" {
+                                    parse_external_tool_requested(&sid, &ev).unwrap_or_else(|| {
+                                        RoutedMessage::SessionEvent {
+                                            event_type: event_type.clone(),
+                                            event: ev.clone(),
+                                        }
+                                    })
+                                } else {
+                                    RoutedMessage::SessionEvent {
+                                        event_type: event_type.clone(),
+                                        event: ev,
+                                    }
+                                };
+
                                 let routes_read = routes.read().unwrap_or_else(|e| e.into_inner());
                                 if let Some(tx) = routes_read.get(&sid) {
-                                    let _ = tx.send(RoutedMessage::SessionEvent {
-                                        event_type,
-                                        event: ev,
-                                    });
+                                    let _ = tx.send(routed_message);
                                 } else {
                                     debug!(
                                         "Router: no route for session_id={}, dropping event type={}",
@@ -1064,6 +1301,12 @@ impl MessageRouter {
             let mut pending_w = pending_responses.write().await;
             pending_w.clear();
         }
+        {
+            let mut creations_w = pending_session_creations
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            creations_w.clear();
+        }
     }
 
     /// Helper: read the Content-Length header value.
@@ -1093,9 +1336,16 @@ impl MessageRouter {
 
     /// Create a new Copilot session and return its ID + channel.
     ///
-    /// Session creation is serialized via `create_lock` to prevent
-    /// concurrent `session.create` requests from confusing which
-    /// `session.start` event belongs to which caller.
+    /// Multiple `session.create` calls run in **parallel** without any
+    /// router-level serialization: each call sends a JSON-RPC request
+    /// and awaits its own response (correlated by request `id`). The
+    /// response carries `result.sessionId` directly, so there is no
+    /// dependency on the order of subsequent `session.start` events —
+    /// which the CLI (≥ 1.0.25) emits out-of-order under parallel load.
+    ///
+    /// Surfaces CLI error responses (e.g. `"Model X is not available"`)
+    /// as [`CopilotError::InvalidModel`] so callers can distinguish
+    /// configuration mistakes from transport faults.
     ///
     /// Called by [`CopilotSession::new`](super::session::CopilotSession::new)
     /// for the main session, and again by
@@ -1105,8 +1355,6 @@ impl MessageRouter {
         self: &Arc<Self>,
         params: CreateSessionParams,
     ) -> Result<(String, SessionChannel)> {
-        let _guard = self.create_lock.lock().await;
-
         let params_value = serde_json::to_value(&params)?;
         let params_size = serde_json::to_string(&params_value)
             .map(|s| s.len())
@@ -1117,32 +1365,83 @@ impl MessageRouter {
             serde_json::to_string(&params_value).unwrap_or_default()
         );
         let request = JsonRpcRequest::new("session.create", Some(params_value));
+        let request_id = request.id;
 
-        self.send_request(&request).await?;
+        // Pre-register the route sender keyed by request_id. When the reader
+        // loop receives the session.create response, it will move this tx
+        // into routes[session_id] **before** delivering the response — so by
+        // the time we get the sessionId back here, any events already
+        // received for that session are safely routed to our channel.
+        let (tx, rx) = mpsc::unbounded_channel();
+        {
+            let mut pending = self
+                .pending_session_creations
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.insert(request_id, tx);
+        }
 
-        // Wait for session.start event with timeout
-        let start_event = {
-            let mut rx = self.session_start_rx.lock().await;
-            match tokio::time::timeout(SESSION_CREATE_TIMEOUT, rx.recv()).await {
-                Ok(Some(event)) => event,
-                Ok(None) => return Err(CopilotError::RouterStopped),
+        let response =
+            match tokio::time::timeout(SESSION_CREATE_TIMEOUT, self.request(&request)).await {
+                Ok(res) => res,
                 Err(_) => {
+                    // Timeout: reclaim the pre-registered tx so it doesn't leak.
+                    let mut pending = self
+                        .pending_session_creations
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    pending.remove(&request_id);
                     return Err(CopilotError::Timeout(
-                        "session.create timed out waiting for session.start".into(),
+                        "session.create timed out waiting for response".into(),
                     ));
                 }
+            };
+        let response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                let mut pending = self
+                    .pending_session_creations
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner());
+                pending.remove(&request_id);
+                return Err(e);
             }
         };
 
-        let session_id = start_event.session_id;
+        if let Some(err) = response.error {
+            // Reader loop didn't register the route (no result.sessionId on
+            // error), but defensively clean up in case the race went the
+            // other way.
+            {
+                let mut pending = self
+                    .pending_session_creations
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner());
+                pending.remove(&request_id);
+            }
+            // Copilot CLI surfaces unknown / deprecated model names as
+            // messages like `Model "gemini-3.1-pro-preview" is not available`.
+            // Surface a dedicated variant so the caller can show a clear
+            // "fix your config" hint instead of a generic transport error.
+            if err.message.contains("not available") || err.message.contains("not supported") {
+                return Err(CopilotError::InvalidModel(err.message));
+            }
+            return Err(CopilotError::RpcError {
+                code: err.code,
+                message: err.message,
+            });
+        }
+
+        let result_value = response.result.ok_or_else(|| {
+            CopilotError::UnexpectedResponse("session.create response missing result field".into())
+        })?;
+        let result: CreateSessionResult = serde_json::from_value(result_value)?;
+        let session_id = result.session_id;
         debug!("Router: session created: {}", session_id);
 
-        // Create the channel pair and register
-        let (tx, rx) = mpsc::unbounded_channel();
-        {
-            let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
-            routes.insert(session_id.clone(), tx);
-        }
+        // Route registration was already done by the reader loop when it
+        // processed the response — we just construct the SessionChannel
+        // that owns the receiver end of the channel we pre-registered.
 
         let channel = SessionChannel {
             rx,
@@ -1215,6 +1514,136 @@ impl MessageRouter {
         Ok(())
     }
 
+    /// Reply to an `external_tool.requested` event via
+    /// `session.tools.handlePendingToolCall` (Copilot CLI 1.0.25+).
+    ///
+    /// `result` is `Ok(text)` for a successful tool execution — the string is
+    /// fed back to the LLM verbatim — or `Err(message)` to signal failure via
+    /// the CLI's `error` field.  The RPC is sent with a fresh request id and
+    /// the `{success: true}` response is awaited to surface transport errors
+    /// early; the outgoing `external_tool.completed` event then unblocks the
+    /// LLM.
+    pub async fn respond_to_external_tool(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        result: std::result::Result<String, String>,
+    ) -> Result<()> {
+        let (tool_result, error) = match result {
+            Ok(text) => (Some(ExternalToolResult::Text(text)), None),
+            Err(message) => (None, Some(message)),
+        };
+        let params = HandlePendingToolCallParams {
+            session_id: session_id.to_string(),
+            request_id: request_id.to_string(),
+            result: tool_result,
+            error,
+        };
+        let params_value = serde_json::to_value(&params)?;
+        let request =
+            JsonRpcRequest::new("session.tools.handlePendingToolCall", Some(params_value));
+        let response = self.request(&request).await?;
+        if let Some(err) = response.error {
+            warn!(
+                "session.tools.handlePendingToolCall rejected (request_id={}): code={} message={}",
+                request_id, err.code, err.message
+            );
+            return Err(CopilotError::RpcError {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        debug!(
+            "external tool responded: session_id={} request_id={}",
+            session_id, request_id
+        );
+        Ok(())
+    }
+
+    /// Respond to a `permission.requested` session event.
+    ///
+    /// Parses `data.requestId` and `data.permissionRequest.kind` from the
+    /// event body, runs [`decide_permission_result`], and spawns a task
+    /// that writes `session.permissions.handlePendingPermissionRequest` on
+    /// the shared writer. The reply is fire-and-forget because the CLI
+    /// answers with a plain response we don't need to correlate — and the
+    /// subsequent `permission.completed` event confirms the outcome.
+    ///
+    /// Called from the reader loop (static context), hence an associated
+    /// function that takes the writer by `Arc` instead of `&self`.
+    fn handle_permission_request(
+        session_id: &str,
+        event: &serde_json::Value,
+        writer: Arc<Mutex<BufWriter<OwnedWriteHalf>>>,
+    ) {
+        let data = match event.get("data") {
+            Some(d) => d,
+            None => {
+                warn!("permission.requested without data field");
+                return;
+            }
+        };
+        let request_id = match data.get("requestId").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                warn!("permission.requested without data.requestId");
+                return;
+            }
+        };
+        let kind = data
+            .get("permissionRequest")
+            .and_then(|pr| pr.get("kind"))
+            .and_then(|k| k.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let result = decide_permission_result(&kind);
+        info!(
+            "permission.requested session={} kind={} request_id={} → {:?}",
+            session_id, kind, request_id, result
+        );
+
+        let params = HandlePermissionRequestParams {
+            session_id: session_id.to_string(),
+            request_id,
+            result,
+        };
+        let params_value = match serde_json::to_value(&params) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Failed to serialize permission response: {}", e);
+                return;
+            }
+        };
+        let request = JsonRpcRequest::new(
+            "session.permissions.handlePendingPermissionRequest",
+            Some(params_value),
+        );
+
+        tokio::spawn(async move {
+            let json = match serde_json::to_string(&request) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Failed to serialize permission RPC: {}", e);
+                    return;
+                }
+            };
+            let header = format!("Content-Length: {}\r\n\r\n", json.len());
+            let mut w = writer.lock().await;
+            if let Err(e) = w.write_all(header.as_bytes()).await {
+                warn!("Failed to write permission header: {}", e);
+                return;
+            }
+            if let Err(e) = w.write_all(json.as_bytes()).await {
+                warn!("Failed to write permission body: {}", e);
+                return;
+            }
+            if let Err(e) = w.flush().await {
+                warn!("Failed to flush permission response: {}", e);
+            }
+        });
+    }
+
     /// Deregister a session from the routing table.
     ///
     /// Automatically called by [`SessionChannel::drop`] — callers do not
@@ -1237,6 +1666,45 @@ impl Drop for MessageRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_policy_matches_intent() {
+        assert!(matches!(
+            decide_permission_result("read"),
+            PermissionResult::Approved
+        ));
+        assert!(matches!(
+            decide_permission_result("url"),
+            PermissionResult::Approved
+        ));
+        assert!(matches!(
+            decide_permission_result("shell"),
+            PermissionResult::Approved
+        ));
+        assert!(matches!(
+            decide_permission_result("custom-tool"),
+            PermissionResult::Approved
+        ));
+
+        let result = decide_permission_result("write");
+        if let PermissionResult::DeniedInteractivelyByUser { feedback } = result {
+            assert!(feedback.unwrap().contains("write"));
+        } else {
+            panic!("expected DeniedInteractivelyByUser, got {:?}", result);
+        }
+        let result = decide_permission_result("mcp");
+        if let PermissionResult::DeniedInteractivelyByUser { feedback } = result {
+            assert!(feedback.unwrap().contains("mcp"));
+        } else {
+            panic!("expected DeniedInteractivelyByUser, got {:?}", result);
+        }
+        let result = decide_permission_result("zz-yy-xx");
+        if let PermissionResult::DeniedInteractivelyByUser { feedback } = result {
+            assert!(feedback.unwrap().contains("zz-yy-xx"));
+        } else {
+            panic!("expected DeniedInteractivelyByUser, got {:?}", result);
+        }
+    }
 
     #[test]
     fn extract_text_from_string_content() {
@@ -1570,5 +2038,75 @@ mod tests {
 
         // Also verify that extract_tool_name_from_event finds nothing in the complete event
         assert_eq!(extract_tool_name_from_event(&complete), None);
+    }
+
+    #[test]
+    fn parse_external_tool_requested_happy_path() {
+        let event = serde_json::json!({
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "req-uuid-123",
+                "toolCallId": "call_abc",
+                "toolName": "create_plan",
+                "arguments": { "objective": "ship it", "tasks": [] }
+            }
+        });
+        let routed = parse_external_tool_requested("sess-1", &event).expect("parse ok");
+        match routed {
+            RoutedMessage::ExternalToolCall {
+                request_id,
+                session_id,
+                tool_call_id,
+                tool_name,
+                arguments,
+            } => {
+                assert_eq!(request_id, "req-uuid-123");
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(tool_call_id, "call_abc");
+                assert_eq!(tool_name, "create_plan");
+                assert_eq!(arguments["objective"], "ship it");
+            }
+            other => panic!("expected ExternalToolCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_external_tool_requested_missing_fields() {
+        // ケース1: requestId が無い
+        let event_no_request_id = serde_json::json!({
+            "type": "external_tool.requested",
+            "data": {
+                "toolCallId": "call_abc",
+                "toolName": "create_plan",
+                "arguments": {}
+            }
+        });
+        assert!(parse_external_tool_requested("sess-1", &event_no_request_id).is_none());
+
+        // ケース2: arguments はオプショナル — 欠損時は Value::Null にフォールバック
+        let event_no_args = serde_json::json!({
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "req-123",
+                "toolCallId": "call_abc",
+                "toolName": "create_plan"
+            }
+        });
+        match parse_external_tool_requested("sess-1", &event_no_args) {
+            Some(RoutedMessage::ExternalToolCall { arguments, .. }) => {
+                assert_eq!(arguments, serde_json::Value::Null);
+            }
+            other => panic!(
+                "expected Some(ExternalToolCall) with Null args, got {:?}",
+                other
+            ),
+        }
+
+        // ケース3: data自体が無い
+        let event_no_data = serde_json::json!({
+            "type": "external_tool.requested",
+        });
+
+        assert!(parse_external_tool_requested("sess-1", &event_no_data).is_none())
     }
 }
