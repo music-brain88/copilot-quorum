@@ -267,6 +267,44 @@ pub struct IncomingJsonRpcRequest {
     pub params: Option<serde_json::Value>,
 }
 
+/// Params for the `session.permissions.handlePendingPermissionRequest` RPC
+/// request (SDK → CLI).
+///
+/// When the Copilot CLI emits a `permission.requested` session event (e.g.
+/// the LLM wants to run a shell command or write a file), the SDK must
+/// respond by invoking this method with the matching `requestId`.  Without
+/// a response the CLI side pauses indefinitely, blocking the tool loop.
+///
+/// The SDK's `approveAll` helper in the official Node.js SDK sends a payload
+/// equivalent to `PermissionResult::Approved` here.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandlePermissionRequestParams {
+    pub session_id: String,
+    pub request_id: String,
+    pub result: PermissionResult,
+}
+
+/// Response variants for a permission request, matching the `anyOf` union in
+/// `schemas/api.schema.json` → `session.permissions.handlePendingPermissionRequest`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PermissionResult {
+    /// Permission granted — the CLI may proceed with the requested action.
+    Approved,
+    /// Denied because one or more approval rules explicitly blocked it.
+    DeniedByRules { rules: Vec<serde_json::Value> },
+    /// Denied because no approval rule matched and interactive user
+    /// confirmation was unavailable.
+    DeniedNoApprovalRuleAndCouldNotRequestFromUser,
+    /// Denied through an interactive prompt by the user, optionally with
+    /// human-readable feedback.
+    DeniedInteractivelyByUser {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
+    },
+}
+
 /// JSON-RPC response sent from SDK → CLI (e.g., `tool.call` result).
 ///
 /// Used by **Native Tool Use** — after executing a tool,
