@@ -267,6 +267,90 @@ pub struct IncomingJsonRpcRequest {
     pub params: Option<serde_json::Value>,
 }
 
+/// Params for the `session.permissions.handlePendingPermissionRequest` RPC
+/// request (SDK → CLI).
+///
+/// When the Copilot CLI emits a `permission.requested` session event (e.g.
+/// the LLM wants to run a shell command or write a file), the SDK must
+/// respond by invoking this method with the matching `requestId`.  Without
+/// a response the CLI side pauses indefinitely, blocking the tool loop.
+///
+/// The SDK's `approveAll` helper in the official Node.js SDK sends a payload
+/// equivalent to `PermissionResult::Approved` here.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandlePermissionRequestParams {
+    pub session_id: String,
+    pub request_id: String,
+    pub result: PermissionResult,
+}
+
+/// Response variants for a permission request, matching the `anyOf` union in
+/// `schemas/api.schema.json` → `session.permissions.handlePendingPermissionRequest`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PermissionResult {
+    /// Permission granted — the CLI may proceed with the requested action.
+    Approved,
+    /// Denied because one or more approval rules explicitly blocked it.
+    DeniedByRules { rules: Vec<serde_json::Value> },
+    /// Denied because no approval rule matched and interactive user
+    /// confirmation was unavailable.
+    DeniedNoApprovalRuleAndCouldNotRequestFromUser,
+    /// Denied through an interactive prompt by the user, optionally with
+    /// human-readable feedback.
+    DeniedInteractivelyByUser {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
+    },
+}
+
+/// Params for the `session.tools.handlePendingToolCall` RPC request (SDK → CLI).
+///
+/// Copilot CLI 1.0.25 delivers user-defined tool invocations through the
+/// `external_tool.requested` session event instead of the legacy `tool.call`
+/// JSON-RPC request.  After executing the tool, the SDK must send this RPC
+/// to hand back the result so the LLM can continue.  Without a reply the
+/// CLI pauses indefinitely (observed: 10 min+ hangs during Planning).
+///
+/// Exactly one of `result` / `error` must be set; `result` wins if both are
+/// provided.  A missing `result` and missing `error` is rejected by the CLI.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandlePendingToolCallParams {
+    pub session_id: String,
+    pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<ExternalToolResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Payload for a successfully executed external tool.
+///
+/// Copilot CLI accepts either a bare string (the simple case — just the text
+/// to feed back to the LLM) or a richer object with telemetry.  We expose
+/// both forms via an untagged enum so a caller can opt into metadata when
+/// it's available without paying a JSON overhead in the common case.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ExternalToolResult {
+    /// Simplest form — treated by the CLI as the full tool output text.
+    Text(String),
+    /// Expanded form matching the CLI schema's `Fos` object.
+    #[serde(rename_all = "camelCase")]
+    Structured {
+        /// Text shown to the LLM as the tool's output.
+        text_result_for_llm: String,
+        /// Optional tag describing the kind of result (free-form).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result_type: Option<String>,
+        /// Optional human-readable error message associated with the result.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+}
+
 /// JSON-RPC response sent from SDK → CLI (e.g., `tool.call` result).
 ///
 /// Used by **Native Tool Use** — after executing a tool,
@@ -542,5 +626,39 @@ mod tests {
 
         let rpc_err = ToolCallResult::error("boom").into_rpc_value();
         assert_eq!(rpc_err["result"]["resultType"], "failure");
+    }
+
+    #[test]
+    fn handle_pending_tool_call_success_wire_format() {
+        // `session.tools.handlePendingToolCall` expects camelCase fields with
+        // the tool text at `result` as a plain string (untagged Text variant).
+        let params = HandlePendingToolCallParams {
+            session_id: "sess-1".to_string(),
+            request_id: "req-uuid-abc".to_string(),
+            result: Some(ExternalToolResult::Text("plan saved".to_string())),
+            error: None,
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["sessionId"], "sess-1");
+        assert_eq!(json["requestId"], "req-uuid-abc");
+        assert_eq!(json["result"], "plan saved");
+        // `error` must be omitted (skip_serializing_if) so the CLI treats
+        // this as a success — sending `null` could be interpreted as "no
+        // error info" alongside a missing result.
+        assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn handle_pending_tool_call_error_wire_format() {
+        let params = HandlePendingToolCallParams {
+            session_id: "sess-1".to_string(),
+            request_id: "req-uuid-xyz".to_string(),
+            result: None,
+            error: Some("tool exploded".to_string()),
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["error"], "tool exploded");
+        // `result` must be omitted so the CLI's union type picks the error path.
+        assert!(json.get("result").is_none());
     }
 }

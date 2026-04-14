@@ -145,7 +145,7 @@ mod tests {
     fn head_tail_small_budget_falls_back() {
         let s = "hello world, this is a test";
         // Budget too small for marker, falls back to head truncation
-        let result = truncate_head_tail(&s, 40);
+        let result = truncate_head_tail(s, 40);
         assert!(result.len() <= 40);
     }
 
