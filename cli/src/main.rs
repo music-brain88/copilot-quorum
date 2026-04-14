@@ -20,8 +20,9 @@ use quorum_domain::OutputFormat;
 #[cfg(feature = "bedrock")]
 use quorum_infrastructure::BedrockProviderAdapter;
 use quorum_infrastructure::{
-    ArboardClipboard, CopilotLlmGateway, CopilotProviderAdapter, GitHubReferenceResolver,
-    JsonSchemaToolConverter, JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
+    ArboardClipboard, CopilotLlmGateway, CopilotProviderAdapter, FallbackClipboard,
+    GitHubReferenceResolver, JsonSchemaToolConverter, JsonlConversationLogger, LocalContextLoader,
+    LocalToolExecutor, Osc52Clipboard,
 };
 use quorum_infrastructure::{ProviderAdapter, RoutingGateway};
 use quorum_presentation::{
@@ -466,11 +467,19 @@ async fn main() -> Result<()> {
 
         let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
-        // Clipboard adapter for TUI yank/copy. ArboardClipboard gracefully
-        // degrades to an error-returning state if the platform cannot
-        // initialize a clipboard (headless Linux without xcb/wayland, etc.).
-        let clipboard: Arc<dyn quorum_application::ClipboardPort> =
+        // Clipboard adapter for TUI yank/copy.
+        //
+        // Primary: `ArboardClipboard` — OS-native clipboard (X11/Wayland/
+        // AppKit/Win32). Fast and persists after the TUI exits.
+        //
+        // Fallback: `Osc52Clipboard` — emits an OSC 52 escape so the
+        // terminal emulator performs the clipboard op. Required over
+        // SSH where arboard cannot reach a display server.
+        let primary: Arc<dyn quorum_application::ClipboardPort> =
             Arc::new(ArboardClipboard::new());
+        let fallback: Arc<dyn quorum_application::ClipboardPort> = Arc::new(Osc52Clipboard::new());
+        let clipboard: Arc<dyn quorum_application::ClipboardPort> =
+            Arc::new(FallbackClipboard::new(primary, fallback));
 
         let mut tui_app = TuiApp::new_with_logger(
             gateway.clone(),

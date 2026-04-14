@@ -15,7 +15,7 @@ pub mod scripting;
 pub mod tools;
 
 // Re-export commonly used types
-pub use clipboard::ArboardClipboard;
+pub use clipboard::{ArboardClipboard, FallbackClipboard, Osc52Clipboard};
 pub use context::LocalContextLoader;
 pub use copilot::{
     error::{CopilotError, Result},
