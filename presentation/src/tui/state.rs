@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use super::content::{ContentRegistry, ContentSlot};
 use super::layout::TuiLayoutConfig;
 use super::mode::InputMode;
 use super::route::RouteTable;
@@ -51,6 +52,13 @@ pub struct TuiState {
     /// Text content for Lua-registered content slots.
     pub lua_content: HashMap<String, String>,
 
+    // -- Yank / Visual mode --
+    /// Currently focused content slot for pane-level yank operations.
+    /// Default: `ContentSlot::Conversation`. Cycled via Ctrl+w.
+    pub focused_slot: ContentSlot,
+    /// Active Visual-mode selection. `Some` only when `mode == InputMode::Visual`.
+    pub visual_selection: Option<VisualSelection>,
+
     // -- Lifecycle --
     pub should_quit: bool,
 }
@@ -73,6 +81,8 @@ impl Default for TuiState {
             tui_config: TuiInputConfig::default(),
             layout_config: TuiLayoutConfig::default(),
             lua_content: HashMap::new(),
+            focused_slot: ContentSlot::Conversation,
+            visual_selection: None,
             should_quit: false,
         }
     }
@@ -297,6 +307,101 @@ impl TuiState {
             super::tab::PaneKind::Interaction(_, Some(id)) => Some(id),
             super::tab::PaneKind::Interaction(_, None) => None,
         }
+    }
+
+    // -- Yank / Visual helpers --
+
+    /// Collect the content slots eligible for focus (those routed to a content pane).
+    ///
+    /// Order follows the route table entry order, which is how panes are laid
+    /// out left-to-right (or top-to-bottom for stacked layouts).
+    fn focusable_slots(&self) -> Vec<ContentSlot> {
+        self.route
+            .entries()
+            .iter()
+            .filter(|e| e.surface.is_content_pane())
+            .map(|e| e.content.clone())
+            .collect()
+    }
+
+    /// Cycle `focused_slot` to the next content pane in the route.
+    ///
+    /// Wraps around. If no content panes are routed, the focus stays put.
+    pub fn cycle_focus(&mut self) {
+        let slots = self.focusable_slots();
+        if slots.is_empty() {
+            return;
+        }
+        let next = match slots.iter().position(|s| s == &self.focused_slot) {
+            Some(idx) => slots[(idx + 1) % slots.len()].clone(),
+            None => slots[0].clone(),
+        };
+        self.focused_slot = next;
+    }
+
+    /// Extract text from the focused slot via its ContentRenderer.
+    ///
+    /// Returns `None` if the focused slot has no registered renderer.
+    pub fn extract_focused_text(
+        &self,
+        registry: &ContentRegistry,
+        mode: YankMode,
+    ) -> Option<String> {
+        let renderer = registry.get(&self.focused_slot)?;
+        let text = match mode {
+            YankMode::Recent => renderer.get_recent_message(self),
+            YankMode::All => renderer.get_text_content(self),
+            YankMode::LastAssistant => renderer.get_last_assistant_response(self),
+        };
+        Some(text)
+    }
+}
+
+/// Mode of text extraction for a yank operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YankMode {
+    /// `yy` — most recent message in the focused pane.
+    Recent,
+    /// `ya` — full pane content.
+    All,
+    /// `Y` — last assistant response (Conversation only).
+    LastAssistant,
+}
+
+/// Active Visual-mode selection in line-based coordinates.
+///
+/// NOTE: line indices address *unwrapped source lines*. When the renderer
+/// wraps a long source line across multiple visual rows, the highlight
+/// covers the entire source line regardless of wrapping. Wrap-aware
+/// selection is left as a follow-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualSelection {
+    pub anchor_line: usize,
+    pub cursor_line: usize,
+}
+
+impl VisualSelection {
+    /// Normalized range `[start, end]` covering both anchor and cursor.
+    pub fn range(&self) -> (usize, usize) {
+        if self.anchor_line <= self.cursor_line {
+            (self.anchor_line, self.cursor_line)
+        } else {
+            (self.cursor_line, self.anchor_line)
+        }
+    }
+}
+
+/// Human-readable label for a `ContentSlot` (used in flash messages).
+pub fn content_slot_label(slot: &ContentSlot) -> String {
+    match slot {
+        ContentSlot::Conversation => "Conversation".to_string(),
+        ContentSlot::Progress => "Progress".to_string(),
+        ContentSlot::Notification => "Notification".to_string(),
+        ContentSlot::HilPrompt => "HiL Prompt".to_string(),
+        ContentSlot::Help => "Help".to_string(),
+        ContentSlot::ToolLog => "Tool Log".to_string(),
+        ContentSlot::ModelStream(name) => format!("Model: {}", name),
+        ContentSlot::LuaSlot(name) => format!("Lua: {}", name),
     }
 }
 
@@ -687,6 +792,45 @@ mod tests {
         state.delete_char(); // should delete '\n'
         assert_eq!(state.tabs.active_pane().input, "abc");
         assert_eq!(state.tabs.active_pane().cursor_pos, 2);
+    }
+
+    #[test]
+    fn test_cycle_focus_default_layout() {
+        let mut state = TuiState::new();
+        // Default layout has Conversation (MainPane) + Progress (Sidebar).
+        assert_eq!(state.focused_slot, ContentSlot::Conversation);
+        state.cycle_focus();
+        assert_eq!(state.focused_slot, ContentSlot::Progress);
+        state.cycle_focus();
+        assert_eq!(state.focused_slot, ContentSlot::Conversation);
+    }
+
+    #[test]
+    fn test_cycle_focus_wide_layout() {
+        let mut state = TuiState::new();
+        state.route = crate::tui::route::RouteTable::wide_layout();
+        assert_eq!(state.focused_slot, ContentSlot::Conversation);
+        state.cycle_focus();
+        assert_eq!(state.focused_slot, ContentSlot::Progress);
+        state.cycle_focus();
+        assert_eq!(state.focused_slot, ContentSlot::ToolLog);
+        state.cycle_focus();
+        assert_eq!(state.focused_slot, ContentSlot::Conversation);
+    }
+
+    #[test]
+    fn test_visual_selection_range_normalizes() {
+        let sel = VisualSelection {
+            anchor_line: 5,
+            cursor_line: 2,
+        };
+        assert_eq!(sel.range(), (2, 5));
+
+        let sel = VisualSelection {
+            anchor_line: 1,
+            cursor_line: 4,
+        };
+        assert_eq!(sel.range(), (1, 4));
     }
 
     #[test]

@@ -44,11 +44,14 @@ impl<'a> Widget for StatusBarWidget<'a> {
         } else {
             match self.state.mode {
                 crate::tui::mode::InputMode::Normal => {
-                    "i:insert  s/e:solo/ens  a/d:ask/discuss  f:fast  gt:tab  ?:help".into()
+                    "i:insert  yy/ya/Y:yank  v:visual  Ctrl+w:focus  gt:tab  ?:help".into()
                 }
                 crate::tui::mode::InputMode::Insert => "Enter:send  Esc:normal  Ctrl+C:quit".into(),
                 crate::tui::mode::InputMode::Command => {
                     "Enter:execute  Esc:cancel  q:quit  help:commands".into()
+                }
+                crate::tui::mode::InputMode::Visual => {
+                    "hjkl/wb:extend  y/Enter:yank  Esc/v:cancel".into()
                 }
             }
         };

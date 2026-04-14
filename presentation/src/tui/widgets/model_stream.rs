@@ -36,6 +36,17 @@ impl ContentRenderer for ModelStreamRenderer {
     fn render_content(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         ModelStreamWidget::new(state, &self.model_name).render(area, buf);
     }
+
+    fn get_text_content(&self, state: &TuiState) -> String {
+        state
+            .tabs
+            .active_pane()
+            .progress
+            .model_streams
+            .get(&self.model_name)
+            .map(|ms| ms.streaming_text.clone())
+            .unwrap_or_default()
+    }
 }
 
 struct ModelStreamWidget<'a> {

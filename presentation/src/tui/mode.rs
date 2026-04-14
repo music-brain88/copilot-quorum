@@ -15,6 +15,8 @@ pub enum InputMode {
     Insert,
     /// Command-line mode (`:` prefix)
     Command,
+    /// Visual mode — range selection for yank.
+    Visual,
 }
 
 impl InputMode {
@@ -24,6 +26,7 @@ impl InputMode {
             Self::Normal => "NORMAL",
             Self::Insert => "-- INSERT --",
             Self::Command => ":",
+            Self::Visual => "-- VISUAL --",
         }
     }
 
@@ -34,6 +37,7 @@ impl InputMode {
             Self::Normal => Color::Blue,
             Self::Insert => Color::Green,
             Self::Command => Color::Yellow,
+            Self::Visual => Color::Magenta,
         }
     }
 }
@@ -90,8 +94,35 @@ pub enum KeyAction {
     ShowHelp,
     ToggleConsensus,
 
+    // -- Yank (copy) --
+    /// `yy` — yank the most recent message in the focused pane.
+    YankRecent,
+    /// `ya` — yank the full content of the focused pane.
+    YankAll,
+    /// `Y` — yank the last Assistant response from the Conversation slot.
+    YankLastAssistant,
+    /// `v` — enter Visual mode for range selection.
+    EnterVisual,
+    /// Extend the Visual selection in the given direction.
+    VisualExtend(VisualDirection),
+    /// Confirm Visual selection and copy to clipboard.
+    VisualYank,
+    /// `Ctrl+w` — cycle which content slot has yank focus.
+    CycleFocus,
+
     // -- Lua scripting --
     LuaCallback(u64),
+}
+
+/// Directions for extending the Visual selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualDirection {
+    Up,
+    Down,
+    LineStart,
+    LineEnd,
+    WordLeft,
+    WordRight,
 }
 
 /// A table of custom keybindings registered from Lua scripts.
@@ -169,6 +200,11 @@ fn builtin_action_by_name(name: &str) -> KeyAction {
         "quit" => KeyAction::Quit,
         "show_help" => KeyAction::ShowHelp,
         "insert_newline" => KeyAction::InsertNewline,
+        "yank_recent" => KeyAction::YankRecent,
+        "yank_all" => KeyAction::YankAll,
+        "yank_last_assistant" => KeyAction::YankLastAssistant,
+        "enter_visual" => KeyAction::EnterVisual,
+        "cycle_focus" => KeyAction::CycleFocus,
         _ => KeyAction::None,
     }
 }
@@ -242,6 +278,7 @@ pub fn handle_key_event(mode: InputMode, key: KeyEvent, pending_key: Option<char
         InputMode::Normal => handle_normal(key, pending_key),
         InputMode::Insert => handle_insert(key),
         InputMode::Command => handle_command(key),
+        InputMode::Visual => handle_visual(key),
     }
 }
 
@@ -254,6 +291,20 @@ fn handle_normal(key: KeyEvent, pending_key: Option<char>) -> KeyAction {
             KeyCode::Char('T') => KeyAction::PrevTab,     // gT
             _ => KeyAction::None,                         // unknown g-combo, discard
         };
+    }
+
+    // Handle pending `y` prefix (yank commands)
+    if pending_key == Some('y') {
+        return match key.code {
+            KeyCode::Char('y') => KeyAction::YankRecent, // yy
+            KeyCode::Char('a') => KeyAction::YankAll,    // ya
+            _ => KeyAction::None,                        // unknown y-combo, discard
+        };
+    }
+
+    // Ctrl+w cycles yank focus between content slots.
+    if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return KeyAction::CycleFocus;
     }
 
     match key.code {
@@ -279,9 +330,31 @@ fn handle_normal(key: KeyEvent, pending_key: Option<char>) -> KeyAction {
         KeyCode::Char('g') => KeyAction::PendingKey('g'), // g prefix
         KeyCode::Char('G') => KeyAction::ScrollToBottom,
 
+        // Yank
+        KeyCode::Char('y') => KeyAction::PendingKey('y'), // y prefix
+        KeyCode::Char('Y') => KeyAction::YankLastAssistant,
+        KeyCode::Char('v') => KeyAction::EnterVisual,
+
         // Help
         KeyCode::Char('?') => KeyAction::ShowHelp,
 
+        _ => KeyAction::None,
+    }
+}
+
+fn handle_visual(key: KeyEvent) -> KeyAction {
+    match key.code {
+        KeyCode::Esc => KeyAction::ExitToNormal,
+        KeyCode::Char('v') => KeyAction::ExitToNormal,
+        KeyCode::Char('y') | KeyCode::Enter => KeyAction::VisualYank,
+        KeyCode::Char('j') | KeyCode::Down => KeyAction::VisualExtend(VisualDirection::Down),
+        KeyCode::Char('k') | KeyCode::Up => KeyAction::VisualExtend(VisualDirection::Up),
+        KeyCode::Char('h') | KeyCode::Left => KeyAction::VisualExtend(VisualDirection::LineStart),
+        KeyCode::Char('l') | KeyCode::Right => KeyAction::VisualExtend(VisualDirection::LineEnd),
+        KeyCode::Char('w') => KeyAction::VisualExtend(VisualDirection::WordRight),
+        KeyCode::Char('b') => KeyAction::VisualExtend(VisualDirection::WordLeft),
+        KeyCode::Home => KeyAction::VisualExtend(VisualDirection::LineStart),
+        KeyCode::End => KeyAction::VisualExtend(VisualDirection::LineEnd),
         _ => KeyAction::None,
     }
 }
@@ -618,5 +691,132 @@ mod tests {
         );
         assert_eq!(builtin_action_by_name("quit"), KeyAction::Quit);
         assert_eq!(builtin_action_by_name("unknown"), KeyAction::None);
+    }
+
+    #[test]
+    fn test_yank_prefix_yy() {
+        let key_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_y, None),
+            KeyAction::PendingKey('y')
+        );
+        let key_y2 = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key_y2, Some('y')),
+            KeyAction::YankRecent
+        );
+    }
+
+    #[test]
+    fn test_yank_prefix_ya() {
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key, Some('y')),
+            KeyAction::YankAll
+        );
+    }
+
+    #[test]
+    fn test_yank_prefix_unknown_discards() {
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key, Some('y')),
+            KeyAction::None
+        );
+    }
+
+    #[test]
+    fn test_shift_y_yanks_last_assistant() {
+        let key = KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key, None),
+            KeyAction::YankLastAssistant
+        );
+    }
+
+    #[test]
+    fn test_v_enters_visual() {
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key, None),
+            KeyAction::EnterVisual
+        );
+    }
+
+    #[test]
+    fn test_ctrl_w_cycles_focus() {
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(
+            handle_key_event(InputMode::Normal, key, None),
+            KeyAction::CycleFocus
+        );
+    }
+
+    #[test]
+    fn test_visual_mode_extends() {
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Visual, key, None),
+            KeyAction::VisualExtend(VisualDirection::Down)
+        );
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Visual, key, None),
+            KeyAction::VisualExtend(VisualDirection::Up)
+        );
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Visual, key, None),
+            KeyAction::VisualExtend(VisualDirection::WordRight)
+        );
+    }
+
+    #[test]
+    fn test_visual_mode_yank() {
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Visual, key, None),
+            KeyAction::VisualYank
+        );
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Visual, key, None),
+            KeyAction::VisualYank
+        );
+    }
+
+    #[test]
+    fn test_visual_mode_esc_exits() {
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Visual, key, None),
+            KeyAction::ExitToNormal
+        );
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Visual, key, None),
+            KeyAction::ExitToNormal
+        );
+    }
+
+    #[test]
+    fn test_builtin_action_yank_names() {
+        assert_eq!(
+            builtin_action_by_name("yank_recent"),
+            KeyAction::YankRecent
+        );
+        assert_eq!(builtin_action_by_name("yank_all"), KeyAction::YankAll);
+        assert_eq!(
+            builtin_action_by_name("yank_last_assistant"),
+            KeyAction::YankLastAssistant
+        );
+        assert_eq!(
+            builtin_action_by_name("enter_visual"),
+            KeyAction::EnterVisual
+        );
+        assert_eq!(
+            builtin_action_by_name("cycle_focus"),
+            KeyAction::CycleFocus
+        );
     }
 }

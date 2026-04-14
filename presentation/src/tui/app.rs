@@ -34,8 +34,8 @@ use crossterm::{
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
 use quorum_application::{
-    AgentController, ContextLoaderPort, ConversationLogger, LlmGateway, NoConversationLogger,
-    ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
+    AgentController, ClipboardPort, ContextLoaderPort, ConversationLogger, LlmGateway,
+    NoClipboard, NoConversationLogger, ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
 };
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -83,6 +83,9 @@ pub struct TuiApp {
 
     // -- TUI accessor for Lua scripting --
     tui_accessor: Option<Arc<Mutex<dyn TuiAccessorPort>>>,
+
+    // -- Clipboard (for yank/copy operations) --
+    clipboard: Arc<dyn ClipboardPort>,
 }
 
 impl TuiApp {
@@ -160,7 +163,17 @@ impl TuiApp {
             scripting_engine: Arc::new(quorum_application::NoScriptingEngine),
             custom_keymap: mode::CustomKeymap::new(),
             tui_accessor: None,
+            clipboard: Arc::new(NoClipboard),
         }
+    }
+
+    /// Set the clipboard adapter used for yank/copy operations.
+    ///
+    /// Defaults to `NoClipboard`, which returns an error on `write`.
+    /// Pass an `ArboardClipboard` (or similar) to enable actual copying.
+    pub fn with_clipboard(mut self, clipboard: Arc<dyn ClipboardPort>) -> Self {
+        self.clipboard = clipboard;
+        self
     }
 
     // -- Builder methods (delegate to controller via commands) --
@@ -475,6 +488,8 @@ impl TuiApp {
                         custom_action.clone(),
                         &self.cmd_tx,
                         &self.scripting_engine,
+                        &self.clipboard,
+                        &self.content_registry,
                     );
                 }
 
@@ -489,6 +504,8 @@ impl TuiApp {
                     action,
                     &self.cmd_tx,
                     &self.scripting_engine,
+                    &self.clipboard,
+                    &self.content_registry,
                 )
             }
             crossterm::event::Event::Resize(_, _) => None,

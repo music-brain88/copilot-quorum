@@ -3,6 +3,7 @@
 //! This crate contains adapters that implement the ports defined
 //! in the application layer, including configuration file loading.
 
+pub mod clipboard;
 pub mod config;
 pub mod context;
 pub mod copilot;
@@ -14,6 +15,7 @@ pub mod scripting;
 pub mod tools;
 
 // Re-export commonly used types
+pub use clipboard::ArboardClipboard;
 pub use context::LocalContextLoader;
 pub use copilot::{
     error::{CopilotError, Result},

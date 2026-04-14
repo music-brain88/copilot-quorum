@@ -5,7 +5,7 @@
 //! in the current interaction.
 
 use crate::tui::content::{ContentRenderer, ContentSlot};
-use crate::tui::state::TuiState;
+use crate::tui::state::{ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiState};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -29,6 +29,61 @@ impl ContentRenderer for ToolLogRenderer {
     fn render_content(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         ToolLogWidget::new(state).render(area, buf);
     }
+
+    fn get_text_content(&self, state: &TuiState) -> String {
+        let progress = &state.tabs.active_pane().progress;
+        let mut lines: Vec<String> = Vec::new();
+
+        if let Some(ref tp) = progress.task_progress {
+            for summary in &tp.completed_tasks {
+                let icon = if summary.success { "✓" } else { "✗" };
+                let dur = summary.duration_ms.map(format_duration).unwrap_or_default();
+                lines.push(format!(
+                    "{} Task {}: {}{}",
+                    icon, summary.index, summary.description, dur
+                ));
+                for exec in &summary.tool_executions {
+                    lines.push(format_tool_execution_plain(exec));
+                }
+            }
+
+            if !tp.active_tool_executions.is_empty() {
+                if !lines.is_empty() {
+                    lines.push(String::new());
+                }
+                lines.push(format!(
+                    "▸ Task {}: {}",
+                    tp.current_index, tp.description
+                ));
+                for exec in &tp.active_tool_executions {
+                    lines.push(format_tool_execution_plain(exec));
+                }
+            }
+        }
+
+        if lines.is_empty() {
+            return "No tool executions".to_string();
+        }
+        lines.join("\n")
+    }
+}
+
+fn format_tool_execution_plain(exec: &ToolExecutionDisplay) -> String {
+    let (icon, suffix) = match &exec.state {
+        ToolExecutionDisplayStatus::Pending => ("…", String::new()),
+        ToolExecutionDisplayStatus::Running => ("▸", String::new()),
+        ToolExecutionDisplayStatus::Completed { .. } => {
+            let dur = exec.duration_ms.map(format_duration).unwrap_or_default();
+            ("✓", dur)
+        }
+        ToolExecutionDisplayStatus::Error { message } => ("✗", format!(" — {}", message)),
+    };
+    let args = exec
+        .args_preview
+        .as_deref()
+        .map(|p| format!("  {}", p))
+        .unwrap_or_default();
+    format!("    {} {}{}{}", icon, exec.tool_name, args, suffix)
 }
 
 struct ToolLogWidget<'a> {

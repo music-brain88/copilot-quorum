@@ -20,8 +20,8 @@ use quorum_domain::OutputFormat;
 #[cfg(feature = "bedrock")]
 use quorum_infrastructure::BedrockProviderAdapter;
 use quorum_infrastructure::{
-    CopilotLlmGateway, CopilotProviderAdapter, GitHubReferenceResolver, JsonSchemaToolConverter,
-    JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
+    ArboardClipboard, CopilotLlmGateway, CopilotProviderAdapter, GitHubReferenceResolver,
+    JsonSchemaToolConverter, JsonlConversationLogger, LocalContextLoader, LocalToolExecutor,
 };
 use quorum_infrastructure::{ProviderAdapter, RoutingGateway};
 use quorum_presentation::{
@@ -466,6 +466,12 @@ async fn main() -> Result<()> {
 
         let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
+        // Clipboard adapter for TUI yank/copy. ArboardClipboard gracefully
+        // degrades to an error-returning state if the platform cannot
+        // initialize a clipboard (headless Linux without xcb/wayland, etc.).
+        let clipboard: Arc<dyn quorum_application::ClipboardPort> =
+            Arc::new(ArboardClipboard::new());
+
         let mut tui_app = TuiApp::new_with_logger(
             gateway.clone(),
             tool_executor.clone(),
@@ -477,7 +483,8 @@ async fn main() -> Result<()> {
         .with_tui_config(tui_input_config)
         .with_layout_config(tui_layout_config)
         .with_scripting_engine(scripting_engine)
-        .with_tui_accessor(tui_accessor);
+        .with_tui_accessor(tui_accessor)
+        .with_clipboard(clipboard);
         if let Some(resolver) = reference_resolver {
             tui_app = tui_app.with_reference_resolver(Arc::new(resolver));
         }

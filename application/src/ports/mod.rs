@@ -4,6 +4,7 @@
 
 pub mod action_reviewer;
 pub mod agent_progress;
+pub mod clipboard;
 pub mod composite_progress;
 pub mod config_accessor;
 pub mod context_loader;

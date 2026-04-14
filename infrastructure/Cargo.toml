@@ -45,6 +45,9 @@ futures = { workspace = true }
 # CLI tool detection
 which = "7"
 
+# System clipboard (for TUI yank/copy)
+arboard = "3"
+
 # HTTP client (optional, for web tools)
 reqwest = { workspace = true, optional = true }
 
