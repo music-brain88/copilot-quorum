@@ -19,9 +19,9 @@
 
 use crate::copilot::error::{CopilotError, Result};
 use crate::copilot::protocol::{
-    CreateSessionParams, CreateSessionResult, HandlePermissionRequestParams, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, JsonRpcResponseOut, PermissionResult, ToolCallParams,
-    ToolCallResult,
+    CreateSessionParams, CreateSessionResult, ExternalToolResult, HandlePendingToolCallParams,
+    HandlePermissionRequestParams, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcResponseOut, PermissionResult, ToolCallParams, ToolCallResult,
 };
 use crate::copilot::transport::{MessageKind, StreamingOutcome, classify_message};
 use quorum_application::ports::conversation_logger::{
@@ -111,9 +111,29 @@ pub enum RoutedMessage {
     ///
     /// Used by **Native Tool Use** and the **Agent System** — the LLM decides
     /// to invoke a tool, and the CLI forwards the request to us for execution.
+    ///
+    /// **Legacy path** — CLI 1.0.25 now uses `external_tool.requested` events
+    /// for user-defined tools (see [`ExternalToolCall`](Self::ExternalToolCall));
+    /// this path is retained for built-in tools and backwards compatibility.
     ToolCall {
         request_id: u64,
         params: ToolCallParams,
+    },
+    /// An `external_tool.requested` session event from CLI 1.0.25+.
+    ///
+    /// User-defined tools (registered via `session.create`'s `tools` field)
+    /// are invoked through this path instead of the legacy `tool.call` RPC.
+    /// The `request_id` is a **UUID string** (not a JSON-RPC numeric id);
+    /// the response must be sent via
+    /// [`MessageRouter::respond_to_external_tool`].
+    ExternalToolCall {
+        /// UUID string — correlates the CLI's `external_tool.requested` with
+        /// our `session.tools.handlePendingToolCall` reply.
+        request_id: String,
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        arguments: serde_json::Value,
     },
 }
 
@@ -231,6 +251,33 @@ fn extract_tool_call_id(event: &serde_json::Value) -> Option<&str> {
         .get("data")
         .and_then(|d| d.get("toolCallId"))
         .and_then(|v| v.as_str())
+}
+
+/// Parse an `external_tool.requested` event into a routable message.
+///
+/// Returns `None` when any required field (`requestId`, `toolCallId`,
+/// `toolName`, `arguments`) is missing so the caller can fall back to the
+/// generic `SessionEvent` routing.  `session_id` is passed in rather than
+/// pulled from the event because the outer routing layer already tracks it.
+fn parse_external_tool_requested(
+    session_id: &str,
+    event: &serde_json::Value,
+) -> Option<RoutedMessage> {
+    let data = event.get("data")?;
+    let request_id = data.get("requestId").and_then(|v| v.as_str())?.to_string();
+    let tool_call_id = data.get("toolCallId").and_then(|v| v.as_str())?.to_string();
+    let tool_name = data.get("toolName").and_then(|v| v.as_str())?.to_string();
+    let arguments = data
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Some(RoutedMessage::ExternalToolCall {
+        request_id,
+        session_id: session_id.to_string(),
+        tool_call_id,
+        tool_name,
+        arguments,
+    })
 }
 
 impl SessionChannel {
@@ -431,6 +478,25 @@ impl SessionChannel {
                     let response = JsonRpcResponseOut::new(request_id, result.into_rpc_value());
                     let _ = self.router.send_response(&response).await;
                 }
+                RoutedMessage::ExternalToolCall {
+                    request_id,
+                    session_id,
+                    tool_name,
+                    ..
+                } => {
+                    warn!(
+                        "Unexpected external_tool.requested in read_streaming: {}, rejecting",
+                        tool_name
+                    );
+                    let _ = self
+                        .router
+                        .respond_to_external_tool(
+                            &session_id,
+                            &request_id,
+                            Err("Tool not available in this session context".to_string()),
+                        )
+                        .await;
+                }
             }
         }
     }
@@ -570,6 +636,26 @@ impl SessionChannel {
                         params,
                     });
                 }
+                RoutedMessage::ExternalToolCall {
+                    request_id,
+                    session_id,
+                    tool_call_id,
+                    tool_name,
+                    arguments,
+                } => {
+                    debug!(
+                        "External tool call received: {} (request_id={})",
+                        tool_name, request_id
+                    );
+                    return Ok(StreamingOutcome::ExternalToolCall {
+                        text_so_far: full_content,
+                        request_id,
+                        session_id,
+                        tool_call_id,
+                        tool_name,
+                        arguments,
+                    });
+                }
             }
         }
     }
@@ -705,6 +791,25 @@ impl SessionChannel {
                         ToolCallResult::error("Tool not available in this session context");
                     let response = JsonRpcResponseOut::new(request_id, result.into_rpc_value());
                     let _ = self.router.send_response(&response).await;
+                }
+                RoutedMessage::ExternalToolCall {
+                    request_id,
+                    session_id,
+                    tool_name,
+                    ..
+                } => {
+                    warn!(
+                        "Unexpected external_tool.requested in read_streaming_with_cancellation: {}, rejecting",
+                        tool_name
+                    );
+                    let _ = self
+                        .router
+                        .respond_to_external_tool(
+                            &session_id,
+                            &request_id,
+                            Err("Tool not available in this session context".to_string()),
+                        )
+                        .await;
                 }
             }
         }
@@ -895,8 +1000,14 @@ impl MessageRouter {
         let writer_bg = Arc::clone(&writer);
 
         let reader_handle = tokio::spawn(async move {
-            Self::reader_loop(read_half, routes_bg, pending_bg, pending_creations_bg, writer_bg)
-                .await;
+            Self::reader_loop(
+                read_half,
+                routes_bg,
+                pending_bg,
+                pending_creations_bg,
+                writer_bg,
+            )
+            .await;
         });
 
         let router = Arc::new(Self {
@@ -1012,9 +1123,7 @@ impl MessageRouter {
                         };
                         if let Some(tx) = creation_tx {
                             if let Some(result) = response.result.as_ref() {
-                                if let Some(sid) = result
-                                    .get("sessionId")
-                                    .and_then(|v| v.as_str())
+                                if let Some(sid) = result.get("sessionId").and_then(|v| v.as_str())
                                 {
                                     let mut routes_w =
                                         routes.write().unwrap_or_else(|e| e.into_inner());
@@ -1140,13 +1249,29 @@ impl MessageRouter {
                                     // the session channel for observability.
                                 }
 
-                                // Route to session channel
+                                // Route to session channel.  User-defined tool
+                                // invocations (CLI 1.0.25+) arrive as
+                                // `external_tool.requested` events and are
+                                // promoted to a dedicated RoutedMessage variant
+                                // so callers can dispatch them distinctly from
+                                // the legacy `tool.call` path.
+                                let routed_message = if event_type == "external_tool.requested" {
+                                    parse_external_tool_requested(&sid, &ev).unwrap_or_else(|| {
+                                        RoutedMessage::SessionEvent {
+                                            event_type: event_type.clone(),
+                                            event: ev.clone(),
+                                        }
+                                    })
+                                } else {
+                                    RoutedMessage::SessionEvent {
+                                        event_type: event_type.clone(),
+                                        event: ev,
+                                    }
+                                };
+
                                 let routes_read = routes.read().unwrap_or_else(|e| e.into_inner());
                                 if let Some(tx) = routes_read.get(&sid) {
-                                    let _ = tx.send(RoutedMessage::SessionEvent {
-                                        event_type,
-                                        event: ev,
-                                    });
+                                    let _ = tx.send(routed_message);
                                 } else {
                                     debug!(
                                         "Router: no route for session_id={}, dropping event type={}",
@@ -1257,25 +1382,21 @@ impl MessageRouter {
             pending.insert(request_id, tx);
         }
 
-        let response = match tokio::time::timeout(
-            SESSION_CREATE_TIMEOUT,
-            self.request(&request),
-        )
-        .await
-        {
-            Ok(res) => res,
-            Err(_) => {
-                // Timeout: reclaim the pre-registered tx so it doesn't leak.
-                let mut pending = self
-                    .pending_session_creations
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner());
-                pending.remove(&request_id);
-                return Err(CopilotError::Timeout(
-                    "session.create timed out waiting for response".into(),
-                ));
-            }
-        };
+        let response =
+            match tokio::time::timeout(SESSION_CREATE_TIMEOUT, self.request(&request)).await {
+                Ok(res) => res,
+                Err(_) => {
+                    // Timeout: reclaim the pre-registered tx so it doesn't leak.
+                    let mut pending = self
+                        .pending_session_creations
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    pending.remove(&request_id);
+                    return Err(CopilotError::Timeout(
+                        "session.create timed out waiting for response".into(),
+                    ));
+                }
+            };
         let response = match response {
             Ok(r) => r,
             Err(e) => {
@@ -1313,9 +1434,7 @@ impl MessageRouter {
         }
 
         let result_value = response.result.ok_or_else(|| {
-            CopilotError::UnexpectedResponse(
-                "session.create response missing result field".into(),
-            )
+            CopilotError::UnexpectedResponse("session.create response missing result field".into())
         })?;
         let result: CreateSessionResult = serde_json::from_value(result_value)?;
         let session_id = result.session_id;
@@ -1393,6 +1512,52 @@ impl MessageRouter {
         writer.write_all(header.as_bytes()).await?;
         writer.write_all(response_json.as_bytes()).await?;
         writer.flush().await?;
+        Ok(())
+    }
+
+    /// Reply to an `external_tool.requested` event via
+    /// `session.tools.handlePendingToolCall` (Copilot CLI 1.0.25+).
+    ///
+    /// `result` is `Ok(text)` for a successful tool execution — the string is
+    /// fed back to the LLM verbatim — or `Err(message)` to signal failure via
+    /// the CLI's `error` field.  The RPC is sent with a fresh request id and
+    /// the `{success: true}` response is awaited to surface transport errors
+    /// early; the outgoing `external_tool.completed` event then unblocks the
+    /// LLM.
+    pub async fn respond_to_external_tool(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        result: std::result::Result<String, String>,
+    ) -> Result<()> {
+        let (tool_result, error) = match result {
+            Ok(text) => (Some(ExternalToolResult::Text(text)), None),
+            Err(message) => (None, Some(message)),
+        };
+        let params = HandlePendingToolCallParams {
+            session_id: session_id.to_string(),
+            request_id: request_id.to_string(),
+            result: tool_result,
+            error,
+        };
+        let params_value = serde_json::to_value(&params)?;
+        let request =
+            JsonRpcRequest::new("session.tools.handlePendingToolCall", Some(params_value));
+        let response = self.request(&request).await?;
+        if let Some(err) = response.error {
+            warn!(
+                "session.tools.handlePendingToolCall rejected (request_id={}): code={} message={}",
+                request_id, err.code, err.message
+            );
+            return Err(CopilotError::RpcError {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        debug!(
+            "external tool responded: session_id={} request_id={}",
+            session_id, request_id
+        );
         Ok(())
     }
 
@@ -1874,5 +2039,72 @@ mod tests {
 
         // Also verify that extract_tool_name_from_event finds nothing in the complete event
         assert_eq!(extract_tool_name_from_event(&complete), None);
+    }
+
+    #[test]
+    fn parse_external_tool_requested_happy_path() {
+        let event = serde_json::json!({
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "req-uuid-123",
+                "toolCallId": "call_abc",
+                "toolName": "create_plan",
+                "arguments": { "objective": "ship it", "tasks": [] }
+            }
+        });
+        let routed = parse_external_tool_requested("sess-1", &event).expect("parse ok");
+        match routed {
+            RoutedMessage::ExternalToolCall {
+                request_id,
+                session_id,
+                tool_call_id,
+                tool_name,
+                arguments,
+            } => {
+                assert_eq!(request_id, "req-uuid-123");
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(tool_call_id, "call_abc");
+                assert_eq!(tool_name, "create_plan");
+                assert_eq!(arguments["objective"], "ship it");
+            }
+            other => panic!("expected ExternalToolCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_external_tool_requested_missing_fields() {
+        // ケース1: requestId が無い
+        let event_no_request_id = serde_json::json!({
+            "type": "external_tool.requested",
+            "data": {
+                "toolCallId": "call_abc",
+                "toolName": "create_plan",
+                "arguments": {}
+            }
+        });
+        assert!(parse_external_tool_requested("sess-1", &event_no_request_id).is_none());
+
+        // ケース2: arguments はオプショナル — 欠損時は Value::Null にフォールバック
+        let event_no_args = serde_json::json!({
+            "type": "external_tool.requested",
+            "data": {
+                "requestId": "req-123",
+                "toolCallId": "call_abc",
+                "toolName": "create_plan"
+            }
+        });
+        match parse_external_tool_requested("sess-1", &event_no_args) {
+            Some(RoutedMessage::ExternalToolCall { arguments, .. }) => {
+                assert_eq!(arguments, serde_json::Value::Null);
+            }
+            other => panic!("expected Some(ExternalToolCall) with Null args, got {:?}", other),
+        }
+
+        // ケース3: data自体が無い
+        let event_no_data = serde_json::json!({
+            "type": "external_tool.requested",
+        });
+
+        assert!(parse_external_tool_requested("sess-1", &event_no_data).is_none())
     }
 }

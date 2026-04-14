@@ -60,10 +60,29 @@ struct ToolSessionState {
     pending_tool_call: Option<PendingToolCall>,
 }
 
-/// A pending tool.call request that we need to respond to.
-struct PendingToolCall {
-    /// The JSON-RPC request ID we must echo back.
-    request_id: u64,
+/// A pending tool invocation awaiting our result.
+///
+/// Copilot CLI delivers tool calls through two distinct mechanisms depending
+/// on how the tool was registered and the CLI version:
+///
+/// - `Legacy` — built-in tools (and pre-1.0.25 user tools) arrive as a
+///   JSON-RPC `tool.call` request; the reply is a JSON-RPC response with the
+///   matching numeric id.
+/// - `External` — user-defined tools on Copilot CLI 1.0.25+ arrive as
+///   `external_tool.requested` session events; the reply is an outgoing
+///   `session.tools.handlePendingToolCall` RPC keyed by a UUID string.
+///
+/// The variant determines which [`MessageRouter`](super::router::MessageRouter)
+/// method `send_tool_results` dispatches to.
+enum PendingToolCall {
+    /// Legacy `tool.call` — respond via `send_response(JsonRpcResponseOut)`.
+    Legacy { request_id: u64 },
+    /// CLI 1.0.25+ `external_tool.requested` — respond via
+    /// `respond_to_external_tool(session_id, request_id, result)`.
+    External {
+        session_id: String,
+        request_id: String,
+    },
 }
 
 /// An active conversation session with a specific Copilot model.
@@ -493,35 +512,106 @@ impl CopilotSession {
                     *tool_session = Some(ToolSessionState {
                         session_id: tool_session_id,
                         channel: tool_channel,
-                        pending_tool_call: Some(PendingToolCall { request_id }),
+                        pending_tool_call: Some(PendingToolCall::Legacy { request_id }),
                     });
                 }
 
-                // Build response with text (if any) + tool use block
-                let mut content = Vec::new();
-                if !text_so_far.is_empty() {
-                    content.push(ContentBlock::Text(text_so_far));
+                Ok(build_tool_use_response(
+                    text_so_far,
+                    params.tool_call_id,
+                    params.tool_name,
+                    params.arguments,
+                    self.model.to_string(),
+                ))
+            }
+            StreamingOutcome::ExternalToolCall {
+                text_so_far,
+                request_id,
+                session_id,
+                tool_call_id,
+                tool_name,
+                arguments,
+            } => {
+                debug!(
+                    "External tool call received: {} (request_id={})",
+                    tool_name, request_id
+                );
+
+                {
+                    let mut tool_session = self.tool_session.lock().await;
+                    *tool_session = Some(ToolSessionState {
+                        session_id: tool_session_id,
+                        channel: tool_channel,
+                        pending_tool_call: Some(PendingToolCall::External {
+                            session_id,
+                            request_id,
+                        }),
+                    });
                 }
 
-                let input = if let Some(obj) = params.arguments.as_object() {
-                    obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-                } else {
-                    std::collections::HashMap::new()
-                };
-
-                content.push(ContentBlock::ToolUse {
-                    id: params.tool_call_id,
-                    name: params.tool_name,
-                    input,
-                });
-
-                Ok(LlmResponse {
-                    content,
-                    stop_reason: Some(StopReason::ToolUse),
-                    model: Some(self.model.to_string()),
-                })
+                Ok(build_tool_use_response(
+                    text_so_far,
+                    tool_call_id,
+                    tool_name,
+                    arguments,
+                    self.model.to_string(),
+                ))
             }
         }
+    }
+}
+
+/// Assemble an [`LlmResponse`] that carries any pre-tool-call text followed
+/// by a [`ContentBlock::ToolUse`] block.
+///
+/// Shared between the legacy `tool.call` path and the CLI 1.0.25+
+/// `external_tool.requested` path, which only differ in how the reply is
+/// sent back (see [`PendingToolCall`]).
+fn build_tool_use_response(
+    text_so_far: String,
+    tool_call_id: String,
+    tool_name: String,
+    arguments: serde_json::Value,
+    model: String,
+) -> LlmResponse {
+    let mut content = Vec::new();
+    if !text_so_far.is_empty() {
+        content.push(ContentBlock::Text(text_so_far));
+    }
+    let input = if let Some(obj) = arguments.as_object() {
+        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    } else {
+        std::collections::HashMap::new()
+    };
+    content.push(ContentBlock::ToolUse {
+        id: tool_call_id,
+        name: tool_name,
+        input,
+    });
+    LlmResponse {
+        content,
+        stop_reason: Some(StopReason::ToolUse),
+        model: Some(model),
+    }
+}
+
+/// Map a batch of tool-execution results into the single `Result<String, String>`
+/// that `session.tools.handlePendingToolCall` expects for CLI 1.0.25+ external
+/// tools. Only the first message is considered because a single
+/// `external_tool.requested` event corresponds to exactly one tool call.
+///
+/// - rejected → `Err("Tool rejected: ...")` so the LLM sees a distinct message
+/// - error    → `Err(output)`
+/// - success  → `Ok(output)`
+/// - empty    → `Ok("")` (keeps the turn alive rather than stalling the LLM)
+fn tool_results_to_external_outcome(
+    results: &[ToolResultMessage],
+) -> std::result::Result<String, String> {
+    match results.first() {
+        Some(r) if r.is_rejected => Err(format!("Tool rejected: {}", r.output)),
+        Some(r) if r.is_error => Err(r.output.clone()),
+        Some(r) => Ok(r.output.clone()),
+        None => Ok(String::new()),
     }
 }
 
@@ -563,54 +653,58 @@ impl LlmSession for CopilotSession {
             GatewayError::RequestFailed("No pending tool call to respond to".to_string())
         })?;
 
-        let request_id = pending.request_id;
+        let first = results.first();
+        let first_tool_name = first.map(|r| r.tool_name.as_str()).unwrap_or("unknown");
+        let first_output_bytes = first.map(|r| r.output.len()).unwrap_or(0);
 
-        // Build the tool call result from the first result
-        // (Copilot CLI sends one tool.call at a time)
-        let tool_result = if let Some(result) = results.first() {
-            if result.is_rejected {
-                ToolCallResult::rejected(&result.output)
-            } else if result.is_error {
-                ToolCallResult::error(&result.output)
-            } else {
-                ToolCallResult::success(&result.output)
+        // Dispatch by pending variant: legacy `tool.call` goes back as a
+        // JSON-RPC response, while CLI 1.0.25+ `external_tool.requested`
+        // needs `session.tools.handlePendingToolCall` with the UUID.
+        match pending {
+            PendingToolCall::Legacy { request_id } => {
+                let tool_result = match first {
+                    Some(r) if r.is_rejected => ToolCallResult::rejected(&r.output),
+                    Some(r) if r.is_error => ToolCallResult::error(&r.output),
+                    Some(r) => ToolCallResult::success(&r.output),
+                    None => ToolCallResult::success(""),
+                };
+                let result_type = tool_result.result_type.clone();
+                let response =
+                    JsonRpcResponseOut::new(request_id, tool_result.into_rpc_value());
+                let response_json = serde_json::to_string(&response).unwrap_or_default();
+
+                self.router
+                    .send_response(&response)
+                    .await
+                    .map_err(|e| GatewayError::RequestFailed(e.to_string()))?;
+
+                debug!(
+                    "Tool result sent for request_id={}: tool={}, type={}, output_bytes={}",
+                    request_id, first_tool_name, result_type, first_output_bytes,
+                );
+                trace!(
+                    "Tool result payload for request_id={}: {}",
+                    request_id,
+                    truncate_str(&response_json, 2048),
+                );
             }
-        } else {
-            ToolCallResult::success("")
-        };
+            PendingToolCall::External {
+                session_id,
+                request_id,
+            } => {
+                let outcome = tool_results_to_external_outcome(results);
 
-        // Extract logging values before moving tool_result
-        let first_tool_name = results
-            .first()
-            .map(|r| r.tool_name.as_str())
-            .unwrap_or("unknown");
-        let first_output_bytes = results.first().map(|r| r.output.len()).unwrap_or(0);
-        let result_type = tool_result.result_type.clone();
+                self.router
+                    .respond_to_external_tool(&session_id, &request_id, outcome)
+                    .await
+                    .map_err(|e| GatewayError::RequestFailed(e.to_string()))?;
 
-        // Send the JSON-RPC response back to the CLI
-        // Wrap in { "result": ... } envelope per official Copilot SDK wire format
-        let response = JsonRpcResponseOut::new(request_id, tool_result.into_rpc_value());
-
-        let response_json = serde_json::to_string(&response).unwrap_or_default();
-
-        self.router
-            .send_response(&response)
-            .await
-            .map_err(|e| GatewayError::RequestFailed(e.to_string()))?;
-
-        debug!(
-            "Tool result sent for request_id={}: tool={}, type={}, output_bytes={}",
-            request_id, first_tool_name, result_type, first_output_bytes,
-        );
-        debug!(
-            "Tool result JSON for request_id={} (truncated): {}",
-            request_id,
-            truncate_str(&response_json, 512),
-        );
-        trace!(
-            "Tool result payload for request_id={}: {}",
-            request_id, response_json,
-        );
+                debug!(
+                    "External tool result sent for request_id={}: tool={}, output_bytes={}",
+                    request_id, first_tool_name, first_output_bytes,
+                );
+            }
+        }
 
         // Read the next streaming response — forward chunks to observer if present
         let observer = self.stream_observer.clone();
@@ -642,35 +736,107 @@ impl LlmSession for CopilotSession {
                     "Tool call received: {} (request_id={})",
                     params.tool_name, new_request_id
                 );
-
-                // Store the new pending tool call
-                state.pending_tool_call = Some(PendingToolCall {
+                state.pending_tool_call = Some(PendingToolCall::Legacy {
                     request_id: new_request_id,
                 });
-
-                let mut content = Vec::new();
-                if !text_so_far.is_empty() {
-                    content.push(ContentBlock::Text(text_so_far));
-                }
-
-                let input = if let Some(obj) = params.arguments.as_object() {
-                    obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-                } else {
-                    std::collections::HashMap::new()
-                };
-
-                content.push(ContentBlock::ToolUse {
-                    id: params.tool_call_id,
-                    name: params.tool_name,
-                    input,
+                Ok(build_tool_use_response(
+                    text_so_far,
+                    params.tool_call_id,
+                    params.tool_name,
+                    params.arguments,
+                    self.model.to_string(),
+                ))
+            }
+            StreamingOutcome::ExternalToolCall {
+                text_so_far,
+                request_id: new_request_id,
+                session_id: new_session_id,
+                tool_call_id,
+                tool_name,
+                arguments,
+            } => {
+                debug!(
+                    "External tool call received: {} (request_id={})",
+                    tool_name, new_request_id
+                );
+                state.pending_tool_call = Some(PendingToolCall::External {
+                    session_id: new_session_id,
+                    request_id: new_request_id,
                 });
-
-                Ok(LlmResponse {
-                    content,
-                    stop_reason: Some(StopReason::ToolUse),
-                    model: Some(self.model.to_string()),
-                })
+                Ok(build_tool_use_response(
+                    text_so_far,
+                    tool_call_id,
+                    tool_name,
+                    arguments,
+                    self.model.to_string(),
+                ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(output: &str, is_error: bool, is_rejected: bool) -> ToolResultMessage {
+        ToolResultMessage {
+            tool_use_id: "call_x".to_string(),
+            tool_name: "create_plan".to_string(),
+            output: output.to_string(),
+            is_error,
+            is_rejected,
+        }
+    }
+
+    #[test]
+    fn external_outcome_success() {
+        let results = vec![msg("plan saved", false, false)];
+        assert_eq!(
+            tool_results_to_external_outcome(&results),
+            Ok("plan saved".to_string())
+        );
+    }
+
+    #[test]
+    fn external_outcome_error_maps_to_err() {
+        let results = vec![msg("boom", true, false)];
+        assert_eq!(
+            tool_results_to_external_outcome(&results),
+            Err("boom".to_string())
+        );
+    }
+
+    #[test]
+    fn external_outcome_rejected_is_prefixed() {
+        let results = vec![msg("user said no", false, true)];
+        // Rejection deserves a distinct prefix so the LLM can distinguish
+        // "I declined" from "the tool crashed".
+        assert_eq!(
+            tool_results_to_external_outcome(&results),
+            Err("Tool rejected: user said no".to_string())
+        );
+    }
+
+    #[test]
+    fn external_outcome_empty_is_ok_empty() {
+        // An empty results slice shouldn't stall the turn — send Ok("") to
+        // let the LLM continue reasoning with a blank tool response.
+        let results: Vec<ToolResultMessage> = vec![];
+        assert_eq!(
+            tool_results_to_external_outcome(&results),
+            Ok(String::new())
+        );
+    }
+
+    #[test]
+    fn external_outcome_rejected_beats_error() {
+        // Guard the precedence: if both flags somehow got set, rejected wins
+        // because it carries more user-intent than a generic error.
+        let results = vec![msg("weird", true, true)];
+        assert_eq!(
+            tool_results_to_external_outcome(&results),
+            Err("Tool rejected: weird".to_string())
+        );
     }
 }
