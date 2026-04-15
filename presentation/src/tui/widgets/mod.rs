@@ -17,8 +17,102 @@ pub mod tab_bar;
 pub mod tool_log;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Borders};
 
+use super::content::ContentSlot;
 use super::layout::LayoutPreset;
+use super::mode::InputMode;
+use super::state::TuiState;
+
+/// Build a bordered `Block` for a content pane with focus-aware styling.
+///
+/// All pane widgets should route through this helper so pane focus is
+/// visualized consistently across the TUI. Given the current `TuiState`
+/// and the pane's own `ContentSlot`, this decides border color + title
+/// style based on whether the pane is focused and whether Visual mode
+/// is active.
+pub(super) fn focus_block<'a>(state: &TuiState, slot: &ContentSlot, title: &'a str) -> Block<'a> {
+    let is_focused = &state.focused_slot == slot;
+    let in_visual = state.mode == InputMode::Visual;
+    let (border_style, title_style) = focus_styles(is_focused, in_visual);
+
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(Span::styled(title, title_style))
+}
+
+/// Resolve (border_style, title_style) for a pane given focus + mode flags.
+///
+/// Visual language (tmux-style — only the frame signals focus, content stays
+/// readable at full brightness):
+/// - Unfocused: dark-gray border + dark-gray plain title so the frame recedes.
+/// - Focused (Normal/Insert/Command): cyan border + bold cyan title.
+/// - Focused + Visual: magenta — matches `InputMode::Visual.color()` so the
+///   selected pane and the mode indicator agree.
+fn focus_styles(is_focused: bool, in_visual: bool) -> (Style, Style) {
+    if !is_focused {
+        let muted = Style::default().fg(Color::DarkGray);
+        return (muted, muted);
+    }
+    let accent = if in_visual {
+        Color::Magenta
+    } else {
+        Color::Cyan
+    };
+    let border = Style::default().fg(accent);
+    let title = Style::default().fg(accent).add_modifier(Modifier::BOLD);
+    (border, title)
+}
+
+/// Reverse-video the lines in the active Visual selection, and prefix the
+/// cursor line with a ▸ marker so anchor and cursor are distinguishable.
+///
+/// No-op if the selection is not active, the focused slot differs, or
+/// `lines` is empty. Indices are clamped to `lines.len()` so callers can
+/// stay ignorant of wrap state / bounds.
+pub(super) fn apply_visual_highlight(
+    lines: &mut [ratatui::text::Line<'_>],
+    state: &TuiState,
+    slot: &ContentSlot,
+) {
+    if state.mode != InputMode::Visual || &state.focused_slot != slot {
+        return;
+    }
+    let Some(sel) = state.visual_selection else {
+        return;
+    };
+    if lines.is_empty() {
+        return;
+    }
+    let max_idx = lines.len() - 1;
+    let (start, end_raw) = sel.range();
+    if start > max_idx {
+        return;
+    }
+    let end = end_raw.min(max_idx);
+    let cursor = sel.cursor_line.min(max_idx);
+
+    for (i, line) in lines.iter_mut().enumerate() {
+        if i < start || i > end {
+            continue;
+        }
+        line.style = line.style.add_modifier(Modifier::REVERSED);
+        if i == cursor {
+            line.spans.insert(
+                0,
+                Span::styled(
+                    "▸",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+        }
+    }
+}
 
 /// Compute the main layout regions from a terminal area.
 ///
@@ -222,5 +316,85 @@ impl MainLayout {
                 Constraint::Percentage((100 - percent_x) / 2),
             ])
             .split(vert[1])[1]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::state::{TuiState, VisualSelection};
+    use ratatui::text::{Line, Span};
+
+    fn make_lines(n: usize) -> Vec<Line<'static>> {
+        (0..n)
+            .map(|i| Line::from(Span::raw(format!("line {}", i))))
+            .collect()
+    }
+
+    fn visual_state(slot: ContentSlot, anchor: usize, cursor: usize) -> TuiState {
+        let mut state = TuiState::default();
+        state.mode = InputMode::Visual;
+        state.focused_slot = slot;
+        state.visual_selection = Some(VisualSelection {
+            anchor_line: anchor,
+            cursor_line: cursor,
+        });
+        state
+    }
+
+    #[test]
+    fn visual_highlight_noop_when_not_visual() {
+        let mut lines = make_lines(3);
+        let state = TuiState::default();
+        let before = format!("{:?}", lines);
+        apply_visual_highlight(&mut lines, &state, &ContentSlot::Conversation);
+        assert_eq!(before, format!("{:?}", lines));
+    }
+
+    #[test]
+    fn visual_highlight_noop_when_slot_mismatch() {
+        let mut lines = make_lines(3);
+        let state = visual_state(ContentSlot::Conversation, 0, 2);
+        let before = format!("{:?}", lines);
+        apply_visual_highlight(&mut lines, &state, &ContentSlot::Progress);
+        assert_eq!(before, format!("{:?}", lines));
+    }
+
+    #[test]
+    fn visual_highlight_applies_reversed_and_cursor_marker() {
+        let mut lines = make_lines(4);
+        let state = visual_state(ContentSlot::Progress, 1, 2);
+        apply_visual_highlight(&mut lines, &state, &ContentSlot::Progress);
+
+        // Line 0: untouched
+        assert!(!lines[0].style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(lines[0].spans[0].content.as_ref(), "line 0");
+
+        // Line 1 (anchor): reversed, no marker
+        assert!(lines[1].style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(lines[1].spans[0].content.as_ref(), "line 1");
+
+        // Line 2 (cursor): reversed + ▸ prepended
+        assert!(lines[2].style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(lines[2].spans[0].content.as_ref(), "▸");
+        assert_eq!(lines[2].spans[1].content.as_ref(), "line 2");
+
+        // Line 3: untouched
+        assert!(!lines[3].style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn visual_highlight_clamps_out_of_range() {
+        let mut lines = make_lines(3);
+        // cursor way past end — should clamp to last line without panic
+        let state = visual_state(ContentSlot::Conversation, 0, 999);
+        apply_visual_highlight(&mut lines, &state, &ContentSlot::Conversation);
+
+        // All three lines reversed (end clamped to 2)
+        for line in &lines {
+            assert!(line.style.add_modifier.contains(Modifier::REVERSED));
+        }
+        // Last line gets the cursor marker
+        assert_eq!(lines[2].spans[0].content.as_ref(), "▸");
     }
 }

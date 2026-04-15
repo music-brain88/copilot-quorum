@@ -1,14 +1,16 @@
 //! Progress panel widget — phase, tools, quorum status, tool execution lifecycle
 
 use crate::tui::content::{ContentRenderer, ContentSlot};
-use crate::tui::state::{ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiState};
+use crate::tui::state::{
+    ProgressState, ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiState,
+};
 use quorum_domain::AgentPhase;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Paragraph, Widget},
 };
 
 /// ContentRenderer adapter for the progress panel.
@@ -22,6 +24,121 @@ impl ContentRenderer for ProgressRenderer {
     fn render_content(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         ProgressPanelWidget::new(state).render(area, buf);
     }
+
+    fn get_text_content(&self, state: &TuiState) -> String {
+        format_progress_plain(&state.tabs.active_pane().progress)
+    }
+}
+
+/// Plain-text rendering of the progress panel (used by yank).
+pub(super) fn format_progress_plain(progress: &ProgressState) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if let Some(ref phase) = progress.current_phase {
+        lines.push(format!(
+            "Phase: {} {}",
+            phase_emoji(phase),
+            progress.phase_name
+        ));
+    } else {
+        lines.push("Phase: Ready".to_string());
+    }
+    lines.push(String::new());
+
+    if let Some(ref tp) = progress.task_progress {
+        let completed = tp.completed_tasks.len();
+        let all_done = !progress.is_running && completed == tp.total && tp.total > 0;
+        if all_done {
+            lines.push(format!("Tasks: {}/{} completed", completed, tp.total));
+        } else {
+            lines.push(format!(
+                "Task {}/{}: {}",
+                tp.current_index, tp.total, tp.description
+            ));
+        }
+
+        let remaining = tp.total.saturating_sub(completed);
+        lines.push(format!(
+            "[{}{}] {}/{}",
+            "=".repeat(completed),
+            " ".repeat(remaining),
+            completed,
+            tp.total,
+        ));
+
+        for exec in &tp.active_tool_executions {
+            lines.push(format_tool_execution_plain(exec));
+        }
+
+        for summary in &tp.completed_tasks {
+            let icon = if summary.success { "✓" } else { "✗" };
+            let dur = summary.duration_ms.map(format_duration).unwrap_or_default();
+            lines.push(format!(
+                "  {} Task {}: {}{}",
+                icon, summary.index, summary.description, dur
+            ));
+            for exec in &summary.tool_executions {
+                lines.push(format_tool_execution_plain(exec));
+            }
+        }
+        lines.push(String::new());
+    }
+
+    if let Some(ref ep) = progress.ensemble_progress {
+        if let Some((ref model, score)) = ep.selected {
+            lines.push(format!("Ensemble: Selected {} ({:.1}/10)", model, score));
+        } else if ep.voting_started {
+            let plan_count = ep.plan_count.unwrap_or(0);
+            lines.push(format!("Ensemble: Voting on {} plans...", plan_count));
+        } else {
+            lines.push(format!(
+                "Ensemble: Planning {}/{} models done",
+                ep.plans_generated, ep.total_models
+            ));
+        }
+        for model in &ep.models_completed {
+            lines.push(format!("  ✓ {}", model));
+        }
+        for (model, _err) in &ep.models_failed {
+            lines.push(format!("  ✗ {}", model));
+        }
+        lines.push(String::new());
+    }
+
+    if let Some(ref quorum) = progress.quorum_status {
+        lines.push(format!("Quorum: {}", quorum.phase));
+        let filled = quorum.approved;
+        let empty = quorum.total.saturating_sub(quorum.completed);
+        let rejected = quorum.completed.saturating_sub(quorum.approved);
+        lines.push(format!(
+            "[{}{}{}] {}/{}",
+            "●".repeat(filled),
+            "○".repeat(rejected),
+            "·".repeat(empty),
+            quorum.completed,
+            quorum.total,
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn format_tool_execution_plain(exec: &ToolExecutionDisplay) -> String {
+    let (icon, suffix) = match &exec.state {
+        ToolExecutionDisplayStatus::Pending => ("…", String::new()),
+        ToolExecutionDisplayStatus::Running => ("▸", String::new()),
+        ToolExecutionDisplayStatus::Completed { .. } => {
+            let dur = exec.duration_ms.map(format_duration).unwrap_or_default();
+            ("✓", dur)
+        }
+        ToolExecutionDisplayStatus::Error { message } => ("✗", format!(" — {}", message)),
+    };
+    let args = exec
+        .args_preview
+        .as_deref()
+        .map(|p| format!("  {}", p))
+        .unwrap_or_default();
+    format!("    {} {}{}{}", icon, exec.tool_name, args, suffix)
 }
 
 pub struct ProgressPanelWidget<'a> {
@@ -32,18 +149,18 @@ impl<'a> ProgressPanelWidget<'a> {
     pub fn new(state: &'a TuiState) -> Self {
         Self { state }
     }
+}
 
-    fn phase_emoji(phase: &AgentPhase) -> &'static str {
-        match phase {
-            AgentPhase::ContextGathering => "🔍",
-            AgentPhase::Planning => "📝",
-            AgentPhase::PlanReview => "🗳️",
-            AgentPhase::Executing => "⚡",
-            AgentPhase::ActionReview => "🔒",
-            AgentPhase::FinalReview => "✅",
-            AgentPhase::Completed => "🎉",
-            AgentPhase::Failed => "❌",
-        }
+fn phase_emoji(phase: &AgentPhase) -> &'static str {
+    match phase {
+        AgentPhase::ContextGathering => "🔍",
+        AgentPhase::Planning => "📝",
+        AgentPhase::PlanReview => "🗳️",
+        AgentPhase::Executing => "⚡",
+        AgentPhase::ActionReview => "🔒",
+        AgentPhase::FinalReview => "✅",
+        AgentPhase::Completed => "🎉",
+        AgentPhase::Failed => "❌",
     }
 }
 
@@ -57,7 +174,7 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
             lines.push(Line::from(vec![
                 Span::styled("Phase: ", Style::default().fg(Color::White)),
                 Span::styled(
-                    format!("{} {}", Self::phase_emoji(phase), progress.phase_name),
+                    format!("{} {}", phase_emoji(phase), progress.phase_name),
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
@@ -252,10 +369,8 @@ impl<'a> Widget for ProgressPanelWidget<'a> {
             )));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Progress ")
-            .style(Style::default().fg(Color::White));
+        super::apply_visual_highlight(&mut lines, self.state, &ContentSlot::Progress);
+        let block = super::focus_block(self.state, &ContentSlot::Progress, " Progress ");
 
         Paragraph::new(lines).block(block).render(area, buf);
     }

@@ -1,13 +1,13 @@
 //! Conversation widget — message history + streaming text
 
 use crate::tui::content::{ContentRenderer, ContentSlot};
-use crate::tui::state::TuiState;
+use crate::tui::state::{MessageRole, TuiState};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 /// ContentRenderer adapter for the conversation pane.
@@ -21,6 +21,50 @@ impl ContentRenderer for ConversationRenderer {
     fn render_content(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         ConversationWidget::new(state).render(area, buf);
     }
+
+    fn get_text_content(&self, state: &TuiState) -> String {
+        let pane = state.tabs.active_pane();
+        let mut parts: Vec<String> = pane
+            .conversation
+            .messages
+            .iter()
+            .map(format_message)
+            .collect();
+        if !pane.conversation.streaming_text.is_empty() {
+            parts.push(format!("Agent: {}", pane.conversation.streaming_text));
+        }
+        parts.join("\n\n")
+    }
+
+    fn get_recent_message(&self, state: &TuiState) -> String {
+        let pane = state.tabs.active_pane();
+        if !pane.conversation.streaming_text.is_empty() {
+            return format!("Agent: {}", pane.conversation.streaming_text);
+        }
+        pane.conversation
+            .messages
+            .last()
+            .map(format_message)
+            .unwrap_or_default()
+    }
+
+    fn get_last_assistant_response(&self, state: &TuiState) -> String {
+        let pane = state.tabs.active_pane();
+        if !pane.conversation.streaming_text.is_empty() {
+            return pane.conversation.streaming_text.clone();
+        }
+        pane.conversation
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
+            .map(|m| m.content.clone())
+            .unwrap_or_default()
+    }
+}
+
+fn format_message(msg: &crate::tui::state::DisplayMessage) -> String {
+    format!("{}: {}", msg.role.label(), msg.content)
 }
 
 pub struct ConversationWidget<'a> {
@@ -69,6 +113,8 @@ impl<'a> ConversationWidget<'a> {
             )));
         }
 
+        super::apply_visual_highlight(&mut lines, self.state, &ContentSlot::Conversation);
+
         Text::from(lines)
     }
 }
@@ -95,10 +141,7 @@ impl<'a> Widget for ConversationWidget<'a> {
             0
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Conversation ")
-            .style(Style::default().fg(Color::White));
+        let block = super::focus_block(self.state, &ContentSlot::Conversation, " Conversation ");
 
         paragraph.block(block).scroll((scroll, 0)).render(area, buf);
     }

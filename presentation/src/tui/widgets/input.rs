@@ -56,6 +56,13 @@ impl<'a> Widget for InputWidget<'a> {
                 Color::DarkGray,
                 false,
             ),
+            InputMode::Visual => (
+                mode_prompt.as_str(),
+                &pane.input,
+                pane.cursor_pos,
+                Color::Magenta,
+                false,
+            ),
         };
 
         let prompt_span = Span::styled(

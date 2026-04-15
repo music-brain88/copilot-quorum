@@ -45,6 +45,12 @@ futures = { workspace = true }
 # CLI tool detection
 which = "7"
 
+# System clipboard (for TUI yank/copy)
+arboard = "3"
+
+# Base64 encoding (for OSC 52 clipboard over terminal escape)
+base64 = "0.22"
+
 # HTTP client (optional, for web tools)
 reqwest = { workspace = true, optional = true }
 

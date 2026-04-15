@@ -39,6 +39,24 @@ pub trait ContentRenderer {
 
     /// Render content into the given area.
     fn render_content(&self, state: &TuiState, area: Rect, buf: &mut Buffer);
+
+    /// Full plain-text content of this slot (used by `ya` / Visual yank).
+    /// Default: empty string. Renderers that carry text should override.
+    fn get_text_content(&self, _state: &TuiState) -> String {
+        String::new()
+    }
+
+    /// Most recent "message" text for this slot (used by `yy`). Defaults to
+    /// `get_text_content`; renderers with discrete messages should override.
+    fn get_recent_message(&self, state: &TuiState) -> String {
+        self.get_text_content(state)
+    }
+
+    /// Last assistant response text (used by `Y`). Only meaningful for
+    /// Conversation; defaults to empty elsewhere.
+    fn get_last_assistant_response(&self, _state: &TuiState) -> String {
+        String::new()
+    }
 }
 
 /// ContentSlot → Renderer registry (analogous to ToolSpec).
