@@ -40,23 +40,22 @@ pub(super) fn focus_block<'a>(state: &TuiState, slot: &ContentSlot, title: &'a s
 
     Block::default()
         .borders(Borders::ALL)
+        .border_style(border_style)
         .title(Span::styled(title, title_style))
-        .style(border_style)
 }
 
 /// Resolve (border_style, title_style) for a pane given focus + mode flags.
 ///
-/// Visual language:
-/// - Unfocused: dim gray border + gray title so non-active panes recede.
+/// Visual language (tmux-style — only the frame signals focus, content stays
+/// readable at full brightness):
+/// - Unfocused: dark-gray border + dark-gray plain title so the frame recedes.
 /// - Focused (Normal/Insert/Command): cyan border + bold cyan title.
 /// - Focused + Visual: magenta — matches `InputMode::Visual.color()` so the
 ///   selected pane and the mode indicator agree.
 fn focus_styles(is_focused: bool, in_visual: bool) -> (Style, Style) {
     if !is_focused {
-        let dim = Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM);
-        return (dim, dim);
+        let muted = Style::default().fg(Color::DarkGray);
+        return (muted, muted);
     }
     let accent = if in_visual {
         Color::Magenta
