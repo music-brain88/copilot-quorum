@@ -34,8 +34,8 @@ use crossterm::{
 use futures::stream::StreamExt;
 use quorum_application::QuorumConfig;
 use quorum_application::{
-    AgentController, ClipboardPort, ContextLoaderPort, ConversationLogger, LlmGateway,
-    NoClipboard, NoConversationLogger, ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
+    AgentController, ClipboardPort, ContextLoaderPort, ConversationLogger, LlmGateway, NoClipboard,
+    NoConversationLogger, ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
 };
 use quorum_domain::{ConsensusLevel, HumanDecision, Model};
 use ratatui::{Terminal, backend::CrosstermBackend};

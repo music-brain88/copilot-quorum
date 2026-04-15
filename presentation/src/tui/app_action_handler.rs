@@ -3,9 +3,7 @@
 use super::content::ContentRegistry;
 use super::event::TuiCommand;
 use super::mode::{InputMode, KeyAction, VisualDirection};
-use super::state::{
-    DisplayMessage, TuiState, VisualSelection, YankMode, content_slot_label,
-};
+use super::state::{DisplayMessage, TuiState, VisualSelection, YankMode, content_slot_label};
 use super::tab::PaneKind;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -197,7 +195,10 @@ pub(super) fn handle_action(
         }
         KeyAction::CycleFocus => {
             state.cycle_focus();
-            state.set_flash(format!("Focus: {}", content_slot_label(&state.focused_slot)));
+            state.set_flash(format!(
+                "Focus: {}",
+                content_slot_label(&state.focused_slot)
+            ));
         }
     }
     None

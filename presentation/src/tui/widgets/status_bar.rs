@@ -40,9 +40,9 @@ impl<'a> Widget for StatusBarWidget<'a> {
 
         // Focus indicator (Normal / Visual only — other modes don't act on focus)
         let focus_text = match mode {
-            crate::tui::mode::InputMode::Normal | crate::tui::mode::InputMode::Visual => {
-                Some(format!(" ◆ {} ", content_slot_label(&self.state.focused_slot)))
-            }
+            crate::tui::mode::InputMode::Normal | crate::tui::mode::InputMode::Visual => Some(
+                format!(" ◆ {} ", content_slot_label(&self.state.focused_slot)),
+            ),
             _ => None,
         };
         let focus_span = focus_text.as_deref().map(|t| {

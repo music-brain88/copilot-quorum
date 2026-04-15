@@ -475,8 +475,7 @@ async fn main() -> Result<()> {
         // Fallback: `Osc52Clipboard` — emits an OSC 52 escape so the
         // terminal emulator performs the clipboard op. Required over
         // SSH where arboard cannot reach a display server.
-        let primary: Arc<dyn quorum_application::ClipboardPort> =
-            Arc::new(ArboardClipboard::new());
+        let primary: Arc<dyn quorum_application::ClipboardPort> = Arc::new(ArboardClipboard::new());
         let fallback: Arc<dyn quorum_application::ClipboardPort> = Arc::new(Osc52Clipboard::new());
         let clipboard: Arc<dyn quorum_application::ClipboardPort> =
             Arc::new(FallbackClipboard::new(primary, fallback));

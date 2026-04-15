@@ -63,9 +63,7 @@ fn focus_styles(is_focused: bool, in_visual: bool) -> (Style, Style) {
         Color::Cyan
     };
     let border = Style::default().fg(accent);
-    let title = Style::default()
-        .fg(accent)
-        .add_modifier(Modifier::BOLD);
+    let title = Style::default().fg(accent).add_modifier(Modifier::BOLD);
     (border, title)
 }
 
@@ -333,11 +331,7 @@ mod tests {
             .collect()
     }
 
-    fn visual_state(
-        slot: ContentSlot,
-        anchor: usize,
-        cursor: usize,
-    ) -> TuiState {
+    fn visual_state(slot: ContentSlot, anchor: usize, cursor: usize) -> TuiState {
         let mut state = TuiState::default();
         state.mode = InputMode::Visual;
         state.focused_slot = slot;

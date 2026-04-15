@@ -801,10 +801,7 @@ mod tests {
 
     #[test]
     fn test_builtin_action_yank_names() {
-        assert_eq!(
-            builtin_action_by_name("yank_recent"),
-            KeyAction::YankRecent
-        );
+        assert_eq!(builtin_action_by_name("yank_recent"), KeyAction::YankRecent);
         assert_eq!(builtin_action_by_name("yank_all"), KeyAction::YankAll);
         assert_eq!(
             builtin_action_by_name("yank_last_assistant"),
@@ -814,9 +811,6 @@ mod tests {
             builtin_action_by_name("enter_visual"),
             KeyAction::EnterVisual
         );
-        assert_eq!(
-            builtin_action_by_name("cycle_focus"),
-            KeyAction::CycleFocus
-        );
+        assert_eq!(builtin_action_by_name("cycle_focus"), KeyAction::CycleFocus);
     }
 }

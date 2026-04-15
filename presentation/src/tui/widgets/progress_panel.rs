@@ -1,7 +1,9 @@
 //! Progress panel widget — phase, tools, quorum status, tool execution lifecycle
 
 use crate::tui::content::{ContentRenderer, ContentSlot};
-use crate::tui::state::{ProgressState, ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiState};
+use crate::tui::state::{
+    ProgressState, ToolExecutionDisplay, ToolExecutionDisplayStatus, TuiState,
+};
 use quorum_domain::AgentPhase;
 use ratatui::{
     buffer::Buffer,

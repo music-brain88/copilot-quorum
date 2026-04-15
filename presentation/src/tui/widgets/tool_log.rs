@@ -51,10 +51,7 @@ impl ContentRenderer for ToolLogRenderer {
                 if !lines.is_empty() {
                     lines.push(String::new());
                 }
-                lines.push(format!(
-                    "▸ Task {}: {}",
-                    tp.current_index, tp.description
-                ));
+                lines.push(format!("▸ Task {}: {}", tp.current_index, tp.description));
                 for exec in &tp.active_tool_executions {
                     lines.push(format_tool_execution_plain(exec));
                 }
