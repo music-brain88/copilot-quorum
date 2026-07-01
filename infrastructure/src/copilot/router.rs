@@ -1466,7 +1466,10 @@ impl MessageRouter {
                 }
             }
             Ok(Err(e)) => {
-                warn!("Router: permissions.setApproveAll failed ({}): {}", session_id, e);
+                warn!(
+                    "Router: permissions.setApproveAll failed ({}): {}",
+                    session_id, e
+                );
             }
             Err(_) => {
                 warn!(
