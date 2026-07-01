@@ -317,8 +317,7 @@ impl TuiApp {
         // Remote control socket (--listen). The receiver participates in the
         // select! loop below; without a listener the channel simply never
         // yields (all senders dropped → branch disabled).
-        let (remote_tx, mut remote_rx) =
-            mpsc::unbounded_channel::<super::remote::RemoteRequest>();
+        let (remote_tx, mut remote_rx) = mpsc::unbounded_channel::<super::remote::RemoteRequest>();
         if let Some(path) = &self.listen_path {
             super::remote::spawn_listener(path.clone(), remote_tx)?;
         } else {

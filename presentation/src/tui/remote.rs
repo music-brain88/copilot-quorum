@@ -35,9 +35,9 @@
 use super::event::TuiCommand;
 use super::state::{DisplayMessage, MessageRole, TuiState};
 use super::tab::PaneKind;
-use quorum_domain::interaction::InteractionForm;
 use quorum_domain::HumanDecision;
-use serde_json::{json, Value};
+use quorum_domain::interaction::InteractionForm;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -264,7 +264,13 @@ pub(super) fn handle_request(
     pending_hil_tx: &Arc<Mutex<Option<oneshot::Sender<HumanDecision>>>>,
     request: RemoteRequest,
 ) {
-    let result = dispatch(state, cmd_tx, pending_hil_tx, &request.method, &request.params);
+    let result = dispatch(
+        state,
+        cmd_tx,
+        pending_hil_tx,
+        &request.method,
+        &request.params,
+    );
     if let Some(reply) = request.reply {
         let _ = reply.send(result);
     }
@@ -519,7 +525,7 @@ fn hil_respond(
         _ => {
             return Err(RemoteError::invalid_params(
                 "missing 'decision' (approve|reject)",
-            ))
+            ));
         }
     };
 
