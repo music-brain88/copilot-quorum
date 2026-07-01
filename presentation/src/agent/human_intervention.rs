@@ -169,9 +169,17 @@ impl InteractiveHumanIntervention {
         })?;
 
         let mut input = String::new();
-        io::stdin()
+        let bytes_read = io::stdin()
             .read_line(&mut input)
             .map_err(|e| HumanInterventionError::IoError(format!("Failed to read input: {}", e)))?;
+
+        // EOF (closed stdin, e.g. headless/piped runs): without this check
+        // the caller's retry loop re-prompts forever on an empty read.
+        if bytes_read == 0 {
+            return Err(HumanInterventionError::IoError(
+                "stdin closed (EOF) — cannot prompt for human intervention".to_string(),
+            ));
+        }
 
         Ok(input.trim().to_string())
     }

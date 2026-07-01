@@ -1439,6 +1439,43 @@ impl MessageRouter {
         let session_id = result.session_id;
         debug!("Router: session created: {}", session_id);
 
+        // Copilot CLI 1.0.65+ starts sessions with permission request
+        // events disabled, so custom-tool calls are denied outright
+        // ("Permission denied and could not request permission from user")
+        // before `external_tool.requested` is ever emitted. Quorum runs its
+        // own risk-based review + HiL before any tool call reaches the CLI,
+        // so enable auto-approval — the same policy our
+        // `permission.requested` auto-responder applies on older CLIs.
+        // CLIs without this RPC return an error response, which we tolerate.
+        let approve_all = JsonRpcRequest::new(
+            "session.permissions.setApproveAll",
+            Some(serde_json::json!({
+                "sessionId": session_id,
+                "enabled": true,
+            })),
+        );
+        match tokio::time::timeout(SESSION_CREATE_TIMEOUT, self.request(&approve_all)).await {
+            Ok(Ok(resp)) => {
+                if let Some(err) = resp.error {
+                    debug!(
+                        "Router: permissions.setApproveAll unsupported ({}): {}",
+                        session_id, err.message
+                    );
+                } else {
+                    debug!("Router: permissions.setApproveAll enabled ({})", session_id);
+                }
+            }
+            Ok(Err(e)) => {
+                warn!("Router: permissions.setApproveAll failed ({}): {}", session_id, e);
+            }
+            Err(_) => {
+                warn!(
+                    "Router: permissions.setApproveAll timed out ({})",
+                    session_id
+                );
+            }
+        }
+
         // Route registration was already done by the reader loop when it
         // processed the response — we just construct the SessionChannel
         // that owns the receiver end of the channel we pre-registered.
