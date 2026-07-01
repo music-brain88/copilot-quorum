@@ -127,4 +127,11 @@ pub struct Cli {
     /// Show init.lua and plugin paths and exit
     #[arg(long)]
     pub show_config: bool,
+
+    /// Expose a JSON-RPC remote control socket at PATH (TUI mode only)
+    ///
+    /// External processes (e.g. coding agents) can inspect panes and
+    /// inject input over this Unix socket. See docs/guides/tui.md.
+    #[arg(long, value_name = "PATH")]
+    pub listen: Option<PathBuf>,
 }

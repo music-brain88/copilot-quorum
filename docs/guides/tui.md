@@ -336,6 +336,52 @@ TUI は以下のウィジェットで構成されます:
 
 ---
 
+## Remote Control API / リモート操作 API
+
+`--listen <PATH>` で起動すると、Unix ドメインソケット上に JSON-RPC サーバーが公開され、
+外部プロセス（コーディングエージェント等）がキーボードと対等に TUI を操作できます。
+Neovim の `nvim --listen` に相当する機能です。
+
+```bash
+# TUI をソケット付きで起動
+copilot-quorum --listen /tmp/quorum.sock
+
+# 別プロセスから操作（scripts/tui-rpc.py はリファレンスクライアント）
+scripts/tui-rpc.py /tmp/quorum.sock state.get
+scripts/tui-rpc.py /tmp/quorum.sock input.send '{"text": "Fix the bug in login.rs"}'
+scripts/tui-rpc.py /tmp/quorum.sock pane.read '{"last": 5}'
+scripts/tui-rpc.py /tmp/quorum.sock hil.respond '{"decision": "approve"}'
+```
+
+### Methods
+
+| Method | Params | 説明 |
+|--------|--------|------|
+| `state.get` | — | モード、モデル、タブ数、保留中 HiL(プラン内容含む) |
+| `panes.list` | — | 全タブ/ペインのメタデータ(form, title, message_count, streaming) |
+| `pane.read` | `{tab?, last?}` | 会話メッセージを構造化 JSON で取得(画面スクレイピング不要) |
+| `input.send` | `{text}` | アクティブペインへプロンプト送信(`SubmitInput` と同一経路) |
+| `command.exec` | `{command}` | `:` コマンド実行(`solo`, `tabnew ask`, `q` 等) |
+| `interaction.spawn` | `{form, query}` | Agent/Ask/Discuss タブを生成 |
+| `interaction.activate` | `{interaction_id}` | 指定インタラクションのタブへフォーカス |
+| `hil.respond` | `{decision}` | 保留中の HiL モーダルに approve/reject を返す |
+
+### Design / 設計
+
+- **ワイヤ形式**: LSP スタイルの `Content-Length` フレーミング + JSON-RPC 2.0
+  （`copilot --server` と同一形式）
+- **実行モデル**: 各リクエストは `remote_rx` チャネル経由でメインの `select!`
+  ループ内で処理される。`&mut TuiState` へのアクセスはキーボード入力と完全に
+  同一のコードパス（`input.send` = `KeyAction::SubmitInput` 相当）
+- **セキュリティ**: ソケットは `0600` パーミッション、TCP リスナーなし
+- **HiL 連携**: `state.get` で保留中プランを確認 → `hil.respond` で承認/却下。
+  エージェントが TUI を運転しつつ承認だけ人間（または別エージェント）が返す
+  非同期 HiL（Discussion #42 の方向性）の土台
+
+実装: `presentation/src/tui/remote.rs`
+
+---
+
 ## Related / 関連
 
 - [architecture.md - TUI Design Philosophy](../reference/architecture.md#tui-design-philosophy--tui-設計思想) — 設計思想の詳細

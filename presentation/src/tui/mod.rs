@@ -20,6 +20,7 @@ pub mod layout;
 mod mode;
 mod presenter;
 mod progress;
+mod remote;
 mod route;
 mod state;
 mod surface;

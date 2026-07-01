@@ -496,6 +496,9 @@ async fn main() -> Result<()> {
         if let Some(resolver) = reference_resolver {
             tui_app = tui_app.with_reference_resolver(Arc::new(resolver));
         }
+        if let Some(listen_path) = &cli.listen {
+            tui_app = tui_app.with_listen(listen_path.clone());
+        }
         tui_app.run().await?;
         return Ok(());
     }
