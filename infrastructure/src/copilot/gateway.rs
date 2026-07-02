@@ -54,10 +54,15 @@ impl CopilotLlmGateway {
     /// Like [`new`](Self::new), but passes the logger through to the
     /// [`MessageRouter`] so that Copilot CLI internal tool events
     /// (e.g. `apply_patch`) are recorded in the conversation JSONL.
+    ///
+    /// `working_dir` sets the Copilot CLI process's working directory so its
+    /// built-in tools resolve relative paths against the project instead of
+    /// the CLI's session-state directory (#240).
     pub async fn new_with_logger(
         logger: Arc<dyn ConversationLogger>,
+        working_dir: Option<&str>,
     ) -> Result<Self, GatewayError> {
-        let router = MessageRouter::spawn_with_logger(logger)
+        let router = MessageRouter::spawn_with_logger(logger, working_dir)
             .await
             .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
 

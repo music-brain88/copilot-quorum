@@ -396,8 +396,23 @@ async fn main() -> Result<()> {
         .unwrap_or(provider_config);
     let custom_tools = scripting_engine.registered_custom_tools();
 
+    // Resolve working directory before spawning providers — the Copilot CLI
+    // process must start in the project directory so its built-in tools
+    // resolve relative paths there instead of its session-state dir (#240)
+    let working_dir = cli
+        .working_dir
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+        });
+
     // 5. Build providers
-    let copilot = CopilotLlmGateway::new_with_logger(conversation_logger.clone()).await?;
+    let copilot =
+        CopilotLlmGateway::new_with_logger(conversation_logger.clone(), working_dir.as_deref())
+            .await?;
     #[allow(unused_mut)]
     let mut providers: Vec<Arc<dyn ProviderAdapter>> =
         vec![Arc::new(CopilotProviderAdapter::new(copilot))];
@@ -413,16 +428,6 @@ async fn main() -> Result<()> {
     let gateway: Arc<dyn LlmGateway> = Arc::new(RoutingGateway::new(providers, &provider_config));
 
     // 6. Build tool executor (custom tools from Lua)
-    let working_dir = cli
-        .working_dir
-        .as_ref()
-        .map(|p| p.to_string_lossy().to_string())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-        });
-
     let mut tool_executor = LocalToolExecutor::new();
     if let Some(ref dir) = working_dir {
         tool_executor = tool_executor.with_working_dir(dir);
