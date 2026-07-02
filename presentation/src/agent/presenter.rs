@@ -251,7 +251,7 @@ impl ReplPresenter {
         println!();
         println!("{}", "Other Commands:".bold());
         println!("  /init[!]             - Initialize project context (! = force regenerate)");
-        println!("  /config              - Show current configuration");
+        println!("  /config [section]    - Show configuration (e.g. /config models)");
         println!("  /clear               - Clear conversation history");
         println!("  /verbose             - Toggle verbose mode");
         println!("  /quit, /exit, /q     - Exit");
@@ -260,59 +260,33 @@ impl ReplPresenter {
 
     fn render_config(&self, snapshot: &ConfigSnapshot) {
         println!();
-        println!("{}", "Current Configuration:".bold().cyan());
-        println!(
-            "  Exploration Model: {} {}",
-            snapshot.exploration_model,
-            "(context + low-risk tools)".dimmed()
-        );
-        println!(
-            "  Decision Model:    {} {}",
-            snapshot.decision_model,
-            "(planning + high-risk tools)".dimmed()
-        );
-        println!(
-            "  Review Models:     {}",
-            if snapshot.review_models.is_empty() {
-                "None (auto-approve)".to_string()
-            } else {
-                snapshot
-                    .review_models
-                    .iter()
-                    .map(|m| m.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+        match &snapshot.section_filter {
+            Some(section) => println!(
+                "{} {}",
+                "Current Configuration:".bold().cyan(),
+                format!("[{}]", section).dimmed()
+            ),
+            None => println!("{}", "Current Configuration:".bold().cyan()),
+        }
+        let mut current_section = "";
+        for entry in &snapshot.entries {
+            if entry.section() != current_section {
+                current_section = entry.section();
+                println!("  {}", format!("[{}]", current_section).bold().yellow());
             }
-        );
-        println!(
-            "  Consensus Level:   {} {}",
-            snapshot.consensus_level,
-            if snapshot.consensus_level.is_ensemble() {
-                "(multi-model planning + voting)".dimmed()
-            } else {
-                "(single model planning)".dimmed()
-            }
-        );
-        println!("  Phase Scope:       {}", snapshot.phase_scope);
-        println!("  Strategy:          {}", snapshot.orchestration_strategy);
-        println!("  Plan Review:       {}", "Always required".green());
-        println!(
-            "  Final Review:      {}",
-            if snapshot.require_final_review {
-                "Enabled"
-            } else {
-                "Disabled"
-            }
-        );
-        println!("  Max Iterations:    {}", snapshot.max_iterations);
-        println!("  Max Plan Revisions: {}", snapshot.max_plan_revisions);
-        println!("  HiL Mode:          {}", snapshot.hil_mode);
-        println!(
-            "  Working Dir:       {}",
-            snapshot.working_dir.as_deref().unwrap_or("(current)")
-        );
-        println!("  Verbose:           {}", snapshot.verbose);
-        println!("  History:           {} entries", snapshot.history_count);
+            println!("    {:<20} = {}", entry.name(), entry.value);
+        }
+        // Runtime info is not part of the key registry — only shown unfiltered
+        if snapshot.section_filter.is_none() {
+            println!("  {}", "[runtime]".bold().yellow());
+            println!(
+                "    {:<20} = {}",
+                "working_dir",
+                snapshot.working_dir.as_deref().unwrap_or("(current)")
+            );
+            println!("    {:<20} = {}", "verbose", snapshot.verbose);
+            println!("    {:<20} = {} entries", "history", snapshot.history_count);
+        }
         println!();
     }
 

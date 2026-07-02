@@ -48,7 +48,7 @@
 | `/discuss` | | (再設計予定 — Issue #119、`/council <question>` を使用) |
 | `/council <question>` | | Quorum Discussion を実行（複数モデルに相談） |
 | `/init [--force]` | | プロジェクトコンテキストを初期化 |
-| `/config` | | 現在の設定を表示 |
+| `/config [section]` | | 現在の設定を表示（全キー、セクション絞り込み可: `/config models`） |
 | `/clear` | | 会話履歴をクリア |
 | `/verbose` | | Verbose モードの状態を表示 |
 | `/quit` | `/exit`, `/q` | 終了 |

@@ -6,6 +6,7 @@
 
 use crate::config::QuorumConfig;
 use crate::ports::agent_progress::AgentProgressNotifier;
+use crate::ports::config_accessor::ConfigAccessorPort;
 use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::conversation_logger::{
     ConversationEvent, ConversationLogger, NoConversationLogger,
@@ -14,8 +15,9 @@ use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::QuorumProgressAdapter;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::ui_event::{
-    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
-    InteractionCompletedEvent, InteractionSpawnedEvent, QuorumResultEvent, UiEvent, WelcomeInfo,
+    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigEntry, ConfigSnapshot,
+    ContextInitResultEvent, InteractionCompletedEvent, InteractionSpawnedEvent, QuorumResultEvent,
+    UiEvent, WelcomeInfo,
 };
 use crate::use_cases::init_context::{
     InitContextInput, InitContextProgressNotifier, InitContextUseCase,
@@ -396,22 +398,47 @@ impl AgentController {
             }
             "/config" => {
                 let guard = self.config();
-                let _ = self.tx.send(UiEvent::ConfigDisplay(ConfigSnapshot {
-                    exploration_model: guard.models().exploration.clone(),
-                    decision_model: guard.models().decision.clone(),
-                    review_models: guard.models().review.clone(),
-                    consensus_level: guard.mode().consensus_level,
-                    phase_scope: guard.mode().phase_scope,
-                    orchestration_strategy: guard.mode().strategy.to_string(),
-                    require_final_review: guard.policy().require_final_review,
-                    max_iterations: guard.execution().max_iterations,
-                    max_plan_revisions: guard.policy().max_plan_revisions,
-                    hil_mode: guard.policy().hil_mode,
+                let section_filter = if args.is_empty() {
+                    None
+                } else {
+                    Some(args.to_string())
+                };
+                // Collect all known keys (registry order), optionally narrowed
+                // to a section prefix (`:config models`, `:config tui.input`).
+                let entries: Vec<ConfigEntry> = guard
+                    .config_keys()
+                    .into_iter()
+                    .filter(|key| match &section_filter {
+                        Some(section) => {
+                            key == section || key.starts_with(&format!("{}.", section))
+                        }
+                        None => true,
+                    })
+                    .filter_map(|key| {
+                        let value = guard.config_get(&key).ok()?.to_string();
+                        Some(ConfigEntry { key, value })
+                    })
+                    .collect();
+                if entries.is_empty() {
+                    let sections = config_sections(&guard.config_keys()).join(", ");
+                    drop(guard);
+                    let _ = self.tx.send(UiEvent::CommandError {
+                        message: format!(
+                            "Unknown config section: '{}'. Valid sections: {}",
+                            args, sections
+                        ),
+                    });
+                    return CommandAction::Continue;
+                }
+                let snapshot = ConfigSnapshot {
+                    entries,
+                    section_filter,
                     working_dir: guard.execution().working_dir.clone(),
                     verbose: self.verbose,
                     history_count: self.conversation_history.len(),
-                }));
+                };
                 drop(guard);
+                let _ = self.tx.send(UiEvent::ConfigDisplay(snapshot));
                 CommandAction::Continue
             }
             "/clear" => {
@@ -915,6 +942,20 @@ fn split_bang(command: &str) -> (&str, bool) {
     }
 }
 
+/// Collect unique config sections (key prefix before the last `.`) in registry order.
+///
+/// `["agent.hil_mode", "tui.input.submit_key"]` → `["agent", "tui.input"]`
+fn config_sections(keys: &[String]) -> Vec<String> {
+    let mut sections: Vec<String> = Vec::new();
+    for key in keys {
+        let section = key.rsplit_once('.').map(|(s, _)| s).unwrap_or("");
+        if sections.last().map(String::as_str) != Some(section) {
+            sections.push(section.to_string());
+        }
+    }
+    sections
+}
+
 /// Bridges [`InitContextProgressNotifier`] callbacks to the generic
 /// [`AgentProgressNotifier`] (Progress pane: phase + quorum vote bar) and the
 /// [`UiEvent`] channel (conversation log lines).
@@ -1408,7 +1449,73 @@ mod tests {
         controller.handle_command("/config", &NoAgentProgress).await;
 
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, UiEvent::ConfigDisplay(_)));
+        match event {
+            UiEvent::ConfigDisplay(snapshot) => {
+                // All registry keys are included (no filter)
+                assert_eq!(snapshot.entries.len(), quorum_domain::known_keys().len());
+                assert!(snapshot.section_filter.is_none());
+                assert!(
+                    snapshot
+                        .entries
+                        .iter()
+                        .any(|e| e.key == "models.exploration")
+                );
+                assert!(snapshot.entries.iter().any(|e| e.key == "output.format"));
+            }
+            other => panic!("Expected ConfigDisplay, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_display_section_filter() {
+        let (mut controller, mut rx) = create_test_controller();
+        controller
+            .handle_command("/config models", &NoAgentProgress)
+            .await;
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            UiEvent::ConfigDisplay(snapshot) => {
+                assert_eq!(snapshot.section_filter.as_deref(), Some("models"));
+                assert!(!snapshot.entries.is_empty());
+                assert!(snapshot.entries.iter().all(|e| e.section() == "models"));
+            }
+            other => panic!("Expected ConfigDisplay, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_display_nested_section_filter() {
+        let (mut controller, mut rx) = create_test_controller();
+        controller
+            .handle_command("/config tui.input", &NoAgentProgress)
+            .await;
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            UiEvent::ConfigDisplay(snapshot) => {
+                assert!(!snapshot.entries.is_empty());
+                assert!(snapshot.entries.iter().all(|e| e.section() == "tui.input"));
+            }
+            other => panic!("Expected ConfigDisplay, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_display_unknown_section() {
+        let (mut controller, mut rx) = create_test_controller();
+        controller
+            .handle_command("/config nonexistent", &NoAgentProgress)
+            .await;
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            UiEvent::CommandError { message } => {
+                assert!(message.contains("Unknown config section"));
+                assert!(message.contains("models"));
+            }
+            other => panic!("Expected CommandError, got {:?}", other),
+        }
     }
 
     #[tokio::test]

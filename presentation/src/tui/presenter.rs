@@ -175,22 +175,7 @@ impl TuiPresenter {
     }
 
     fn handle_config(&self, state: &mut TuiState, snapshot: &ConfigSnapshot) {
-        let config_text = format!(
-            "Decision: {} | Review: {} | Scope: {} | HiL: {}",
-            snapshot.decision_model,
-            if snapshot.review_models.is_empty() {
-                "None".to_string()
-            } else {
-                snapshot
-                    .review_models
-                    .iter()
-                    .map(|m| m.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            },
-            snapshot.phase_scope,
-            snapshot.hil_mode,
-        );
+        let config_text = format_config_snapshot(snapshot);
         self.emit(TuiEvent::ConfigDisplay(config_text.clone()));
         state.push_message(DisplayMessage::system(config_text));
     }
@@ -275,6 +260,36 @@ impl TuiPresenter {
     fn emit(&self, event: TuiEvent) {
         let _ = self.event_tx.send(RoutedTuiEvent::global(event));
     }
+}
+
+/// Format a config snapshot grouped by section, one line per section:
+///
+/// ```text
+/// [agent] consensus_level=solo  phase_scope=full  strategy=quorum  ...
+/// [models] exploration=...  decision=...  review=[...]  ...
+/// [runtime] working_dir=(current)  verbose=false  history=0
+/// ```
+fn format_config_snapshot(snapshot: &ConfigSnapshot) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_section = "";
+    for entry in &snapshot.entries {
+        if entry.section() != current_section {
+            current_section = entry.section();
+            lines.push(format!("[{}]", current_section));
+        }
+        let line = lines.last_mut().expect("section header pushed above");
+        line.push_str(&format!("  {}={}", entry.name(), entry.value));
+    }
+    // Runtime info is not part of the key registry — only shown unfiltered
+    if snapshot.section_filter.is_none() {
+        lines.push(format!(
+            "[runtime]  working_dir={}  verbose={}  history={}",
+            snapshot.working_dir.as_deref().unwrap_or("(current)"),
+            snapshot.verbose,
+            snapshot.history_count,
+        ));
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -423,6 +438,66 @@ mod tests {
             .pane_for_interaction_mut(InteractionId(0))
             .expect("root pane missing");
         assert!(pane.conversation.messages.is_empty());
+    }
+
+    #[test]
+    fn test_config_display_groups_by_section() {
+        use quorum_application::ConfigEntry;
+
+        let (presenter, _rx, mut state) = setup();
+        let snapshot = ConfigSnapshot {
+            entries: vec![
+                ConfigEntry {
+                    key: "agent.consensus_level".into(),
+                    value: "solo".into(),
+                },
+                ConfigEntry {
+                    key: "agent.phase_scope".into(),
+                    value: "full".into(),
+                },
+                ConfigEntry {
+                    key: "models.exploration".into(),
+                    value: "gpt-5.3-codex".into(),
+                },
+                ConfigEntry {
+                    key: "tui.input.submit_key".into(),
+                    value: "enter".into(),
+                },
+            ],
+            section_filter: None,
+            working_dir: None,
+            verbose: false,
+            history_count: 0,
+        };
+
+        presenter.apply(&mut state, &UiEvent::ConfigDisplay(snapshot));
+        let content = &state.tabs.active_pane().conversation.messages[0].content;
+        assert!(content.contains("[agent]  consensus_level=solo  phase_scope=full"));
+        assert!(content.contains("[models]  exploration=gpt-5.3-codex"));
+        assert!(content.contains("[tui.input]  submit_key=enter"));
+        assert!(content.contains("[runtime]"));
+    }
+
+    #[test]
+    fn test_config_display_filtered_omits_runtime() {
+        use quorum_application::ConfigEntry;
+
+        let (presenter, _rx, mut state) = setup();
+        let snapshot = ConfigSnapshot {
+            entries: vec![ConfigEntry {
+                key: "models.decision".into(),
+                value: "claude-sonnet-4.5".into(),
+            }],
+            section_filter: Some("models".into()),
+            working_dir: None,
+            verbose: false,
+            history_count: 0,
+        };
+
+        presenter.apply(&mut state, &UiEvent::ConfigDisplay(snapshot));
+        let content = &state.tabs.active_pane().conversation.messages[0].content;
+        assert!(content.contains("[models]  decision=claude-sonnet-4.5"));
+        assert!(!content.contains("[runtime]"));
     }
 
     #[test]

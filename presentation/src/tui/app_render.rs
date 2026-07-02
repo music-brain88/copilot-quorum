@@ -158,7 +158,7 @@ fn render_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         Line::from("  :fast    Toggle fast mode"),
         Line::from("  :ask <question>   Ask (lightweight Q&A)"),
         Line::from("  :discuss <question> Discuss (quorum discussion)"),
-        Line::from("  :config  Show configuration"),
+        Line::from("  :config [section]  Show configuration (e.g. :config models)"),
         Line::from("  :clear   Clear history"),
         Line::from("  :tabnew [form]  New tab (agent/ask/discuss)"),
         Line::from("  :tabclose       Close tab"),

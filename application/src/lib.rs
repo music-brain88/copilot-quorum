@@ -53,8 +53,9 @@ pub use use_cases::gather_context::GatherContextUseCase;
 
 // UI event types (output port for presentation layer)
 pub use ports::ui_event::{
-    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
-    InteractionCompletedEvent, InteractionSpawnedEvent, QuorumResultEvent, UiEvent, WelcomeInfo,
+    AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigEntry, ConfigSnapshot,
+    ContextInitResultEvent, InteractionCompletedEvent, InteractionSpawnedEvent, QuorumResultEvent,
+    UiEvent, WelcomeInfo,
 };
 
 // Agent controller
