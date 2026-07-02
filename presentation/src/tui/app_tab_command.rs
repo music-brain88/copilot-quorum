@@ -49,8 +49,18 @@ fn close_active_tab(
     state: &mut TuiState,
     cmd_tx: &mpsc::UnboundedSender<TuiCommand>,
 ) -> Option<String> {
+    // Capture the interaction bound to the tab we're about to close, so we can
+    // cancel its in-flight agent once it's gone (issue #282). A placeholder tab
+    // (id = None) has no agent to cancel.
+    let closing_id = match state.tabs.active_pane().kind {
+        PaneKind::Interaction(_, Some(id)) => Some(id),
+        PaneKind::Interaction(_, None) => None,
+    };
     if !state.tabs.close_active() {
         return None;
+    }
+    if let Some(id) = closing_id {
+        let _ = cmd_tx.send(TuiCommand::CancelInteraction(id));
     }
     // Sync active_interaction_id with the new active tab
     if let PaneKind::Interaction(_, Some(id)) = state.tabs.active_pane().kind {
@@ -199,6 +209,40 @@ mod tests {
         }
         // No tab was closed along the way.
         assert_eq!(state.tabs.len(), 2);
+    }
+
+    #[test]
+    fn closing_bound_tab_cancels_its_interaction() {
+        use quorum_domain::interaction::InteractionId;
+        let (mut state, tx, mut rx) = setup();
+        // Active tab is a bound interaction; another tab exists so it can close.
+        state.tabs.create_tab(PaneKind::Interaction(
+            InteractionForm::Agent,
+            Some(InteractionId(42)),
+        ));
+        assert!(matches!(
+            handle_quit_command(&mut state, "q", &tx),
+            QuitOutcome::TabClosed(_)
+        ));
+        // The closed tab's agent must be cancelled.
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(TuiCommand::CancelInteraction(InteractionId(42)))
+        ));
+    }
+
+    #[test]
+    fn closing_placeholder_tab_sends_no_cancel() {
+        let (mut state, tx, mut rx) = setup();
+        // Active tab is a placeholder (id = None) — nothing to cancel.
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        assert!(matches!(
+            handle_quit_command(&mut state, "q", &tx),
+            QuitOutcome::TabClosed(_)
+        ));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

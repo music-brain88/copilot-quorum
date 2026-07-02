@@ -51,12 +51,32 @@ pub(super) fn handle_action(
             let input = state.take_input();
             if !input.is_empty() {
                 state.tabs.active_pane_mut().set_title_if_empty(&input);
-                state.push_message(DisplayMessage::user(&input));
-                let interaction_id = state.active_interaction_id();
-                let _ = cmd_tx.send(TuiCommand::ProcessRequest {
-                    interaction_id,
-                    request: input,
-                });
+                match state.tabs.active_pane().kind {
+                    // Bound tab: run the request against its interaction.
+                    PaneKind::Interaction(_, Some(id)) => {
+                        state.push_message(DisplayMessage::user(&input));
+                        let _ = cmd_tx.send(TuiCommand::ProcessRequest {
+                            interaction_id: Some(id),
+                            request: input,
+                        });
+                    }
+                    // Placeholder tab (`:tabnew`, or the survivor after a bound
+                    // tab was closed): spawn a fresh interaction and bind it to
+                    // THIS tab so the response renders here — instead of the
+                    // controller falling back to its `active_interaction_id`,
+                    // which may still point at a closed tab (#283).
+                    //
+                    // The spawn path echoes the user message via
+                    // InteractionSpawned, so don't push it locally here (that
+                    // would duplicate it).
+                    PaneKind::Interaction(form, None) => {
+                        let _ = cmd_tx.send(TuiCommand::SpawnInteraction {
+                            form,
+                            query: input,
+                            context_mode_override: None,
+                        });
+                    }
+                }
             }
         }
         KeyAction::SubmitCommand => {
@@ -161,6 +181,17 @@ pub(super) fn handle_action(
 
         // Application
         KeyAction::Quit => state.should_quit = true,
+        KeyAction::CloseTabOrQuit => {
+            // Tab-aware quit (`:q`): close the active tab, or quit on the last
+            // one. Shares the exact command-path helper so the keymap action and
+            // `:q` never diverge (#284).
+            use super::app_tab_command::QuitOutcome;
+            match super::app_tab_command::handle_quit_command(state, "q", cmd_tx) {
+                QuitOutcome::QuitApp => state.should_quit = true,
+                QuitOutcome::TabClosed(flash) => state.set_flash(flash),
+                QuitOutcome::NotQuit => {}
+            }
+        }
         KeyAction::ShowHelp => state.toggle_help(),
         KeyAction::ToggleConsensus => {
             // Handled by command
@@ -285,4 +316,121 @@ fn execute_lua_callback(
     scripting_engine
         .execute_callback(callback_id)
         .map_err(|e| e.message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quorum_application::{NoClipboard, NoScriptingEngine};
+    use quorum_domain::interaction::{InteractionForm, InteractionId};
+
+    fn submit(state: &mut TuiState, cmd_tx: &mpsc::UnboundedSender<TuiCommand>) {
+        run(state, KeyAction::SubmitInput, cmd_tx);
+    }
+
+    #[test]
+    fn submit_on_bound_tab_processes_request() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        let id = InteractionId(5);
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, Some(id)));
+        state.tabs.active_pane_mut().input = "hello".into();
+
+        submit(&mut state, &tx);
+
+        match rx.try_recv() {
+            Ok(TuiCommand::ProcessRequest {
+                interaction_id,
+                request,
+            }) => {
+                assert_eq!(interaction_id, Some(id));
+                assert_eq!(request, "hello");
+            }
+            other => panic!("expected ProcessRequest, got {:?}", other.is_ok()),
+        }
+        // The user message is echoed locally for a bound tab.
+        assert_eq!(state.tabs.active_pane().conversation.messages.len(), 1);
+    }
+
+    fn run(state: &mut TuiState, action: KeyAction, cmd_tx: &mpsc::UnboundedSender<TuiCommand>) {
+        let scripting: Arc<dyn quorum_application::ScriptingEnginePort> =
+            Arc::new(NoScriptingEngine);
+        let clipboard: Arc<dyn quorum_application::ClipboardPort> = Arc::new(NoClipboard);
+        let registry = RefCell::new(ContentRegistry::new());
+        handle_action(state, action, cmd_tx, &scripting, &clipboard, &registry);
+    }
+
+    #[test]
+    fn close_tab_or_quit_closes_tab_when_multiple_open() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        state.tabs.create_tab(PaneKind::Interaction(
+            InteractionForm::Agent,
+            Some(InteractionId(3)),
+        ));
+        assert_eq!(state.tabs.len(), 2);
+
+        run(&mut state, KeyAction::CloseTabOrQuit, &tx);
+
+        // Tab-aware: closed the active tab, did NOT quit the app.
+        assert_eq!(state.tabs.len(), 1);
+        assert!(!state.should_quit);
+        // And cancelled the closed tab's interaction (via the shared helper).
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(TuiCommand::CancelInteraction(InteractionId(3)))
+        ));
+    }
+
+    #[test]
+    fn close_tab_or_quit_quits_on_last_tab() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        assert_eq!(state.tabs.len(), 1);
+
+        run(&mut state, KeyAction::CloseTabOrQuit, &tx);
+
+        assert!(state.should_quit);
+    }
+
+    #[test]
+    fn quit_builtin_always_quits_whole_app() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        assert_eq!(state.tabs.len(), 2);
+
+        run(&mut state, KeyAction::Quit, &tx);
+
+        // `quit` is `:qa` — quits regardless of open tab count.
+        assert!(state.should_quit);
+    }
+
+    #[test]
+    fn submit_on_placeholder_tab_spawns_interaction() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        // `:tabnew` style placeholder (id = None) becomes active.
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        state.tabs.active_pane_mut().input = "do the thing".into();
+
+        submit(&mut state, &tx);
+
+        match rx.try_recv() {
+            Ok(TuiCommand::SpawnInteraction { form, query, .. }) => {
+                assert_eq!(form, InteractionForm::Agent);
+                assert_eq!(query, "do the thing");
+            }
+            other => panic!("expected SpawnInteraction, got ok={:?}", other.is_ok()),
+        }
+        // No local echo — the spawn path echoes via InteractionSpawned, so the
+        // placeholder pane must not have pushed a duplicate user message.
+        assert!(state.tabs.active_pane().conversation.messages.is_empty());
+    }
 }

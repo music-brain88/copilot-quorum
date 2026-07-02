@@ -53,7 +53,7 @@ pub(super) async fn controller_task(
                     TuiCommand::ProcessRequest { interaction_id, request } => {
                         let iid = interaction_id.unwrap_or_else(|| controller.active_interaction_id());
                         let (clean_query, full_query) = controller.prepare_inline(&request);
-                        let context = controller.build_spawn_context();
+                        let context = controller.build_spawn_context_for(iid);
                         let tx = progress_tx.clone();
                         tasks.spawn(async move {
                             let progress = TuiProgressBridge::for_interaction(tx, iid);
@@ -80,7 +80,7 @@ pub(super) async fn controller_task(
                             CommandAction::Continue => {}
                             CommandAction::Execute { form, query } => {
                                 let (clean_query, full_query) = controller.prepare_inline(&query);
-                                let context = controller.build_spawn_context();
+                                let context = controller.build_spawn_context_for(iid);
                                 let tx = progress_tx.clone();
                                 tasks.spawn(async move {
                                     let progress = TuiProgressBridge::for_interaction(tx, iid);
@@ -108,7 +108,7 @@ pub(super) async fn controller_task(
                     } => {
                         match controller.prepare_spawn(form, &query, context_mode_override) {
                             Ok((child_id, clean_query, full_query)) => {
-                                let context = controller.build_spawn_context();
+                                let context = controller.build_spawn_context_for(child_id);
                                 let tx = progress_tx.clone();
 
                                 tasks.spawn(async move {
@@ -125,6 +125,9 @@ pub(super) async fn controller_task(
                     }
                     TuiCommand::ActivateInteraction(id) => {
                         controller.set_active_interaction(id);
+                    }
+                    TuiCommand::CancelInteraction(id) => {
+                        controller.cancel_interaction(id);
                     }
                     TuiCommand::Quit => {
                         break;
