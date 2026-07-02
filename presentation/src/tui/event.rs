@@ -60,6 +60,9 @@ pub enum TuiCommand {
     },
     /// Activate an existing interaction
     ActivateInteraction(InteractionId),
+    /// Cancel the in-flight interaction bound to a (now closed) tab.
+    /// Cancels only that interaction's agent, leaving other tabs running.
+    CancelInteraction(InteractionId),
     /// Graceful shutdown
     #[allow(dead_code)]
     Quit,

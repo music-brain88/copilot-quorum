@@ -31,6 +31,7 @@ use quorum_domain::interaction::{
 };
 use quorum_domain::util::truncate_str;
 use quorum_domain::{AgentPhase, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc;
@@ -82,8 +83,13 @@ pub struct AgentController {
     verbose: bool,
     /// Conversation history for /discuss context
     conversation_history: Vec<HistoryEntry>,
-    /// Cancellation token for graceful shutdown
+    /// Root cancellation token for graceful shutdown (Ctrl+C).
+    /// Per-interaction tokens are derived as children of this one, so a
+    /// root cancel stops every interaction while a child cancel stops just one.
     cancellation_token: Option<CancellationToken>,
+    /// Per-interaction cancellation tokens (children of `cancellation_token`).
+    /// Lets a closed tab cancel only its own agent (issue #282).
+    interaction_tokens: HashMap<InteractionId, CancellationToken>,
     /// Channel sender for UI events
     tx: mpsc::UnboundedSender<UiEvent>,
     /// Conversation logger for structured event logging
@@ -133,6 +139,7 @@ impl AgentController {
             verbose: false,
             conversation_history: Vec::new(),
             cancellation_token: None,
+            interaction_tokens: HashMap::new(),
             tx,
             conversation_logger,
             interaction_tree,
@@ -727,6 +734,27 @@ impl AgentController {
         self.active_interaction_id = id;
     }
 
+    /// Create (or replace) a cancellation token bound to an interaction, derived
+    /// as a child of the root token. Returns `None` when no root token is set
+    /// (cancellation simply isn't wired), in which case the agent runs uncancelled.
+    ///
+    /// The returned token is applied to that interaction's execution so a later
+    /// [`Self::cancel_interaction`] (fired when the owning tab closes) stops just
+    /// that agent — while a root cancel (Ctrl+C) still stops every interaction.
+    fn bind_cancellation(&mut self, id: InteractionId) -> Option<CancellationToken> {
+        let child = self.cancellation_token.as_ref()?.child_token();
+        self.interaction_tokens.insert(id, child.clone());
+        Some(child)
+    }
+
+    /// Cancel the in-flight interaction bound to `id` (its tab was closed).
+    /// No-op if the interaction has no live token. See issue #282.
+    pub fn cancel_interaction(&mut self, id: InteractionId) {
+        if let Some(token) = self.interaction_tokens.remove(&id) {
+            token.cancel();
+        }
+    }
+
     /// Prepare context for an inline execution (no tree node).
     ///
     /// Returns (clean_query, full_query) where:
@@ -838,11 +866,28 @@ impl AgentController {
         }
     }
 
+    /// Build a spawn context whose agent execution is cancellable per-interaction.
+    ///
+    /// Binds a fresh child cancellation token to `id` and applies it to the
+    /// returned context, so closing the tab that owns `id` cancels just this
+    /// agent (issue #282). Use this instead of [`Self::build_spawn_context`]
+    /// for any execution bound to a tab.
+    pub fn build_spawn_context_for(&mut self, id: InteractionId) -> SpawnContext {
+        let token = self.bind_cancellation(id);
+        self.build_spawn_context().with_cancellation(token)
+    }
+
     /// Finalize a completed task (spawn or inline).
     ///
     /// Updates conversation history. For spawn tasks (interaction_id is Some),
     /// also emits InteractionCompleted event.
     pub fn finalize(&mut self, completion: TaskCompletion) {
+        // Drop the per-interaction cancellation token now that the spawn is done.
+        // (Inline executions carry no id here; their token is replaced on the
+        // interaction's next request, so the map stays bounded either way.)
+        if let Some(id) = completion.interaction_id {
+            self.interaction_tokens.remove(&id);
+        }
         if let Some(result) = &completion.result {
             self.conversation_history.push(HistoryEntry {
                 form: completion.form,
@@ -1035,6 +1080,17 @@ pub struct TaskCompletion {
 }
 
 impl SpawnContext {
+    /// Override the agent use case's cancellation token for this execution.
+    ///
+    /// `None` leaves the inherited (root) token in place. Passing a per-interaction
+    /// child token makes this execution cancellable independently (issue #282).
+    pub fn with_cancellation(mut self, token: Option<CancellationToken>) -> Self {
+        if let Some(token) = token {
+            self.agent_use_case = self.agent_use_case.with_cancellation(token);
+        }
+        self
+    }
+
     pub async fn execute(
         self,
         interaction_id: Option<InteractionId>,
@@ -1646,6 +1702,54 @@ mod tests {
             }
             other => panic!("Expected CommandError, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_cancel_interaction_cancels_only_that_child() {
+        let (mut controller, _rx) = create_test_controller();
+        let root = CancellationToken::new();
+        controller.set_cancellation(root.clone());
+
+        let a = InteractionId(1);
+        let b = InteractionId(2);
+        let tok_a = controller.bind_cancellation(a).expect("root token present");
+        let tok_b = controller.bind_cancellation(b).expect("root token present");
+
+        // Cancelling one interaction leaves the other running.
+        controller.cancel_interaction(a);
+        assert!(tok_a.is_cancelled());
+        assert!(!tok_b.is_cancelled());
+
+        // The token is removed on cancel, so a second cancel is a harmless no-op.
+        controller.cancel_interaction(a);
+
+        // A root cancel (Ctrl+C) still stops every remaining interaction.
+        root.cancel();
+        assert!(tok_b.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_bind_cancellation_without_root_is_none() {
+        let (mut controller, _rx) = create_test_controller();
+        // No root token wired → interactions run uncancelled, no panic.
+        assert!(controller.bind_cancellation(InteractionId(1)).is_none());
+        controller.cancel_interaction(InteractionId(1));
+    }
+
+    #[tokio::test]
+    async fn test_finalize_drops_interaction_token() {
+        let (mut controller, _rx) = create_test_controller();
+        controller.set_cancellation(CancellationToken::new());
+        let id = InteractionId(7);
+        controller.bind_cancellation(id);
+        assert!(controller.interaction_tokens.contains_key(&id));
+        controller.finalize(TaskCompletion {
+            interaction_id: Some(id),
+            form: InteractionForm::Agent,
+            query: "q".into(),
+            result: None,
+        });
+        assert!(!controller.interaction_tokens.contains_key(&id));
     }
 
     #[tokio::test]

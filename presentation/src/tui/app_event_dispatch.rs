@@ -20,13 +20,16 @@ pub(super) fn apply_routed_tui_event(
     content_registry: &RefCell<ContentRegistry>,
     routed: RoutedTuiEvent,
 ) {
-    if let Some(id) = routed.interaction_id
-        && state.tabs.find_tab_index_by_interaction(id).is_some()
-    {
-        apply_tui_event_to_interaction(state, content_registry, id, routed.event);
+    if let Some(id) = routed.interaction_id {
+        // Event targeted at a specific interaction. If its tab still exists,
+        // render there; otherwise the tab was closed — drop the event rather
+        // than leaking a dead interaction's output into the active pane (#282).
+        if state.tabs.find_tab_index_by_interaction(id).is_some() {
+            apply_tui_event_to_interaction(state, content_registry, id, routed.event);
+        }
         return;
     }
-    // Fallback to active pane (global event or untargeted)
+    // Truly global event (no interaction id) — apply to the active pane.
     apply_tui_event(state, content_registry, routed.event);
 }
 
@@ -494,7 +497,55 @@ fn extract_response_text(output: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::state::TuiState;
+    use super::super::tab::PaneKind;
     use super::*;
+    use quorum_domain::interaction::InteractionForm;
+
+    #[test]
+    fn test_orphan_event_is_dropped_not_leaked_to_active_pane() {
+        // Active tab bound to interaction 1; a StreamChunk arrives for a closed
+        // interaction (99) whose tab no longer exists. It must NOT render in the
+        // active pane (issue #282).
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        state.tabs.create_tab(PaneKind::Interaction(
+            InteractionForm::Agent,
+            Some(InteractionId(1)),
+        ));
+
+        apply_routed_tui_event(
+            &mut state,
+            &registry,
+            RoutedTuiEvent::for_interaction(
+                InteractionId(99),
+                TuiEvent::StreamChunk("ghost".into()),
+            ),
+        );
+
+        let active = state.tabs.active_pane();
+        assert!(active.conversation.streaming_text.is_empty());
+        assert!(active.conversation.messages.is_empty());
+    }
+
+    #[test]
+    fn test_targeted_event_renders_in_owning_pane() {
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let id = InteractionId(1);
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, Some(id)));
+
+        apply_routed_tui_event(
+            &mut state,
+            &registry,
+            RoutedTuiEvent::for_interaction(id, TuiEvent::StreamChunk("hi".into())),
+        );
+
+        let pane = state.tabs.pane_for_interaction_mut(id).unwrap();
+        assert_eq!(pane.conversation.streaming_text, "hi");
+    }
 
     #[test]
     fn test_extract_plain_text() {
