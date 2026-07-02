@@ -484,7 +484,17 @@ impl InitContextUseCase {
 /// leap years and assumed 30-day months and could drift the date up to ~15
 /// days into the future.
 fn current_date() -> String {
-    format_ymd(chrono::Local::now().date_naive())
+    current_date_from(chrono::Local::now())
+}
+
+/// Formats the given instant as its local calendar date (`YYYY-MM-DD`).
+///
+/// Takes the "now" instant as a parameter so tests can capture a single
+/// `Local::now()` and feed both the value under test and the expectation
+/// from it, avoiding a midnight-boundary race between two separate clock
+/// reads.
+fn current_date_from<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> String {
+    format_ymd(now.date_naive())
 }
 
 /// Formats a [`chrono::NaiveDate`] as `YYYY-MM-DD`.
@@ -560,10 +570,10 @@ mod tests {
 
     #[test]
     fn current_date_matches_local_now() {
-        // current_date() must agree with chrono's own formatting of "today".
-        assert_eq!(
-            current_date(),
-            format_ymd(chrono::Local::now().date_naive())
-        );
+        // Capture "now" once so both sides use the same instant — reading the
+        // clock twice could straddle midnight and flake the assertion.
+        let now = chrono::Local::now();
+        let expected = format_ymd(now.date_naive());
+        assert_eq!(current_date_from(now), expected);
     }
 }
