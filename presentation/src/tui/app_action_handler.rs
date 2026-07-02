@@ -51,12 +51,32 @@ pub(super) fn handle_action(
             let input = state.take_input();
             if !input.is_empty() {
                 state.tabs.active_pane_mut().set_title_if_empty(&input);
-                state.push_message(DisplayMessage::user(&input));
-                let interaction_id = state.active_interaction_id();
-                let _ = cmd_tx.send(TuiCommand::ProcessRequest {
-                    interaction_id,
-                    request: input,
-                });
+                match state.tabs.active_pane().kind {
+                    // Bound tab: run the request against its interaction.
+                    PaneKind::Interaction(_, Some(id)) => {
+                        state.push_message(DisplayMessage::user(&input));
+                        let _ = cmd_tx.send(TuiCommand::ProcessRequest {
+                            interaction_id: Some(id),
+                            request: input,
+                        });
+                    }
+                    // Placeholder tab (`:tabnew`, or the survivor after a bound
+                    // tab was closed): spawn a fresh interaction and bind it to
+                    // THIS tab so the response renders here — instead of the
+                    // controller falling back to its `active_interaction_id`,
+                    // which may still point at a closed tab (#283).
+                    //
+                    // The spawn path echoes the user message via
+                    // InteractionSpawned, so don't push it locally here (that
+                    // would duplicate it).
+                    PaneKind::Interaction(form, None) => {
+                        let _ = cmd_tx.send(TuiCommand::SpawnInteraction {
+                            form,
+                            query: input,
+                            context_mode_override: None,
+                        });
+                    }
+                }
             }
         }
         KeyAction::SubmitCommand => {
@@ -285,4 +305,76 @@ fn execute_lua_callback(
     scripting_engine
         .execute_callback(callback_id)
         .map_err(|e| e.message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quorum_application::{NoClipboard, NoScriptingEngine};
+    use quorum_domain::interaction::{InteractionForm, InteractionId};
+
+    fn submit(state: &mut TuiState, cmd_tx: &mpsc::UnboundedSender<TuiCommand>) {
+        let scripting: Arc<dyn quorum_application::ScriptingEnginePort> =
+            Arc::new(NoScriptingEngine);
+        let clipboard: Arc<dyn quorum_application::ClipboardPort> = Arc::new(NoClipboard);
+        let registry = RefCell::new(ContentRegistry::new());
+        handle_action(
+            state,
+            KeyAction::SubmitInput,
+            cmd_tx,
+            &scripting,
+            &clipboard,
+            &registry,
+        );
+    }
+
+    #[test]
+    fn submit_on_bound_tab_processes_request() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        let id = InteractionId(5);
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, Some(id)));
+        state.tabs.active_pane_mut().input = "hello".into();
+
+        submit(&mut state, &tx);
+
+        match rx.try_recv() {
+            Ok(TuiCommand::ProcessRequest {
+                interaction_id,
+                request,
+            }) => {
+                assert_eq!(interaction_id, Some(id));
+                assert_eq!(request, "hello");
+            }
+            other => panic!("expected ProcessRequest, got {:?}", other.is_ok()),
+        }
+        // The user message is echoed locally for a bound tab.
+        assert_eq!(state.tabs.active_pane().conversation.messages.len(), 1);
+    }
+
+    #[test]
+    fn submit_on_placeholder_tab_spawns_interaction() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        // `:tabnew` style placeholder (id = None) becomes active.
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        state.tabs.active_pane_mut().input = "do the thing".into();
+
+        submit(&mut state, &tx);
+
+        match rx.try_recv() {
+            Ok(TuiCommand::SpawnInteraction { form, query, .. }) => {
+                assert_eq!(form, InteractionForm::Agent);
+                assert_eq!(query, "do the thing");
+            }
+            other => panic!("expected SpawnInteraction, got ok={:?}", other.is_ok()),
+        }
+        // No local echo — the spawn path echoes via InteractionSpawned, so the
+        // placeholder pane must not have pushed a duplicate user message.
+        assert!(state.tabs.active_pane().conversation.messages.is_empty());
+    }
 }

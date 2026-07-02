@@ -706,19 +706,33 @@ fn input_send(
     }
 
     state.tabs.active_pane_mut().set_title_if_empty(&text);
-    state.push_message(DisplayMessage::user(&text));
-    let interaction_id = state.active_interaction_id();
-    cmd_tx
-        .send(TuiCommand::ProcessRequest {
-            interaction_id,
-            request: text,
-        })
-        .map_err(|_| RemoteError::failed("controller unavailable"))?;
-
-    Ok(json!({
-        "ok": true,
-        "interaction_id": interaction_id.map(|i| i.0),
-    }))
+    // Mirror KeyAction::SubmitInput (app_action_handler): a bound tab processes
+    // the request; a placeholder tab spawns+binds a fresh interaction so the
+    // response renders in it, rather than falling back to a possibly-stale
+    // controller active_interaction_id (#283).
+    match state.tabs.active_pane().kind {
+        super::tab::PaneKind::Interaction(_, Some(id)) => {
+            state.push_message(DisplayMessage::user(&text));
+            cmd_tx
+                .send(TuiCommand::ProcessRequest {
+                    interaction_id: Some(id),
+                    request: text,
+                })
+                .map_err(|_| RemoteError::failed("controller unavailable"))?;
+            Ok(json!({ "ok": true, "interaction_id": id.0 }))
+        }
+        super::tab::PaneKind::Interaction(form, None) => {
+            // Spawn path echoes the user message via InteractionSpawned.
+            cmd_tx
+                .send(TuiCommand::SpawnInteraction {
+                    form,
+                    query: text,
+                    context_mode_override: None,
+                })
+                .map_err(|_| RemoteError::failed("controller unavailable"))?;
+            Ok(json!({ "ok": true, "interaction_id": Value::Null }))
+        }
+    }
 }
 
 /// Execute a `:command` — mirrors `KeyAction::SubmitCommand`.
