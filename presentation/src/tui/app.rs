@@ -86,6 +86,9 @@ pub struct TuiApp {
 
     // -- Clipboard (for yank/copy operations) --
     clipboard: Arc<dyn ClipboardPort>,
+
+    // -- Remote control socket path (--listen) --
+    listen_path: Option<std::path::PathBuf>,
 }
 
 impl TuiApp {
@@ -164,6 +167,7 @@ impl TuiApp {
             custom_keymap: mode::CustomKeymap::new(),
             tui_accessor: None,
             clipboard: Arc::new(NoClipboard),
+            listen_path: None,
         }
     }
 
@@ -173,6 +177,12 @@ impl TuiApp {
     /// Pass an `ArboardClipboard` (or similar) to enable actual copying.
     pub fn with_clipboard(mut self, clipboard: Arc<dyn ClipboardPort>) -> Self {
         self.clipboard = clipboard;
+        self
+    }
+
+    /// Expose a JSON-RPC remote control socket at `path` (see `tui::remote`).
+    pub fn with_listen(mut self, path: std::path::PathBuf) -> Self {
+        self.listen_path = Some(path);
         self
     }
 
@@ -304,6 +314,16 @@ impl TuiApp {
         let mut event_stream = EventStream::new();
         let mut tick = tokio::time::interval(Duration::from_millis(250));
 
+        // Remote control socket (--listen). The receiver participates in the
+        // select! loop below; without a listener the channel simply never
+        // yields (all senders dropped → branch disabled).
+        let (remote_tx, mut remote_rx) = mpsc::unbounded_channel::<super::remote::RemoteRequest>();
+        if let Some(path) = &self.listen_path {
+            super::remote::spawn_listener(path.clone(), remote_tx)?;
+        } else {
+            drop(remote_tx);
+        }
+
         // Send welcome
         let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
             interaction_id: None,
@@ -360,6 +380,16 @@ impl TuiApp {
                         &mut state,
                         &self.pending_hil_tx,
                         hil_request,
+                    );
+                }
+
+                // Remote control requests (--listen socket)
+                Some(remote_request) = remote_rx.recv() => {
+                    super::remote::handle_request(
+                        &mut state,
+                        &self.cmd_tx,
+                        &self.pending_hil_tx,
+                        remote_request,
                     );
                 }
 
