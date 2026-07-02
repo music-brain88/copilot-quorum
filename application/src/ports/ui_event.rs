@@ -5,8 +5,8 @@
 //! (e.g., ReplPresenter for CLI, TuiPresenter for TUI in Phase 2).
 
 use quorum_domain::{
-    AgentState, ConsensusLevel, HilMode, InteractionForm, InteractionId, Model, OutputFormat,
-    PhaseScope, Thought,
+    AgentState, ConsensusLevel, InteractionForm, InteractionId, Model, OutputFormat, PhaseScope,
+    Thought,
 };
 
 /// Events emitted by AgentController for presentation layer to render
@@ -108,19 +108,38 @@ pub struct WelcomeInfo {
     pub consensus_level: ConsensusLevel,
 }
 
+/// A single config key-value pair for display
+#[derive(Debug, Clone)]
+pub struct ConfigEntry {
+    /// Full dotted key path (e.g., `"agent.consensus_level"`)
+    pub key: String,
+    /// Rendered value (via `ConfigValue` Display)
+    pub value: String,
+}
+
+impl ConfigEntry {
+    /// Section prefix: everything before the last `.` (e.g., `"tui.input"`).
+    pub fn section(&self) -> &str {
+        self.key.rsplit_once('.').map(|(s, _)| s).unwrap_or("")
+    }
+
+    /// Leaf name: everything after the last `.` (e.g., `"submit_key"`).
+    pub fn name(&self) -> &str {
+        self.key
+            .rsplit_once('.')
+            .map(|(_, n)| n)
+            .unwrap_or(&self.key)
+    }
+}
+
 /// Snapshot of current configuration for display
 #[derive(Debug, Clone)]
 pub struct ConfigSnapshot {
-    pub exploration_model: Model,
-    pub decision_model: Model,
-    pub review_models: Vec<Model>,
-    pub consensus_level: ConsensusLevel,
-    pub phase_scope: PhaseScope,
-    pub orchestration_strategy: String,
-    pub require_final_review: bool,
-    pub max_iterations: usize,
-    pub max_plan_revisions: usize,
-    pub hil_mode: HilMode,
+    /// All config entries in registry order (filtered when `section_filter` is set)
+    pub entries: Vec<ConfigEntry>,
+    /// Section filter that produced these entries (e.g., `:config models`)
+    pub section_filter: Option<String>,
+    /// Runtime info not part of the config key registry
     pub working_dir: Option<String>,
     pub verbose: bool,
     pub history_count: usize,
