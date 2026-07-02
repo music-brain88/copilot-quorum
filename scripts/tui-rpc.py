@@ -13,6 +13,13 @@ Then drive it from another terminal (or from a coding agent):
     scripts/tui-rpc.py /tmp/quorum.sock interaction.spawn '{"form": "ask", "query": "What is DDD?"}'
     scripts/tui-rpc.py /tmp/quorum.sock hil.respond '{"decision": "approve"}'
 
+Screen visibility & layout (Phase 2):
+    scripts/tui-rpc.py /tmp/quorum.sock screen.capture '{"width": 120, "height": 40}'
+    scripts/tui-rpc.py /tmp/quorum.sock layout.get
+    scripts/tui-rpc.py /tmp/quorum.sock layout.set '{"preset": "stacked"}'
+    scripts/tui-rpc.py /tmp/quorum.sock route.set '{"content": "tool_log", "surface": "sidebar"}'
+    scripts/tui-rpc.py /tmp/quorum.sock keys.feed '{"keys": ["i", "h", "i", "Esc"]}'
+
 Prints the JSON-RPC result (or error) to stdout. Exit 0 on result, 1 on error.
 """
 
