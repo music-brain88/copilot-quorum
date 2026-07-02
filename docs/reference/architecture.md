@@ -385,7 +385,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 | `SessionChannel` | - | セッション専用の受信チャネル（Drop時に自動登録解除） |
 | `CopilotError` | - | Copilot通信エラー（RouterStopped含む） |
 
-> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
+> 詳細は [transport.md](./transport.md) を参照してください。
 
 ### Tools Adapter
 
@@ -659,7 +659,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 
 ### Transport Demultiplexer / トランスポート多重分離
 
-> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
+> 詳細は [transport.md](./transport.md) を参照してください。
 
 単一の TCP 接続上で複数セッションを並列運用するため、`MessageRouter` がメッセージを
 session_id ベースで各 `SessionChannel` にルーティングします。
@@ -706,13 +706,13 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 
 各 `JoinSet::spawn` 内で `gateway.create_session()` が呼ばれ、`MessageRouter` が
 session_id 毎に独立した `SessionChannel` を払い出すため、並列セッション間でメッセージが
-混線することはありません（詳細は [systems/transport.md](../systems/transport.md)）。
+混線することはありません（詳細は [transport.md](./transport.md)）。
 
 ---
 
 ## Agent System / エージェントシステム
 
-> 詳細は [systems/agent-system.md](../systems/agent-system.md) を参照してください。
+> 詳細は [agent-system.md](./agent-system.md) を参照してください。
 
 エージェントシステムは、Quorumの概念を自律タスク実行に拡張したものです。
 Solo モードで動作し、重要なポイントでは Quorum Consensus によるレビューを行います。
@@ -813,7 +813,7 @@ UseCase (Application層)
 
 ## Tool Provider System / ツールプロバイダーシステム
 
-> 詳細は [systems/tool-system.md](../systems/tool-system.md) を参照してください。
+> 詳細は [tool-system.md](./tool-system.md) を参照してください。
 
 ツールプロバイダーシステムは、**プラグインベースのオーケストレーション**アーキテクチャを採用しています。
 

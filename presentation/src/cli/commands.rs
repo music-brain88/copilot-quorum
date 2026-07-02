@@ -131,7 +131,7 @@ pub struct Cli {
     /// Expose a JSON-RPC remote control socket at PATH (TUI mode only)
     ///
     /// External processes (e.g. coding agents) can inspect panes and
-    /// inject input over this Unix socket. See docs/guides/tui.md.
+    /// inject input over this Unix socket. See docs/reference/tui-remote-control.md.
     #[arg(long, value_name = "PATH")]
     pub listen: Option<PathBuf>,
 }

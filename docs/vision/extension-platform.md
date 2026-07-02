@@ -235,8 +235,8 @@ Phase 2: TUI Route/Layout API (#230)               ── 🔴 Planned
 Phase 3: Plugin + Tools API (#231)                  ── 🔴 Planned
   └─ quorum.tools.*, quorum.command()
 
-TOML → Lua 一本化 (#233)                            ── 🔴 Planned
-  └─ quorum.toml deprecated → 削除
+TOML → Lua 一本化 (#233)                            ── ✅ 完了
+  └─ quorum.toml 撤去済み（設定は init.lua のみ）
 ```
 
 ---

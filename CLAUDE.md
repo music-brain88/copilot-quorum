@@ -47,8 +47,8 @@ cargo test -p quorum-domain
 # Run with debug logging
 RUST_LOG=debug cargo run -p copilot-quorum -- "Your question"
 
-# Run in chat mode
-cargo run -p copilot-quorum -- --chat -m claude-haiku-4.5
+# Run in interactive mode (TUI)
+cargo run -p copilot-quorum -- -m claude-haiku-4.5
 
 # Initialize project context (generates .quorum/context.md)
 cargo run -p copilot-quorum -- /init
@@ -265,19 +265,58 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 
 ## Feature Documentation
 
-機能別の詳細ドキュメント（[docs/README.md](docs/README.md)）:
+ドキュメントは [Diátaxis](https://diataxis.fr/) 構成（[docs/README.md](docs/README.md) がハブ）:
+
+**Tutorials（学習向け）**
 
 | Document | Description |
 |----------|-------------|
-| [tui.md](docs/guides/tui.md) | Modal TUI（Tab/Pane、Actorパターン） |
-| [cli-and-configuration.md](docs/guides/cli-and-configuration.md) | REPL、設定、コンテキスト管理 |
-| [quorum.md](docs/concepts/quorum.md) | Quorum Discussion & Consensus |
-| [ensemble-mode.md](docs/concepts/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
-| [interaction-model.md](docs/concepts/interaction-model.md) | InteractionForm、ContextMode、ネスティング |
-| [agent-system.md](docs/systems/agent-system.md) | Agent System + HiL + ToolExecution |
-| [tool-system.md](docs/systems/tool-system.md) | Tool System（プラグイン、リスク分類） |
-| [native-tool-use.md](docs/systems/native-tool-use.md) | Native Tool Use API（構造化ツール呼び出し） |
-| [transport.md](docs/systems/transport.md) | Transport Demultiplexer（並列セッションルーティング） |
-| [logging.md](docs/systems/logging.md) | ログシステム（ConversationLogger、JSONL） |
-| [scripting-system.md](docs/systems/scripting-system.md) | Lua Scripting（Plugin、Commands、Agent Events） |
+| [getting-started.md](docs/tutorials/getting-started.md) | ビルド → 最初の質問 → `/council` 体験 |
+| [first-agent-task.md](docs/tutorials/first-agent-task.md) | Agent ライフサイクル + HiL 体験 |
+| [customizing-with-lua.md](docs/tutorials/customizing-with-lua.md) | init.lua・プラグイン・カスタムツール入門 |
+
+**How-to Guides（タスク指向）**
+
+| Document | Description |
+|----------|-------------|
+| [run-a-quorum-discussion.md](docs/how-to/run-a-quorum-discussion.md) | Quorum Discussion の実行 |
+| [use-ensemble-mode.md](docs/how-to/use-ensemble-mode.md) | Ensemble モードへの切り替え |
+| [run-agent-tasks.md](docs/how-to/run-agent-tasks.md) | エージェント実行と HiL 操作 |
+| [use-the-tui.md](docs/how-to/use-the-tui.md) | Modal TUI の使い方 |
+| [manage-project-context.md](docs/how-to/manage-project-context.md) | `/init` とコンテキスト予算 |
+| [add-custom-tools.md](docs/how-to/add-custom-tools.md) | `quorum.tools.register` でツール追加 |
+| [write-lua-plugins.md](docs/how-to/write-lua-plugins.md) | Lua プラグイン・コマンド・フック |
+| [debug-with-logs.md](docs/how-to/debug-with-logs.md) | ログの有効化と使い分け |
+| [extend-the-codebase.md](docs/how-to/extend-the-codebase.md) | プロバイダー・戦略・ツールの追加（Rust） |
+
+**Reference（情報指向）**
+
+| Document | Description |
+|----------|-------------|
+| [architecture.md](docs/reference/architecture.md) | レイヤー構造・データフロー・プロトコル |
+| [cli.md](docs/reference/cli.md) | CLI フラグ・REPL/TUI コマンド |
+| [configuration.md](docs/reference/configuration.md) | 全設定キーと Lua API |
+| [agent-system.md](docs/reference/agent-system.md) | Agent の型・ポート・モジュール構成 |
+| [tool-system.md](docs/reference/tool-system.md) | ツール・プロバイダー・trait |
+| [native-tool-use.md](docs/reference/native-tool-use.md) | Native Tool Use API |
+| [orchestration-internals.md](docs/reference/orchestration-internals.md) | Quorum / Ensemble の内部構造 |
+| [transport.md](docs/reference/transport.md) | Transport Demultiplexer |
+| [logging.md](docs/reference/logging.md) | ログシステム（ConversationLogger、JSONL） |
+| [scripting.md](docs/reference/scripting.md) | Lua Scripting（イベント一覧、Sandbox） |
+| [tui-internals.md](docs/reference/tui-internals.md) | TUI の Actor パターン・ルーティング |
+| [tui-remote-control.md](docs/reference/tui-remote-control.md) | Remote Control API（`--listen`） |
+
+**Explanation（理解指向）**
+
+| Document | Description |
+|----------|-------------|
+| [quorum-consensus.md](docs/explanation/quorum-consensus.md) | Quorum Discussion & Consensus の仕組み |
+| [ensemble-mode.md](docs/explanation/ensemble-mode.md) | Ensemble Mode（研究エビデンス付き） |
+| [orchestration-axes.md](docs/explanation/orchestration-axes.md) | 3 直交軸の設計 |
+| [agent-behavior.md](docs/explanation/agent-behavior.md) | Agent ライフサイクル + HiL |
+| [interaction-model.md](docs/explanation/interaction-model.md) | InteractionForm、ContextMode、ネスティング |
+| [design-philosophy.md](docs/explanation/design-philosophy.md) | DDD + オニオン + 垂直分割の理由 |
+| [tui-design.md](docs/explanation/tui-design.md) | TUI 設計思想 |
+| [transport-and-concurrency.md](docs/explanation/transport-and-concurrency.md) | 多重分離の理由と並行パターン |
+| [design-decisions/](docs/explanation/design-decisions/README.md) | 設計決定記録（ADR、Discussions 由来） |
 | [vision/](docs/vision/README.md) | 将来ビジョン（Knowledge、Workflow、Extension） |

@@ -13,12 +13,12 @@
 
 ## Features / 特徴
 
-- **Multi-Model Quorum** - 複数AIモデルによる合議制 ([詳細](docs/concepts/quorum.md))
+- **Multi-Model Quorum** - 複数AIモデルによる合議制 ([詳細](docs/explanation/quorum-consensus.md))
 - **Peer Review** - 匿名化された相互レビュー
 - **Synthesis** - モデレーターによる最終統合
-- **Agent System** - 自律タスク実行と合議ベースの安全性 ([詳細](docs/systems/agent-system.md))
-- **Solo / Ensemble Modes** - 単一モデル高速実行 or マルチモデル計画生成 ([詳細](docs/concepts/ensemble-mode.md))
-- **Plugin Tools** - プラグインベースのツールアーキテクチャ ([詳細](docs/systems/tool-system.md))
+- **Agent System** - 自律タスク実行と合議ベースの安全性 ([詳細](docs/explanation/agent-behavior.md))
+- **Solo / Ensemble Modes** - 単一モデル高速実行 or マルチモデル計画生成 ([詳細](docs/explanation/ensemble-mode.md))
+- **Plugin Tools** - プラグインベースのツールアーキテクチャ ([詳細](docs/reference/tool-system.md))
 - **Parallel Execution** - 非同期並列処理
 - **Fault Tolerant** - 一部失敗しても続行可能
 - **Pluggable Architecture** - DDD + オニオンアーキテクチャによる拡張性
@@ -115,11 +115,14 @@ copilot-quorum -o full "Explain the actor model"
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--model <MODEL>` | `-m` | モデル指定（複数可） |
-| `--moderator <MODEL>` | | シンセシス用モデル |
-| `--no-review` | | ピアレビューをスキップ |
+| `--solo` / `--ensemble` | | 起動モード（単一モデル / マルチモデル） |
+| `--no-quorum` | | Quorum レビューをスキップ（高速実行） |
 | `--output <FORMAT>` | `-o` | 出力形式 (`full` / `synthesis` / `json`) |
 | `--verbose` | `-v` | 詳細ログを表示 |
 | `--quiet` | `-q` | プログレス表示を抑制 |
+
+全フラグは [docs/reference/cli.md](docs/reference/cli.md) を参照してください。
+モデレーターや参加モデルは [init.lua で設定](docs/reference/configuration.md)します。
 
 ---
 
