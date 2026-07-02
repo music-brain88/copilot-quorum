@@ -16,9 +16,11 @@ quorum.config.set("agent.hil_mode", "auto_approve")
 quorum.config["models.exploration"] = "gpt-5.3-codex"
 
 -- キーバインド
--- 注意: builtin アクション "quit" はタブ数に関係なくアプリ全体を終了する
--- (:qa 相当。タブを閉じる :q 相当の builtin は未実装 — #284)
-quorum.keymap.set("normal", "q", "quit")
+-- "close_tab_or_quit" は :q 相当 — 複数タブ時は現在のタブを閉じ、最後の
+-- 1枚でアプリを終了する（実行中エージェントはキャンセルされる）。
+quorum.keymap.set("normal", "q", "close_tab_or_quit")
+-- "quit" はタブ数に関係なくアプリ全体を即終了する（:qa 相当）。
+-- quorum.keymap.set("normal", "Q", "quit")
 quorum.keymap.set("normal", "r", function()
     quorum.config.set("agent.hil_mode", "interactive")
 end)

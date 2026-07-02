@@ -90,7 +90,11 @@ pub enum KeyAction {
     LaunchEditor,
 
     // -- Application --
+    /// Unconditionally quit the whole app (`:qa` equivalent).
     Quit,
+    /// Tab-aware quit (`:q` equivalent): close the active tab when multiple
+    /// tabs are open, quit the app on the last one (#284).
+    CloseTabOrQuit,
     ShowHelp,
     ToggleConsensus,
 
@@ -198,6 +202,7 @@ fn builtin_action_by_name(name: &str) -> KeyAction {
         "switch_discuss" => KeyAction::SwitchDiscuss,
         "launch_editor" => KeyAction::LaunchEditor,
         "quit" => KeyAction::Quit,
+        "close_tab_or_quit" => KeyAction::CloseTabOrQuit,
         "show_help" => KeyAction::ShowHelp,
         "insert_newline" => KeyAction::InsertNewline,
         "yank_recent" => KeyAction::YankRecent,
@@ -777,6 +782,10 @@ mod tests {
             KeyAction::SubmitInput
         );
         assert_eq!(builtin_action_by_name("quit"), KeyAction::Quit);
+        assert_eq!(
+            builtin_action_by_name("close_tab_or_quit"),
+            KeyAction::CloseTabOrQuit
+        );
         assert_eq!(builtin_action_by_name("unknown"), KeyAction::None);
     }
 

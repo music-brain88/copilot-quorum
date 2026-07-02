@@ -127,7 +127,10 @@ quorum.providers.set_default("copilot")
 -- })
 
 -- ==================== Custom Keybindings ====================
--- quorum.keymap.set("normal", "q", "quit")
+-- "close_tab_or_quit" = :q 相当（複数タブ時はタブを閉じる／最後の1枚で終了）
+-- quorum.keymap.set("normal", "q", "close_tab_or_quit")
+-- "quit" = :qa 相当（タブ数に関係なくアプリ全体を即終了）
+-- quorum.keymap.set("normal", "Q", "quit")
 -- quorum.keymap.set("insert", "ctrl+s", "submit")
 -- quorum.keymap.set("normal", "?", function() print("Help!") end)
 

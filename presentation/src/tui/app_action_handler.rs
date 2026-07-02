@@ -181,6 +181,17 @@ pub(super) fn handle_action(
 
         // Application
         KeyAction::Quit => state.should_quit = true,
+        KeyAction::CloseTabOrQuit => {
+            // Tab-aware quit (`:q`): close the active tab, or quit on the last
+            // one. Shares the exact command-path helper so the keymap action and
+            // `:q` never diverge (#284).
+            use super::app_tab_command::QuitOutcome;
+            match super::app_tab_command::handle_quit_command(state, "q", cmd_tx) {
+                QuitOutcome::QuitApp => state.should_quit = true,
+                QuitOutcome::TabClosed(flash) => state.set_flash(flash),
+                QuitOutcome::NotQuit => {}
+            }
+        }
         KeyAction::ShowHelp => state.toggle_help(),
         KeyAction::ToggleConsensus => {
             // Handled by command
@@ -314,18 +325,7 @@ mod tests {
     use quorum_domain::interaction::{InteractionForm, InteractionId};
 
     fn submit(state: &mut TuiState, cmd_tx: &mpsc::UnboundedSender<TuiCommand>) {
-        let scripting: Arc<dyn quorum_application::ScriptingEnginePort> =
-            Arc::new(NoScriptingEngine);
-        let clipboard: Arc<dyn quorum_application::ClipboardPort> = Arc::new(NoClipboard);
-        let registry = RefCell::new(ContentRegistry::new());
-        handle_action(
-            state,
-            KeyAction::SubmitInput,
-            cmd_tx,
-            &scripting,
-            &clipboard,
-            &registry,
-        );
+        run(state, KeyAction::SubmitInput, cmd_tx);
     }
 
     #[test]
@@ -352,6 +352,62 @@ mod tests {
         }
         // The user message is echoed locally for a bound tab.
         assert_eq!(state.tabs.active_pane().conversation.messages.len(), 1);
+    }
+
+    fn run(state: &mut TuiState, action: KeyAction, cmd_tx: &mpsc::UnboundedSender<TuiCommand>) {
+        let scripting: Arc<dyn quorum_application::ScriptingEnginePort> =
+            Arc::new(NoScriptingEngine);
+        let clipboard: Arc<dyn quorum_application::ClipboardPort> = Arc::new(NoClipboard);
+        let registry = RefCell::new(ContentRegistry::new());
+        handle_action(state, action, cmd_tx, &scripting, &clipboard, &registry);
+    }
+
+    #[test]
+    fn close_tab_or_quit_closes_tab_when_multiple_open() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        state.tabs.create_tab(PaneKind::Interaction(
+            InteractionForm::Agent,
+            Some(InteractionId(3)),
+        ));
+        assert_eq!(state.tabs.len(), 2);
+
+        run(&mut state, KeyAction::CloseTabOrQuit, &tx);
+
+        // Tab-aware: closed the active tab, did NOT quit the app.
+        assert_eq!(state.tabs.len(), 1);
+        assert!(!state.should_quit);
+        // And cancelled the closed tab's interaction (via the shared helper).
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(TuiCommand::CancelInteraction(InteractionId(3)))
+        ));
+    }
+
+    #[test]
+    fn close_tab_or_quit_quits_on_last_tab() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        assert_eq!(state.tabs.len(), 1);
+
+        run(&mut state, KeyAction::CloseTabOrQuit, &tx);
+
+        assert!(state.should_quit);
+    }
+
+    #[test]
+    fn quit_builtin_always_quits_whole_app() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        assert_eq!(state.tabs.len(), 2);
+
+        run(&mut state, KeyAction::Quit, &tx);
+
+        // `quit` is `:qa` — quits regardless of open tab count.
+        assert!(state.should_quit);
     }
 
     #[test]
