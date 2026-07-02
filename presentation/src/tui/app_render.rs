@@ -92,7 +92,7 @@ pub(super) fn render(
     if state.show_help {
         let help_area = MainLayout::centered_overlay(70, 70, frame.area());
         frame.render_widget(ratatui::widgets::Clear, help_area);
-        render_help(frame, help_area);
+        render_help(frame, help_area, state);
     }
 
     if state.hil_prompt.is_some() {
@@ -102,12 +102,12 @@ pub(super) fn render(
     }
 }
 
-fn render_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+/// Help overlay content — shared by the renderer and the scroll clamp logic.
+fn help_lines() -> Vec<ratatui::text::Line<'static>> {
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-    let lines = vec![
+    vec![
         Line::from(Span::styled(
             "Keyboard Shortcuts",
             Style::default()
@@ -165,20 +165,52 @@ fn render_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         Line::from("  :tabs           List tabs"),
         Line::from(""),
         Line::from(Span::styled(
-            "Press ? or Esc to close",
+            "j/k scroll · Press ? or Esc to close",
             Style::default().fg(Color::DarkGray),
         )),
-    ];
+    ]
+}
+
+/// Max vertical scroll offset for the Help overlay at the given terminal size.
+///
+/// Mirrors the render path: same `centered_overlay(70, 70)` rect and the same
+/// wrapping algorithm (`Paragraph::line_count`), so the key handler can clamp
+/// `help_scroll` exactly to the last visible position.
+pub(super) fn help_max_scroll(term_size: (u16, u16)) -> u16 {
+    use ratatui::widgets::{Paragraph, Wrap};
+
+    let (width, height) = term_size;
+    let area = MainLayout::centered_overlay(70, 70, ratatui::layout::Rect::new(0, 0, width, height));
+    let content_width = area.width.saturating_sub(2); // borders
+    let visible_height = area.height.saturating_sub(2); // borders
+
+    // Built without block so line_count returns pure content lines.
+    let paragraph = Paragraph::new(help_lines()).wrap(Wrap { trim: true });
+    let total_lines = paragraph.line_count(content_width) as u16;
+    total_lines.saturating_sub(visible_height)
+}
+
+fn render_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, state: &TuiState) {
+    use ratatui::style::{Color, Style};
+    use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+
+    let lines = help_lines();
+    let content_width = area.width.saturating_sub(2); // borders
+    let visible_height = area.height.saturating_sub(2); // borders
+
+    // Defensive clamp — the key handler already clamps against the last known
+    // terminal size, but the terminal may have shrunk since.
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+    let total_lines = paragraph.line_count(content_width) as u16;
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let offset = state.help_scroll.min(max_scroll);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Help ")
         .style(Style::default().fg(Color::Cyan));
 
-    frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-        area,
-    );
+    frame.render_widget(paragraph.block(block).scroll((offset, 0)), area);
 }
 
 fn render_hil_modal(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, state: &TuiState) {

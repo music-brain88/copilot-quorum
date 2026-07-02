@@ -261,6 +261,23 @@ mod tests {
     }
 
     #[test]
+    fn capture_help_overlay_scrolls_to_hidden_sections() {
+        let mut state = TuiState::new();
+        state.show_help = true;
+
+        // At 80x24 the overlay is too short for the full help text:
+        // later sections are cut off at scroll 0.
+        let (lines, _) = capture_screen(&state, &registry(), 80, 24, false).unwrap();
+        assert!(!lines.iter().any(|l| l.contains("Visual Mode:")));
+
+        // Scrolling to the bottom reveals the cut-off sections and the footer.
+        state.help_scroll = app_render::help_max_scroll((80, 24));
+        let (lines, _) = capture_screen(&state, &registry(), 80, 24, false).unwrap();
+        assert!(lines.iter().any(|l| l.contains(":tabnew")));
+        assert!(lines.iter().any(|l| l.contains("Esc to close")));
+    }
+
+    #[test]
     fn capture_hil_overlay() {
         let mut state = TuiState::new();
         state.hil_prompt = Some(HilPrompt {
