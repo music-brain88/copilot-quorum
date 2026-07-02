@@ -55,11 +55,29 @@ pub(super) fn dispatch_terminal_event(
                 return None;
             }
 
-            // If help is showing, Esc or ? closes it
+            // If help is showing, handle close + scroll keys (other keys fall through)
             if state.show_help {
+                use crossterm::event::KeyCode;
+                let max_scroll = super::app_render::help_max_scroll(state.term_size);
                 match key.code {
-                    crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('?') => {
-                        state.show_help = false;
+                    KeyCode::Esc | KeyCode::Char('?') => {
+                        state.close_help();
+                        return None;
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        state.help_scroll_down(max_scroll);
+                        return None;
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        state.help_scroll_up();
+                        return None;
+                    }
+                    KeyCode::Char('g') | KeyCode::Home => {
+                        state.help_scroll_to_top();
+                        return None;
+                    }
+                    KeyCode::Char('G') | KeyCode::End => {
+                        state.help_scroll_to_bottom(max_scroll);
                         return None;
                     }
                     _ => {}
@@ -94,7 +112,10 @@ pub(super) fn dispatch_terminal_event(
                 deps.content_registry,
             )
         }
-        crossterm::event::Event::Resize(_, _) => None,
+        crossterm::event::Event::Resize(width, height) => {
+            state.term_size = (width, height);
+            None
+        }
         _ => None,
     }
 }
@@ -389,6 +410,9 @@ impl TuiApp {
         }));
 
         let mut state = TuiState::new();
+        if let Ok(size) = terminal.size() {
+            state.term_size = (size.width, size.height);
+        }
         state.tui_config = self.tui_config.clone();
         state.layout_config = self.layout_config.clone();
         state.route = super::route::RouteTable::from_preset_and_overrides(

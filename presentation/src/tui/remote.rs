@@ -598,6 +598,7 @@ fn state_snapshot(state: &TuiState) -> Value {
         })),
         "pending_key": state.pending_key.map(String::from),
         "show_help": state.show_help,
+        "help_scroll": state.help_scroll,
         "flash": state.flash_message.as_ref().map(|(text, at)| json!({
             "text": text,
             "age_ms": at.elapsed().as_millis() as u64,
@@ -1074,6 +1075,53 @@ mod tests {
         .unwrap();
         assert!(state.hil_prompt.is_none());
         assert!(harness.pending_hil_tx.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn keys_feed_help_overlay_scrolls() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+
+        let feed = |state: &mut TuiState, keys: serde_json::Value| {
+            dispatch(state, &harness.ctx(), "keys.feed", &json!({ "keys": keys })).unwrap();
+        };
+
+        // Open help from Normal mode
+        feed(&mut state, json!(["Esc", "?"]));
+        assert!(state.show_help);
+        assert_eq!(state.help_scroll, 0);
+
+        // j scrolls down, k scrolls up (consumed by the overlay, not the pane)
+        feed(&mut state, json!(["j", "j", "j"]));
+        assert_eq!(state.help_scroll, 3);
+        assert_eq!(state.tabs.active_pane().conversation.scroll_offset, 0);
+
+        feed(&mut state, json!(["k"]));
+        assert_eq!(state.help_scroll, 2);
+
+        // G jumps to bottom (clamped to content), then g back to top
+        feed(&mut state, json!(["G"]));
+        let max_scroll = state.help_scroll;
+        assert!(max_scroll > 0);
+        feed(&mut state, json!(["j"]));
+        assert_eq!(
+            state.help_scroll, max_scroll,
+            "j at bottom must not overshoot"
+        );
+        feed(&mut state, json!(["k"]));
+        assert_eq!(
+            state.help_scroll,
+            max_scroll - 1,
+            "k after bottom must move immediately"
+        );
+
+        feed(&mut state, json!(["g"]));
+        assert_eq!(state.help_scroll, 0);
+
+        // Esc closes and resets scroll
+        feed(&mut state, json!(["j", "Esc"]));
+        assert!(!state.show_help);
+        assert_eq!(state.help_scroll, 0);
     }
 
     #[test]

@@ -35,8 +35,16 @@ pub struct TuiState {
     pub phase_scope: PhaseScope,
     pub model_name: String,
 
+    // -- Terminal --
+    /// Last known terminal size (width, height) — updated on resize events.
+    /// Used to clamp overlay scrolling without re-deriving layout in render.
+    pub term_size: (u16, u16),
+
     // -- Overlay --
     pub show_help: bool,
+    /// Vertical scroll offset for the Help overlay.
+    /// Clamped to the visible max in the key handler (and defensively at render).
+    pub help_scroll: u16,
     pub flash_message: Option<(String, std::time::Instant)>,
 
     // -- HiL --
@@ -75,7 +83,9 @@ impl Default for TuiState {
             consensus_level: ConsensusLevel::Solo,
             phase_scope: PhaseScope::Full,
             model_name: String::new(),
+            term_size: (80, 24),
             show_help: false,
+            help_scroll: 0,
             flash_message: None,
             hil_prompt: None,
             tui_config: TuiInputConfig::default(),
@@ -284,6 +294,34 @@ impl TuiState {
         let conv = &mut self.tabs.active_pane_mut().conversation;
         conv.scroll_offset = 0;
         conv.auto_scroll = true;
+    }
+
+    // -- Help overlay --
+
+    pub fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
+        self.help_scroll = 0;
+    }
+
+    pub fn close_help(&mut self) {
+        self.show_help = false;
+        self.help_scroll = 0;
+    }
+
+    pub fn help_scroll_down(&mut self, max_scroll: u16) {
+        self.help_scroll = self.help_scroll.saturating_add(1).min(max_scroll);
+    }
+
+    pub fn help_scroll_up(&mut self) {
+        self.help_scroll = self.help_scroll.saturating_sub(1);
+    }
+
+    pub fn help_scroll_to_top(&mut self) {
+        self.help_scroll = 0;
+    }
+
+    pub fn help_scroll_to_bottom(&mut self, max_scroll: u16) {
+        self.help_scroll = max_scroll;
     }
 
     // -- Flash messages --
@@ -646,6 +684,40 @@ mod tests {
         state.scroll_to_bottom();
         assert!(state.tabs.active_pane().conversation.auto_scroll);
         assert_eq!(state.tabs.active_pane().conversation.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_help_scroll_behavior() {
+        let mut state = TuiState::new();
+
+        // Toggle opens and resets scroll
+        state.toggle_help();
+        assert!(state.show_help);
+        assert_eq!(state.help_scroll, 0);
+
+        // Scroll up at top stays at 0
+        state.help_scroll_up();
+        assert_eq!(state.help_scroll, 0);
+
+        // Scroll down clamps to max_scroll
+        state.help_scroll_down(2);
+        state.help_scroll_down(2);
+        state.help_scroll_down(2);
+        assert_eq!(state.help_scroll, 2);
+
+        state.help_scroll_up();
+        assert_eq!(state.help_scroll, 1);
+
+        state.help_scroll_to_bottom(40);
+        assert_eq!(state.help_scroll, 40);
+        state.help_scroll_to_top();
+        assert_eq!(state.help_scroll, 0);
+
+        // Close resets scroll
+        state.help_scroll_down(10);
+        state.close_help();
+        assert!(!state.show_help);
+        assert_eq!(state.help_scroll, 0);
     }
 
     #[test]

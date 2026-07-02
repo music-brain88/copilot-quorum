@@ -154,7 +154,7 @@ pub(super) fn handle_action(
 
         // Application
         KeyAction::Quit => state.should_quit = true,
-        KeyAction::ShowHelp => state.show_help = !state.show_help,
+        KeyAction::ShowHelp => state.toggle_help(),
         KeyAction::ToggleConsensus => {
             // Handled by command
             let _ = cmd_tx.send(TuiCommand::HandleCommand {
