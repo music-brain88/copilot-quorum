@@ -26,7 +26,10 @@ impl TuiPresenter {
     pub fn apply(&self, state: &mut TuiState, event: &UiEvent) {
         match event {
             UiEvent::Welcome(info) => self.handle_welcome(state, info),
-            UiEvent::Help => self.emit(TuiEvent::Flash("Type :help or ? for commands".into())),
+            UiEvent::Help => {
+                state.show_help = true;
+                state.set_flash("Press ? or Esc to close");
+            }
             UiEvent::ConfigDisplay(snapshot) => self.handle_config(state, snapshot),
             UiEvent::ModeChanged { level, description } => {
                 state.consensus_level = *level;
@@ -139,7 +142,7 @@ impl TuiPresenter {
                 state.set_flash(format!("Error: {}", message));
             }
             UiEvent::UnknownCommand { command } => {
-                state.set_flash(format!("Unknown command: {}. Type ? for help", command));
+                state.set_flash(format!("Unknown command: :{}. Type ? for help", command));
             }
             UiEvent::Exit => {
                 state.should_quit = true;
@@ -327,6 +330,29 @@ mod tests {
                 .streaming_text
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn test_unknown_command_uses_tui_prefix() {
+        let (presenter, _rx, mut state) = setup();
+        presenter.apply(
+            &mut state,
+            &UiEvent::UnknownCommand {
+                command: "nonexistent".into(),
+            },
+        );
+        let (flash, _) = state.flash_message.expect("flash should be set");
+        assert!(flash.contains(":nonexistent"), "flash was: {}", flash);
+        assert!(!flash.contains("/nonexistent"), "flash was: {}", flash);
+    }
+
+    #[test]
+    fn test_help_opens_overlay_without_circular_flash() {
+        let (presenter, _rx, mut state) = setup();
+        presenter.apply(&mut state, &UiEvent::Help);
+        assert!(state.show_help);
+        let (flash, _) = state.flash_message.expect("flash should be set");
+        assert!(!flash.contains(":help"), "flash was: {}", flash);
     }
 
     #[test]
