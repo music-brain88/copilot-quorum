@@ -228,6 +228,19 @@ pub trait InitContextProgressNotifier: Send + Sync {
     /// * `model` - The model that completed
     fn on_model_complete(&self, _model: &Model) {}
 
+    /// Called when a model fails to analyze the project.
+    ///
+    /// The remaining models still contribute to synthesis, so `/init` does not
+    /// abort — but the reduced diversity (and, for unavailable models, a
+    /// misconfigured `models.review`) must be visible instead of only reaching
+    /// the WARN log. See #262.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model that failed
+    /// * `error` - Human-readable failure reason (e.g. "Model not available")
+    fn on_model_failed(&self, _model: &Model, _error: &str) {}
+
     /// Called when starting the synthesis phase.
     fn on_synthesis_start(&self) {}
 
@@ -404,6 +417,7 @@ impl InitContextUseCase {
                 }
                 Ok((model, Err(e))) => {
                     warn!("Model {} failed to analyze: {}", model, e);
+                    progress.on_model_failed(&model, &e.to_string());
                 }
                 Err(e) => {
                     warn!("Task join error: {}", e);

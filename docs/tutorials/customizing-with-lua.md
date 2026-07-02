@@ -32,10 +32,10 @@ init.lua を開いて、役割ごとにモデルを割り当てます:
 -- 情報収集は速くて安いモデル、計画とレビューは高性能モデル
 quorum.config.set("models.exploration", "claude-haiku-4.5")
 quorum.config.set("models.decision", "claude-sonnet-4.5")
-quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.2-codex" })
+quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.3-codex" })
 
 -- Discussion / Ensemble の参加モデルとモデレーター
-quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview" })
+quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview" })
 quorum.config.set("models.moderator", "claude-opus-4.5")
 ```
 

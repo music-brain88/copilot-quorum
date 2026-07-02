@@ -37,9 +37,9 @@
 現在は Lua で設定する:
 
 ```lua
-quorum.config.set("models.exploration", "gpt-5.2-codex")
+quorum.config.set("models.exploration", "gpt-5.3-codex")
 quorum.config.set("models.decision", "claude-sonnet-4.5")
-quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview" })
+quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview" })
 ```
 
 ## 理由 / Rationale

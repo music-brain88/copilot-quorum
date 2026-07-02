@@ -13,7 +13,7 @@
 copilot-quorum "What's the best way to handle errors in Rust?"
 
 # モデルを指定して Discussion
-copilot-quorum -m claude-sonnet-4.5 -m gpt-5.2-codex "Compare async/await patterns"
+copilot-quorum -m claude-sonnet-4.5 -m gpt-5.3-codex "Compare async/await patterns"
 
 # 全フェーズの出力を表示（デフォルトは統合結果のみ）
 copilot-quorum -o full "Explain the actor model"
@@ -39,7 +39,7 @@ REPL では `/council <question>` でアドホックに Quorum Discussion を実
 `~/.config/copilot-quorum/init.lua` で設定します:
 
 ```lua
-quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview" })
+quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview" })
 quorum.config.set("models.moderator", "claude-opus-4.5")
 ```
 
