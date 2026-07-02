@@ -56,8 +56,8 @@ impl Default for ModelConfig {
         Self {
             exploration: Model::ClaudeHaiku45,
             decision: Model::ClaudeSonnet45,
-            review: vec![Model::ClaudeSonnet45, Model::Gpt52Codex],
-            participants: vec![Model::ClaudeSonnet45, Model::Gpt52Codex],
+            review: vec![Model::ClaudeSonnet45, Model::Gpt53Codex],
+            participants: vec![Model::ClaudeSonnet45, Model::Gpt53Codex],
             moderator: Model::ClaudeSonnet45,
             ask: Model::ClaudeSonnet45,
         }

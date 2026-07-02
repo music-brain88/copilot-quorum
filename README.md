@@ -101,7 +101,7 @@ copilot-quorum "What's the best way to handle errors in Rust?"
 ### With Model Selection / モデルを指定
 
 ```bash
-copilot-quorum -m claude-sonnet-4.5 -m gpt-5.2-codex "Compare async/await patterns"
+copilot-quorum -m claude-sonnet-4.5 -m gpt-5.3-codex "Compare async/await patterns"
 ```
 
 ### Full Output / 全フェーズの出力
@@ -131,10 +131,13 @@ copilot-quorum -o full "Explain the actor model"
 | Provider | Models |
 |----------|--------|
 | **Claude** | `claude-sonnet-4.5`, `claude-opus-4.5`, `claude-haiku-4.5`, `claude-sonnet-4` |
-| **GPT** | `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-5.1-codex-mini`, `gpt-5-mini`, `gpt-4.1` |
-| **Gemini** | `gemini-3-pro-preview` |
+| **GPT** | `gpt-5.4`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-5.1-codex-mini`, `gpt-5-mini`, `gpt-4.1` |
+| **Gemini** | `gemini-3.1-pro-preview`, `gemini-3-pro-preview` |
 
-**Default models / デフォルトモデル:** `gpt-5.2-codex`, `claude-sonnet-4.5`, `gemini-3-pro-preview`
+**Default models / デフォルトモデル:** `gpt-5.3-codex`, `claude-sonnet-4.5`, `gemini-3.1-pro-preview`
+
+> **Note**: 利用可能なモデルは Copilot CLI のバージョン・プランに依存します。
+> Copilot CLI 1.0.65 時点で `gpt-5.2-codex` と `gemini-3-pro-preview` は利用できません。
 
 ---
 

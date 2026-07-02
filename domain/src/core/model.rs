@@ -16,6 +16,8 @@ pub enum Model {
     ClaudeOpus45,
     ClaudeSonnet4,
     // GPT models
+    Gpt54,
+    Gpt53Codex,
     Gpt52Codex,
     Gpt51CodexMax,
     Gpt51Codex,
@@ -42,6 +44,8 @@ impl Model {
             Model::ClaudeHaiku45 => "claude-haiku-4.5",
             Model::ClaudeOpus45 => "claude-opus-4.5",
             Model::ClaudeSonnet4 => "claude-sonnet-4",
+            Model::Gpt54 => "gpt-5.4",
+            Model::Gpt53Codex => "gpt-5.3-codex",
             Model::Gpt52Codex => "gpt-5.2-codex",
             Model::Gpt51CodexMax => "gpt-5.1-codex-max",
             Model::Gpt51Codex => "gpt-5.1-codex",
@@ -58,8 +62,11 @@ impl Model {
     }
 
     /// Get the default set of models for a Quorum discussion
+    ///
+    /// Note: Copilot CLI 1.0.65 で gpt-5.2-codex / gemini-3-pro-preview が
+    /// 利用不可になったため、後継モデルをデフォルトとする (#262)。
     pub fn default_models() -> Vec<Model> {
-        vec![Model::Gpt52Codex, Model::ClaudeSonnet45, Model::Gemini3Pro]
+        vec![Model::Gpt53Codex, Model::ClaudeSonnet45, Model::Gemini31Pro]
     }
 
     /// Check if this is a Claude model
@@ -79,7 +86,9 @@ impl Model {
     pub fn is_gpt(&self) -> bool {
         matches!(
             self,
-            Model::Gpt52Codex
+            Model::Gpt54
+                | Model::Gpt53Codex
+                | Model::Gpt52Codex
                 | Model::Gpt51CodexMax
                 | Model::Gpt51Codex
                 | Model::Gpt52
@@ -98,9 +107,9 @@ impl Model {
 }
 
 impl Default for Model {
-    /// Returns the default model (GPT-5.2-Codex)
+    /// Returns the default model (GPT-5.3-Codex)
     fn default() -> Self {
-        Model::Gpt52Codex
+        Model::Gpt53Codex
     }
 }
 
@@ -121,6 +130,8 @@ impl std::str::FromStr for Model {
             "claude-haiku-4.5" => Model::ClaudeHaiku45,
             "claude-opus-4.5" => Model::ClaudeOpus45,
             "claude-sonnet-4" => Model::ClaudeSonnet4,
+            "gpt-5.4" => Model::Gpt54,
+            "gpt-5.3-codex" => Model::Gpt53Codex,
             "gpt-5.2-codex" => Model::Gpt52Codex,
             "gpt-5.1-codex-max" => Model::Gpt51CodexMax,
             "gpt-5.1-codex" => Model::Gpt51Codex,
@@ -131,6 +142,7 @@ impl std::str::FromStr for Model {
             "gpt-5-mini" => Model::Gpt5Mini,
             "gpt-4.1" => Model::Gpt41,
             "gemini-3-pro-preview" => Model::Gemini3Pro,
+            "gemini-3.1-pro-preview" => Model::Gemini31Pro,
             other => Model::Custom(other.to_string()),
         })
     }
@@ -187,6 +199,6 @@ mod tests {
     #[test]
     fn test_model_default() {
         let model = Model::default();
-        assert_eq!(model, Model::Gpt52Codex);
+        assert_eq!(model, Model::Gpt53Codex);
     }
 }
