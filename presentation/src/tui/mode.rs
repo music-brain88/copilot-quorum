@@ -274,6 +274,16 @@ pub fn handle_key_event(mode: InputMode, key: KeyEvent, pending_key: Option<char
         return KeyAction::Quit;
     }
 
+    // Global: Ctrl+[ is Esc (Vim compatible). Legacy terminals send the same
+    // byte (0x1b) for both, but with the kitty keyboard protocol's
+    // DISAMBIGUATE_ESCAPE_CODES flag (enabled for Shift+Enter support),
+    // Ctrl+[ arrives as a distinct Char('[') + CONTROL event.
+    let key = if key.code == KeyCode::Char('[') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+    } else {
+        key
+    };
+
     match mode {
         InputMode::Normal => handle_normal(key, pending_key),
         InputMode::Insert => handle_insert(key),
@@ -464,6 +474,32 @@ mod tests {
         assert_eq!(
             handle_key_event(InputMode::Insert, key, None),
             KeyAction::ExitToNormal
+        );
+    }
+
+    #[test]
+    fn test_ctrl_bracket_is_esc() {
+        // With kitty DISAMBIGUATE_ESCAPE_CODES, Ctrl+[ arrives as
+        // Char('[') + CONTROL instead of Esc. It must behave as Esc (Vim
+        // compatible) in every mode that maps Esc.
+        let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::CONTROL);
+        for mode in [InputMode::Insert, InputMode::Command, InputMode::Visual] {
+            assert_eq!(
+                handle_key_event(mode, key, None),
+                KeyAction::ExitToNormal,
+                "Ctrl+[ should exit to normal from {:?}",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn test_plain_bracket_still_inserts() {
+        // '[' without CONTROL must remain a normal character in Insert mode
+        let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Insert, key, None),
+            KeyAction::InsertChar('[')
         );
     }
 
