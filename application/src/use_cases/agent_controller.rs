@@ -816,16 +816,17 @@ impl AgentController {
     /// Updates conversation history. For spawn tasks (interaction_id is Some),
     /// also emits InteractionCompleted event.
     pub fn finalize(&mut self, completion: TaskCompletion) {
-        if let Some(result_text) = &completion.result_text {
+        if let Some(result) = &completion.result {
             self.conversation_history.push(HistoryEntry {
                 form: completion.form,
                 request: completion.query.clone(),
-                summary: truncate_str(result_text, 200).to_string(),
+                summary: truncate_str(&result.to_context_injection(), 200).to_string(),
             });
         }
-        // Spawn path: emit InteractionCompleted
+        // Spawn path: emit InteractionCompleted with a query-aware notification
+        // so the parent tab shows what the result is answering (issue #274).
         if let Some(child_id) = completion.interaction_id
-            && let Some(result_text) = completion.result_text
+            && let Some(result) = &completion.result
         {
             let parent_id = self.interaction_tree.get(child_id).and_then(|i| i.parent);
             let _ = self
@@ -834,7 +835,7 @@ impl AgentController {
                     id: child_id,
                     form: completion.form,
                     parent_id,
-                    result_text,
+                    result_text: result.to_parent_notification(&completion.query),
                 }));
         }
     }
@@ -981,7 +982,7 @@ pub struct TaskCompletion {
     pub interaction_id: Option<InteractionId>,
     pub form: InteractionForm,
     pub query: String,
-    pub result_text: Option<String>,
+    pub result: Option<InteractionResult>,
 }
 
 impl SpawnContext {
@@ -1007,13 +1008,11 @@ impl SpawnContext {
             InteractionForm::Agent => self.execute_agent(&clean_query, progress).await,
         };
 
-        let result_text = result.as_ref().map(|r| r.to_context_injection());
-
         TaskCompletion {
             interaction_id,
             form,
             query: clean_query,
-            result_text,
+            result,
         }
     }
 
@@ -1776,7 +1775,9 @@ mod tests {
             interaction_id: Some(child_id),
             form: InteractionForm::Ask,
             query: clean_query,
-            result_text: Some("done".to_string()),
+            result: Some(InteractionResult::AskResult {
+                answer: "done".to_string(),
+            }),
         });
 
         let event = rx.try_recv().unwrap();
@@ -1784,7 +1785,8 @@ mod tests {
             UiEvent::InteractionCompleted(completed) => {
                 assert_eq!(completed.id, child_id);
                 assert_eq!(completed.form, InteractionForm::Ask);
-                assert_eq!(completed.result_text, "done");
+                // Parent notification includes the query for context (issue #274)
+                assert_eq!(completed.result_text, "[Ask] \"ship it\" → done");
                 assert!(completed.parent_id.is_some());
             }
             other => panic!("Expected InteractionCompleted, got {:?}", other),
@@ -1800,7 +1802,10 @@ mod tests {
             interaction_id: None,
             form: InteractionForm::Agent,
             query: "do something".to_string(),
-            result_text: Some("done it".to_string()),
+            result: Some(InteractionResult::AgentResult {
+                summary: "done it".to_string(),
+                success: true,
+            }),
         });
 
         // No InteractionCompleted event for inline

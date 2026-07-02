@@ -92,6 +92,12 @@ impl TuiPresenter {
                     .tabs
                     .active_pane_mut()
                     .set_title_if_empty(&event.query);
+                // Echo the query as a user message so the conversation shows
+                // what the interaction is answering (issue #274). The root
+                // interaction is spawned with an empty query — skip it.
+                if !event.query.is_empty() {
+                    state.push_message_to(event.id, DisplayMessage::user(event.query.clone()));
+                }
             }
             UiEvent::InteractionCompleted(event) => {
                 // Root interaction completions (parent_id = None) are not propagated;
@@ -368,6 +374,55 @@ mod tests {
         assert!(state.show_help);
         let (flash, _) = state.flash_message.expect("flash should be set");
         assert!(!flash.contains(":help"), "flash was: {}", flash);
+    }
+
+    #[test]
+    fn test_interaction_spawned_echoes_query_as_user_message() {
+        use super::super::state::MessageRole;
+        use quorum_application::InteractionSpawnedEvent;
+        use quorum_domain::interaction::{InteractionForm, InteractionId};
+
+        let (presenter, _rx, mut state) = setup();
+        presenter.apply(
+            &mut state,
+            &UiEvent::InteractionSpawned(InteractionSpawnedEvent {
+                id: InteractionId(1),
+                form: InteractionForm::Ask,
+                parent_id: Some(InteractionId(0)),
+                query: "What is 2+2?".into(),
+            }),
+        );
+
+        let pane = state
+            .tabs
+            .pane_for_interaction_mut(InteractionId(1))
+            .expect("spawned pane missing");
+        assert_eq!(pane.conversation.messages.len(), 1);
+        assert_eq!(pane.conversation.messages[0].role, MessageRole::User);
+        assert_eq!(pane.conversation.messages[0].content, "What is 2+2?");
+    }
+
+    #[test]
+    fn test_interaction_spawned_with_empty_query_does_not_echo() {
+        use quorum_application::InteractionSpawnedEvent;
+        use quorum_domain::interaction::{InteractionForm, InteractionId};
+
+        let (presenter, _rx, mut state) = setup();
+        presenter.apply(
+            &mut state,
+            &UiEvent::InteractionSpawned(InteractionSpawnedEvent {
+                id: InteractionId(0),
+                form: InteractionForm::Agent,
+                parent_id: None,
+                query: String::new(),
+            }),
+        );
+
+        let pane = state
+            .tabs
+            .pane_for_interaction_mut(InteractionId(0))
+            .expect("root pane missing");
+        assert!(pane.conversation.messages.is_empty());
     }
 
     #[test]
