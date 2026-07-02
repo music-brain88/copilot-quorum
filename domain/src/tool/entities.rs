@@ -84,6 +84,7 @@ const SAFE_GIT_COMMANDS: &[&str] = &[
     "git tag",
     "git stash list",
     "git rev-parse",
+    "git grep",
 ];
 
 /// Rust toolchain (build/check — no system mutation)
@@ -105,6 +106,9 @@ const SAFE_PACKAGE_COMMANDS: &[&str] = &["npm test", "pip list", "pip show"];
 /// Other dev tools (build/check only)
 const SAFE_DEVTOOL_COMMANDS: &[&str] = &["go build", "go test", "go vet"];
 
+/// Shell no-ops (chain terminators like `... || true`)
+const SAFE_SHELL_NOOP_COMMANDS: &[&str] = &["true", "false"];
+
 /// All safe command categories combined.
 const SAFE_COMMAND_CATEGORIES: &[&[&str]] = &[
     SAFE_FS_COMMANDS,
@@ -114,7 +118,16 @@ const SAFE_COMMAND_CATEGORIES: &[&[&str]] = &[
     SAFE_RUST_COMMANDS,
     SAFE_PACKAGE_COMMANDS,
     SAFE_DEVTOOL_COMMANDS,
+    SAFE_SHELL_NOOP_COMMANDS,
 ];
+
+/// Global flags that don't change a command's effect on the environment.
+///
+/// Ignored when matching against multi-word safe commands, so
+/// `git --no-pager log` matches the `git log` allowlist entry. Flags that
+/// take inline values (e.g. `git -c name=value`) must NOT be listed here —
+/// they can alter what the command executes.
+const NEUTRAL_FLAGS: &[&str] = &["--no-pager"];
 
 /// Extract the base command from a shell command string.
 ///
@@ -164,8 +177,13 @@ fn is_segment_safe(segment: &str) -> bool {
 
     let base = extract_base_command(cmd);
 
-    // Normalize for multi-word matching
-    let normalized = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Normalize for multi-word matching (neutral flags like `--no-pager`
+    // are dropped so `git --no-pager log` matches `git log`)
+    let normalized = cmd
+        .split_whitespace()
+        .filter(|token| !NEUTRAL_FLAGS.contains(token))
+        .collect::<Vec<_>>()
+        .join(" ");
 
     // Check multi-word safe commands first (e.g. "git status", "cargo test")
     for &safe in SAFE_COMMAND_CATEGORIES.iter().flat_map(|c| c.iter()) {
@@ -181,6 +199,53 @@ fn is_segment_safe(segment: &str) -> bool {
     false
 }
 
+/// Split a command string on unquoted shell operators (`&&`, `||`, `|`, `;`, `&`).
+///
+/// Characters inside single or double quotes, or escaped with a backslash,
+/// are never treated as operators — so regex alternation like
+/// `--grep='a\|b'` or `git grep "A\|B"` stays inside one segment (#252).
+///
+/// Unclosed quotes are tolerated: the rest of the string joins the current
+/// segment, which is then judged by the allowlist as usual.
+fn split_unquoted_operators(cmd: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut chars = cmd.chars().peekable();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+                current.push(c);
+            }
+            '"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+                current.push(c);
+            }
+            // Backslash escapes the next char (except inside single quotes,
+            // where it is a literal character)
+            '\\' if !in_single_quote => {
+                current.push(c);
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            '|' | '&' | ';' if !in_single_quote && !in_double_quote => {
+                // `||` / `&&` are a single operator — consume the second char
+                if (c == '|' || c == '&') && chars.peek() == Some(&c) {
+                    chars.next();
+                }
+                segments.push(std::mem::take(&mut current));
+            }
+            _ => current.push(c),
+        }
+    }
+    segments.push(current);
+    segments
+}
+
 /// Classify the risk level of a shell command dynamically.
 ///
 /// Analyzes the command string to determine if it's safe (read-only) or
@@ -193,8 +258,9 @@ fn is_segment_safe(segment: &str) -> bool {
 /// - Output redirects (`>`, `>>`) → High (file write)
 /// - Command substitution (`$()`, backticks) → High (unpredictable)
 /// - `sudo` → High
-/// - Pipe chains (`|`): High if any segment is unsafe
-/// - `&&` / `;` chains: High if any segment is unsafe
+/// - Operator chains (`|`, `||`, `&&`, `;`, `&`): High if any segment is unsafe.
+///   Splitting is quote-aware — `|` inside quotes (e.g. regex alternation in
+///   `git log --grep='a\|b'`) is not treated as a pipe (#252)
 /// - Single command: Low if in the safe list, High otherwise
 ///
 /// # Examples
@@ -237,16 +303,10 @@ pub fn classify_command_risk(command: &str) -> RiskLevel {
         return RiskLevel::High;
     }
 
-    // Split by && and ; first (command chains)
-    // Then check each segment for pipes
-    let chain_segments: Vec<&str> = trimmed.split("&&").flat_map(|s| s.split(';')).collect();
-
-    for segment in chain_segments {
-        let pipe_segments: Vec<&str> = segment.split('|').collect();
-        for pipe_seg in pipe_segments {
-            if !is_segment_safe(pipe_seg) {
-                return RiskLevel::High;
-            }
+    // Split on unquoted operators (&&, ||, |, ;, &) — every segment must be safe
+    for segment in split_unquoted_operators(trimmed) {
+        if !is_segment_safe(&segment) {
+            return RiskLevel::High;
         }
     }
 
@@ -661,6 +721,94 @@ mod tests {
     #[test]
     fn test_classify_safe_semicolon_chains() {
         assert_eq!(classify_command_risk("ls; pwd; date"), RiskLevel::Low);
+    }
+
+    #[test]
+    fn test_classify_quoted_pipe_is_not_a_separator() {
+        // #252: `\|` inside quotes is regex alternation, not a pipe
+        assert_eq!(
+            classify_command_risk("git log --grep='\\(#241\\|issue 241\\|241\\)' -n 50"),
+            RiskLevel::Low
+        );
+        assert_eq!(
+            classify_command_risk("git grep -n \"OSC 52\\|osc52\" -- presentation"),
+            RiskLevel::Low
+        );
+        assert_eq!(classify_command_risk("echo 'a|b;c&&d'"), RiskLevel::Low);
+    }
+
+    #[test]
+    fn test_classify_issue_252_reproduction_commands() {
+        // Task 2 from #252
+        assert_eq!(
+            classify_command_risk(
+                "git --no-pager branch -a --list '*241*' && git --no-pager log --oneline --decorate --all --grep='\\(#241\\|issue 241\\|241\\)' -n 50"
+            ),
+            RiskLevel::Low
+        );
+        // Task 4 from #252
+        assert_eq!(
+            classify_command_risk(
+                "cargo test -p quorum-presentation test_yank_prefix_yy && cargo test -p quorum-presentation test_shift_y_yanks_last_assistant && cargo test -p quorum-presentation test_ctrl_w_cycles_focus && git --no-pager grep -n \"OSC 52\\|osc52\" -- presentation application infrastructure || true"
+            ),
+            RiskLevel::Low
+        );
+    }
+
+    #[test]
+    fn test_classify_no_pager_flag_is_neutral() {
+        assert_eq!(
+            classify_command_risk("git --no-pager log --oneline"),
+            RiskLevel::Low
+        );
+        assert_eq!(classify_command_risk("git --no-pager diff"), RiskLevel::Low);
+        // `-c name=value` can inject config (pager, fsmonitor) — must stay High
+        assert_eq!(
+            classify_command_risk("git -c core.pager=evil log"),
+            RiskLevel::High
+        );
+        assert_eq!(
+            classify_command_risk("git -ccore.pager=evil log"),
+            RiskLevel::High
+        );
+    }
+
+    #[test]
+    fn test_classify_logical_or_chains() {
+        assert_eq!(classify_command_risk("cargo test || true"), RiskLevel::Low);
+        assert_eq!(classify_command_risk("ls || rm -rf /"), RiskLevel::High);
+    }
+
+    #[test]
+    fn test_classify_unquoted_operators_still_split() {
+        // Real pipes/chains (unquoted) are still enforced
+        assert_eq!(classify_command_risk("echo foo | sh"), RiskLevel::High);
+        assert_eq!(classify_command_risk("ls|grep foo"), RiskLevel::Low);
+        assert_eq!(classify_command_risk("ls|sh"), RiskLevel::High);
+        // Background `&` is a separator too (previously unhandled)
+        assert_eq!(classify_command_risk("ls & rm file.txt"), RiskLevel::High);
+    }
+
+    #[test]
+    fn test_classify_unclosed_quote_falls_back_to_allowlist() {
+        assert_eq!(classify_command_risk("echo 'abc"), RiskLevel::Low);
+        assert_eq!(classify_command_risk("rm 'abc"), RiskLevel::High);
+    }
+
+    #[test]
+    fn test_split_unquoted_operators() {
+        assert_eq!(
+            split_unquoted_operators("ls && pwd; date | wc -l"),
+            vec!["ls ", " pwd", " date ", " wc -l"]
+        );
+        assert_eq!(
+            split_unquoted_operators("git log --grep='a\\|b' || true"),
+            vec!["git log --grep='a\\|b' ", " true"]
+        );
+        assert_eq!(
+            split_unquoted_operators("grep \"a|b\" file"),
+            vec!["grep \"a|b\" file"]
+        );
     }
 
     #[test]
