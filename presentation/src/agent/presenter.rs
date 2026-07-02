@@ -147,7 +147,7 @@ impl ReplPresenter {
                 println!("{} {}", "Error:".red().bold(), message);
             }
             UiEvent::UnknownCommand { command } => {
-                println!("{} Unknown command: {}", "?".yellow(), command);
+                println!("{} Unknown command: /{}", "?".yellow(), command);
                 println!("Type {} for available commands", "/help".cyan());
             }
             UiEvent::Exit => {

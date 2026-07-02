@@ -448,8 +448,10 @@ impl AgentController {
                         });
                     }
                 } else {
+                    // Send the bare command name — presenters render their own
+                    // prefix convention (`/` for REPL, `:` for TUI).
                     let _ = self.tx.send(UiEvent::UnknownCommand {
-                        command: command.to_string(),
+                        command: cmd_name.to_string(),
                     });
                 }
                 CommandAction::Continue
@@ -1436,7 +1438,7 @@ mod tests {
 
         let event = rx.try_recv().unwrap();
         match event {
-            UiEvent::UnknownCommand { command } => assert_eq!(command, "/foobar"),
+            UiEvent::UnknownCommand { command } => assert_eq!(command, "foobar"),
             other => panic!("Expected UnknownCommand, got {:?}", other),
         }
     }

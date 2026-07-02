@@ -88,7 +88,9 @@ pub enum UiEvent {
     // === Errors & Control ===
     /// Command usage/validation error
     CommandError { message: String },
-    /// Unknown command entered
+    /// Unknown command entered.
+    /// `command` is the bare command name without any prefix — each presenter
+    /// renders its own prefix convention (`/` for REPL, `:` for TUI).
     UnknownCommand { command: String },
     /// Exit message
     Exit,
