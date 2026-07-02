@@ -909,23 +909,32 @@ impl MessageRouter {
     /// during application startup. The returned `Arc<Self>` is shared by all
     /// [`CopilotSession`](super::session::CopilotSession)s.
     pub async fn spawn() -> Result<Arc<Self>> {
-        Self::spawn_internal("copilot", Arc::new(NoConversationLogger)).await
+        Self::spawn_internal("copilot", Arc::new(NoConversationLogger), None).await
     }
 
     /// Spawn with a custom command (useful for testing).
     pub async fn spawn_with_command(cmd: &str) -> Result<Arc<Self>> {
-        Self::spawn_internal(cmd, Arc::new(NoConversationLogger)).await
+        Self::spawn_internal(cmd, Arc::new(NoConversationLogger), None).await
     }
 
     /// Spawn with a conversation logger for recording internal tool executions.
-    pub async fn spawn_with_logger(logger: Arc<dyn ConversationLogger>) -> Result<Arc<Self>> {
-        Self::spawn_internal("copilot", logger).await
+    ///
+    /// `working_dir` sets the CLI process's working directory. The Copilot CLI
+    /// resolves relative paths from its built-in tools (e.g. `write_file`)
+    /// against this directory — without it, files land in the CLI's own
+    /// session-state directory (`~/.local/state/.copilot/session-state/…`, #240).
+    pub async fn spawn_with_logger(
+        logger: Arc<dyn ConversationLogger>,
+        working_dir: Option<&str>,
+    ) -> Result<Arc<Self>> {
+        Self::spawn_internal("copilot", logger, working_dir).await
     }
 
     /// Internal spawn implementation shared by all public constructors.
     async fn spawn_internal(
         cmd: &str,
         conversation_logger: Arc<dyn ConversationLogger>,
+        working_dir: Option<&str>,
     ) -> Result<Arc<Self>> {
         debug!("Spawning Copilot CLI: {} --server", cmd);
 
@@ -934,6 +943,11 @@ impl MessageRouter {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+
+        if let Some(dir) = working_dir {
+            debug!("Copilot CLI working directory: {}", dir);
+            cmd.current_dir(dir);
+        }
 
         // Linux: request kernel to send SIGTERM to child when parent dies.
         // This catches cases where Drop doesn't run (SIGKILL, OOM kill).
