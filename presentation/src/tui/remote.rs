@@ -1036,6 +1036,46 @@ mod tests {
         assert!(state.show_help);
     }
 
+    /// Regression test for #269 — mirrors the issue's repro steps:
+    /// HiL modal shown → `keys.feed` j/k → `state.get` scroll_offset must change.
+    #[test]
+    fn keys_feed_scrolls_conversation_while_hil_modal_shown() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        state.mode = InputMode::Normal;
+        state.hil_prompt = Some(super::super::state::HilPrompt {
+            title: "Plan Requires Human Intervention".into(),
+            objective: "obj".into(),
+            tasks: vec!["task".into()],
+            message: "Approve or reject?".into(),
+        });
+        let (tx, _rx) = oneshot::channel();
+        *harness.pending_hil_tx.lock().unwrap() = Some(tx);
+
+        dispatch(
+            &mut state,
+            &harness.ctx(),
+            "keys.feed",
+            &json!({"keys": ["k", "k", "j"]}),
+        )
+        .unwrap();
+        assert_eq!(state.tabs.active_pane().conversation.scroll_offset, 1);
+        // Modal still pending — scrolling must not answer the prompt
+        assert!(state.hil_prompt.is_some());
+        assert!(harness.pending_hil_tx.lock().unwrap().is_some());
+
+        // Decision keys still work after scrolling
+        dispatch(
+            &mut state,
+            &harness.ctx(),
+            "keys.feed",
+            &json!({"keys": ["y"]}),
+        )
+        .unwrap();
+        assert!(state.hil_prompt.is_none());
+        assert!(harness.pending_hil_tx.lock().unwrap().is_none());
+    }
+
     #[test]
     fn keys_feed_invalid_descriptor_is_atomic() {
         let harness = TestHarness::new();

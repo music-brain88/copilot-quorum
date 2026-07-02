@@ -207,7 +207,7 @@ fn render_hil_modal(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, sta
     lines.push(Line::from(&*hil.message));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "y: approve  n: reject  Esc: reject",
+        "y: approve  n: reject  Esc: reject  j/k: scroll conversation",
         Style::default().fg(Color::DarkGray),
     )));
 
