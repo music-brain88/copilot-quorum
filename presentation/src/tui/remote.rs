@@ -1026,9 +1026,16 @@ mod tests {
         let max_scroll = state.help_scroll;
         assert!(max_scroll > 0);
         feed(&mut state, json!(["j"]));
-        assert_eq!(state.help_scroll, max_scroll, "j at bottom must not overshoot");
+        assert_eq!(
+            state.help_scroll, max_scroll,
+            "j at bottom must not overshoot"
+        );
         feed(&mut state, json!(["k"]));
-        assert_eq!(state.help_scroll, max_scroll - 1, "k after bottom must move immediately");
+        assert_eq!(
+            state.help_scroll,
+            max_scroll - 1,
+            "k after bottom must move immediately"
+        );
 
         feed(&mut state, json!(["g"]));
         assert_eq!(state.help_scroll, 0);

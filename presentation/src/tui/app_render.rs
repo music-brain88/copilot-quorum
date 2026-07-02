@@ -180,7 +180,8 @@ pub(super) fn help_max_scroll(term_size: (u16, u16)) -> u16 {
     use ratatui::widgets::{Paragraph, Wrap};
 
     let (width, height) = term_size;
-    let area = MainLayout::centered_overlay(70, 70, ratatui::layout::Rect::new(0, 0, width, height));
+    let area =
+        MainLayout::centered_overlay(70, 70, ratatui::layout::Rect::new(0, 0, width, height));
     let content_width = area.width.saturating_sub(2); // borders
     let visible_height = area.height.saturating_sub(2); // borders
 
