@@ -1,0 +1,12 @@
+[tasks.build]
+description = "Build release binary"
+run = "cargo build --release --features bedrock"
+
+[tasks.install]
+description = "Build and install to ~/.local/bin"
+depends = ["build"]
+run = """
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/target/release/copilot-quorum" ~/.local/bin/copilot-quorum
+echo "Installed: ~/.local/bin/copilot-quorum -> $(pwd)/target/release/copilot-quorum"
+"""
