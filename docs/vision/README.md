@@ -43,12 +43,12 @@ Extension Platform ユーザーがスクリプトやプラグインで拡張
 
 | Feature | Description | Reference |
 |---------|-------------|-----------|
-| Modal TUI (Layer 0-1) | Normal/Insert/Command モード、Actor パターン | [tui.md](../guides/tui.md) |
-| Agent System | Plan → Review → Execute フロー、HiL | [agent-system.md](../systems/agent-system.md) |
-| Native Tool Use | 構造化 JSON Schema ツール呼び出し | [native-tool-use.md](../systems/native-tool-use.md) |
-| Transport Demux | 並列セッションルーティング | [transport.md](../systems/transport.md) |
-| Quorum Discussion | 多モデル合議 + 投票ベース合意 | [quorum.md](../concepts/quorum.md) |
-| Custom Tools | TOML 設定ベースのカスタムツール登録 | [tool-system.md](../systems/tool-system.md) |
+| Modal TUI (Layer 0-1) | Normal/Insert/Command モード、Actor パターン | [use-the-tui.md](../how-to/use-the-tui.md) |
+| Agent System | Plan → Review → Execute フロー、HiL | [agent-system.md](../reference/agent-system.md) |
+| Native Tool Use | 構造化 JSON Schema ツール呼び出し | [native-tool-use.md](../reference/native-tool-use.md) |
+| Transport Demux | 並列セッションルーティング | [transport.md](../reference/transport.md) |
+| Quorum Discussion | 多モデル合議 + 投票ベース合意 | [quorum-consensus.md](../explanation/quorum-consensus.md) |
+| Custom Tools | Lua (`quorum.tools.register`) ベースのカスタムツール登録 | [tool-system.md](../reference/tool-system.md) |
 | `Task::depends_on` | タスク間の依存関係表現 | `domain/src/agent/entities.rs` |
 | Content/Route/Surface 基盤 | ContentSlot → RouteTable → SurfaceId | [Discussion #207](https://github.com/music-brain88/copilot-quorum/discussions/207) |
 | Tab/Pane 基盤 | TabManager, Pane, PaneKind, `g` prefix key | [Discussion #58](https://github.com/music-brain88/copilot-quorum/discussions/58) |
@@ -138,3 +138,6 @@ v0.12 ─── Content/Route/Surface + Tab/Pane ─────── ✅ Done
 - [Discussion #138](https://github.com/music-brain88/copilot-quorum/discussions/138): RFC: Unified Interaction Architecture — Agent/Ask/Discuss as Peer Forms
 - [Discussion #157](https://github.com/music-brain88/copilot-quorum/discussions/157): RFC: Workflow Layer — Graph-Based Task Execution & Parallel Dispatch
 - [Discussion #207](https://github.com/music-brain88/copilot-quorum/discussions/207): RFC: TUI Display Architecture — Content / Route / Surface 分離
+- [Discussion #42](https://github.com/music-brain88/copilot-quorum/discussions/42): RFC: GitHub Discussions Integration for HiL — #43 に統合済み（HiL Storage は Knowledge Layer の一部として設計）
+
+決着済みの設計判断は [Design Decisions (ADR)](../explanation/design-decisions/README.md) に記録されています。

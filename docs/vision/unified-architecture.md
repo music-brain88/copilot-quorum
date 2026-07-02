@@ -700,8 +700,8 @@ Layer 0-1 ✅
 | Document | Path |
 |---|---|
 | Architecture Reference | [docs/reference/architecture.md](../reference/architecture.md) |
-| TUI Guide | [docs/guides/tui.md](../guides/tui.md) |
-| Agent System | [docs/systems/agent-system.md](../systems/agent-system.md) |
+| TUI Guide | [docs/how-to/use-the-tui.md](../how-to/use-the-tui.md) |
+| Agent System | [docs/reference/agent-system.md](../reference/agent-system.md) |
 | Extension Platform | [docs/vision/extension-platform.md](extension-platform.md) |
 | Knowledge Architecture | [docs/vision/knowledge-architecture.md](knowledge-architecture.md) |
 | Workflow Layer | [docs/vision/workflow-layer.md](workflow-layer.md) |

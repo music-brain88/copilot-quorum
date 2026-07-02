@@ -10,51 +10,13 @@
 
 スクリプティングシステムは、copilot-quorum を Lua スクリプトでカスタマイズ可能にする拡張基盤です。
 Vim/Neovim のプラグインエコシステムに倣い、段階的に構築されています。
+書き方の入門は [How to Write Lua Plugins](../how-to/write-lua-plugins.md) を、
+設定キーと API の一覧は [Configuration Reference](./configuration.md) を参照してください。
 
 **3 フェーズ構成**:
 1. **Phase 1**: `init.lua` + Config/Keymap API（基本設定）
 2. **Phase 2**: TUI Route/Layout/Content API（UI カスタマイズ）
 3. **Phase 3**: Plugin System + Agent Events + User Commands（拡張性）
-
----
-
-## Quick Start / クイックスタート
-
-```lua
--- ~/.config/copilot-quorum/init.lua
-
--- 設定変更
-quorum.config.set("agent.hil_mode", "auto_approve")
-quorum.config["models.exploration"] = "gpt-5.2-codex"
-
--- キーバインド
-quorum.keymap.set("normal", "q", "quit")
-quorum.keymap.set("normal", "r", function()
-    quorum.config.set("agent.hil_mode", "interactive")
-end)
-
--- イベント購読
-quorum.on("PhaseChanged", function(data)
-    print("Phase: " .. data.phase)
-end)
-
--- ツール実行の制御（false でキャンセル）
-quorum.on("ToolCallBefore", function(data)
-    if data.tool_name == "run_command" then
-        return false  -- コマンド実行をブロック
-    end
-    return true
-end)
-
--- ユーザー定義コマンド
-quorum.command.register("greet", {
-    fn = function(args)
-        print("Hello, " .. args .. "!")
-    end,
-    description = "Greet someone",
-    usage = "/greet <name>"
-})
-```
 
 ---
 
@@ -117,15 +79,7 @@ quorum.command.register("greet", {
 
 ## User Commands / ユーザー定義コマンド
 
-```lua
-quorum.command.register("deploy", {
-    fn = function(args)
-        print("Deploying to: " .. args)
-    end,
-    description = "Deploy to environment",
-    usage = "/deploy <env>"
-})
-```
+登録方法は [How to Write Lua Plugins](../how-to/write-lua-plugins.md) を参照してください。
 
 ### 設計
 

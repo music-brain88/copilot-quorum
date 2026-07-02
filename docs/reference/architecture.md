@@ -15,381 +15,39 @@ copilot-quorum は **DDD (Domain-Driven Design) + オニオンアーキテクチ
 
 ## Core Concepts / コア概念
 
-### Quorum とは
+コア概念の詳細は explanation 配下の各ドキュメントを参照してください。ここでは要点のみまとめます。
 
-copilot-quorum は **分散システムの Quorum System** に着想を得たマルチ LLM オーケストレーションツールです。
+### Quorum
 
-分散データベースでは、複数ノードの過半数（quorum）が合意して初めて操作が確定します。
-copilot-quorum はこの仕組みを LLM に適用し、**複数モデルの合意によって判断の信頼性を高める**
-というアプローチを取っています。
-
-#### 分散システムとの概念マッピング
-
-| 分散システム | copilot-quorum | 対応関係 |
-|------------|----------------|----------|
-| Node (ノード) | Model (LLM) | 処理を担う個々のエンティティ |
-| Replication Factor | `QuorumConfig.models` | 参加するノード（モデル）の数 |
-| Quorum (定足数) | Quorum Consensus | 過半数の合意で操作を確定 |
-| Read/Write 操作 | Plan/Action Review | データ操作 → タスク操作 |
-| Consistency Level | `ConsensusLevel` | 何ノード（モデル）の応答を要求するか |
-
-#### Cassandra アナロジー
-
-分散データベース Cassandra の `ConsistencyLevel` との具体的な対応：
-
-| Cassandra | copilot-quorum | 意味 |
-|-----------|----------------|------|
-| `ConsistencyLevel.ONE` | `ConsensusLevel::Solo` | 1 ノード（モデル）の応答で十分 |
-| `ConsistencyLevel.QUORUM` | `ConsensusLevel::Ensemble` | 過半数のノード（モデル）が合意必要 |
-| Replication Factor | `QuorumConfig.models` | 参加するノード（モデル）の数 |
-| Read/Write | Plan/Action Review | データ操作 → タスク操作 |
-
-Cassandra が `ConsistencyLevel` を変えるだけで一貫性と可用性のトレードオフを制御できるように、
-copilot-quorum も `ConsensusLevel` を `Solo` ↔ `Ensemble` に切り替えるだけで
-速度と信頼性のトレードオフを制御できます。
-
-#### Quorum の 3 つの側面
-
-この概念を LLM の文脈で具体化すると、3 つの機能になります：
-
-- **Quorum Discussion**: 複数モデルによる対等な議論（意見収集）— Read Quorum に相当
-- **Quorum Consensus**: 投票による合意形成（承認/却下の判定）— Write Quorum に相当
-- **Quorum Synthesis**: 複数意見の統合・矛盾解決 — Conflict Resolution に相当
+分散システムの Quorum System に着想を得たマルチ LLM オーケストレーション。
+**Quorum Discussion**（意見収集）/ **Quorum Consensus**（投票承認）/ **Quorum Synthesis**（統合）の 3 側面を持ちます。
+→ [Quorum Discussion & Consensus](../explanation/quorum-consensus.md)
 
 ### Solo / Ensemble モード
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  モード切り替え                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  【Solo モード】(default)          【Ensemble モード】          │
-│  - 単一モデル（Agent）主導         - 複数モデル（Quorum）主導   │
-│  - 素早く実行                      - 多角的な視点で議論         │
-│  - 必要時のみ /discuss             - 常に複数モデルで合議       │
-│  - シンプルなタスク向け            - 複雑な設計・判断向け       │
-│                                                                 │
-│  CLI: --solo (default)             CLI: --ensemble              │
-│  REPL: /solo                       REPL: /ens or /ensemble      │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**ML 的アナロジー**:
-- Solo = 単一モデルの予測
-- Ensemble = 複数モデルを組み合わせて精度・信頼性を向上（アンサンブル学習）
+`ConsensusLevel` により単一モデル駆動（Solo、デフォルト）とマルチモデル駆動（Ensemble）を切り替えます。
+ML のアンサンブル学習に相当する「独立生成 + 投票」方式です。
+→ [Ensemble Mode](../explanation/ensemble-mode.md)
 
 ### 3 つの直交する設定軸
 
-Solo / Ensemble（`ConsensusLevel`）は、実行を制御する **3 つの独立した軸** のうちの 1 つです。
-これらは直交しており、任意の組み合わせが可能です。
+実行は `ConsensusLevel`（誰が参加するか）× `PhaseScope`（どこまで実行するか）×
+`OrchestrationStrategy`（どう議論するか）の 3 つの独立した軸で制御されます。
+→ [Orchestration Axes](../explanation/orchestration-axes.md)
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  3 Orthogonal Axes / 3 つの直交する設定軸                        │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  軸 1: ConsensusLevel ─ 「誰が参加するか」                      │
-│  ┌────────────┐   ┌──────────────┐                              │
-│  │    Solo     │   │   Ensemble   │                              │
-│  │  単一モデル │   │  複数モデル  │                              │
-│  └────────────┘   └──────────────┘                              │
-│                                                                  │
-│  軸 2: PhaseScope ─ 「どこまで実行するか」                      │
-│  ┌────────┐   ┌────────┐   ┌──────────┐                        │
-│  │  Full  │   │  Fast  │   │ PlanOnly │                        │
-│  │ 全工程 │   │ 高速   │   │ 計画のみ │                        │
-│  └────────┘   └────────┘   └──────────┘                        │
-│                                                                  │
-│  軸 3: OrchestrationStrategy ─ 「どう議論するか」               │
-│  ┌─────────────────────┐   ┌─────────────────────┐             │
-│  │  Quorum(QuorumConfig)│   │  Debate(DebateConfig)│             │
-│  │  対等な議論→統合     │   │  対立的議論→合意    │             │
-│  └─────────────────────┘   └─────────────────────┘             │
-│                                                                  │
-│  組み合わせ例:                                                   │
-│   Solo + Full + Quorum  = デフォルト（単一モデル、全工程）       │
-│   Ensemble + Fast + Debate = 複数モデルで高速ディベート          │
-│   Solo + PlanOnly + Quorum = 計画だけ生成して確認                │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
+### Interaction Model
 
-**なぜ直交軸か？**
-
-当初は `Standard`, `Fast`, `PlanOnly`, `Ensemble`, `EnsembleFast` の 5 モード（`OrchestrationMode` enum）でしたが、
-モードの組み合わせが増えるたびにバリアントが爆発する問題がありました（例: `EnsemblePlanOnly` を追加するとさらに増える）。
-
-3 つの独立した軸に分解することで：
-- **組み合わせの自由度** — N × M × K 通りの構成を少ないバリアントで表現
-- **拡張容易性** — 新しい PhaseScope や Strategy を追加しても他の軸に影響しない
-- **設定の明確性** — 各軸が「何を制御するか」が一目瞭然
-
-### Interaction Model / インタラクションモデル
-
-copilot-quorum のユーザー対話は **3 つの対等なインタラクション形式** で構成されています。
-どれが「メイン」で他が「サブ」ということはなく、全てが第一級市民です。
-
-| Form | Description | Context Default | 使う設定 |
-|------|-------------|-----------------|----------|
-| `Agent` | 自律タスク実行（計画→レビュー→実行） | `Full` | SessionMode, AgentPolicy, ExecutionParams |
-| `Ask` | 単一 Q&A（読み取り専用ツール） | `Projected` | SessionMode, ExecutionParams |
-| `Discuss` | 複数モデル議論 / Quorum Council | `Full` | SessionMode |
-
-インタラクションは **ネスト可能** で、最大深度 `DEFAULT_MAX_NESTING_DEPTH`（= 3）まで子インタラクションを生成できます。
-例：Agent が設計判断のために Discuss を子として生成し、その結果を親の実行に反映する。
-
-`InteractionTree` が ID 自動採番とネスト管理を担当し、`InteractionResult` が完了時の結果を型安全に運搬します。
+`Agent` / `Ask` / `Discuss` は対等なインタラクション形式（`InteractionForm`）で、
+`InteractionTree` により最大深度 3 までネスト可能です。
+→ [Interaction Model](../explanation/interaction-model.md)
 
 ### Quorum Layers（将来ビジョン）
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Quorum Layers                                                   │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Knowledge Quorum (知識層) - Phase 3                       │  │
-│  │  - 永続化された知識からの合意形成                         │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                          ↓                                       │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Context Quorum (コンテキスト層) - Phase 2                 │  │
-│  │  - セッション間でコンテキスト共有（常駐）                 │  │
-│  │  - 議論履歴、決定事項、パターンを保持                     │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                          ↓                                       │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Decision Quorum (決定層) - Phase 1 (Current)              │  │
-│  │  - 複数モデルによる意思決定の合意                         │  │
-│  │  - Quorum Discussion, Quorum Consensus                     │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-```
+Decision Quorum（現在）→ Context Quorum → Knowledge Quorum の 3 層構想。
+→ [Vision & Roadmap](../vision/README.md)
 
 ---
 
-## Design Philosophy / 設計思想
-
-### Why DDD + Onion Architecture? / なぜDDD + オニオンアーキテクチャか
-
-従来の層構造（Presentation → Business → Data）では、ビジネスロジックがインフラ層に依存しがちです。
-オニオンアーキテクチャでは**依存の方向を逆転**させ、ドメイン層を中心に据えることで：
-
-1. **ドメインの純粋性** - ビジネスロジックが外部技術（DB、API、フレームワーク）に汚染されない
-2. **テスト容易性** - ドメイン層は依存がないため、モックなしでテスト可能
-3. **技術選択の自由** - インフラ層を差し替えるだけでLLMプロバイダーを変更可能
-4. **長期保守性** - 技術トレンドが変わってもドメインロジックは不変
-
-```
-従来の層構造:                    オニオンアーキテクチャ:
-
-  Presentation                        cli/
-       |                               |
-       v                        presentation/
-    Business  -----> DB               |
-       |                     infrastructure/ --> application/
-       v                              |                |
-      Data                            +----> domain/ <-+
-
-  (外側が内側に依存)              (内側は何にも依存しない)
-```
-
-### Vertical Domain Slicing / 垂直ドメイン分割
-
-copilot-quorum のドメイン層は**垂直に分割**されています。
-これは「機能」ではなく「ビジネス概念」でコードを分割するアプローチです。
-
-#### 核心: 全ての層で同じドメイン分割を繰り返す
-
-垂直ドメイン分割の最も重要なポイントは、**ドメイン層だけでなく、全ての層で同じ分割構造を維持する**ことです：
-
-```
-copilot-quorum/
-│
-├── domain/                    # ドメイン層
-│   ├── core/                  #   共通概念 (Model, Question, Error)
-│   ├── quorum/                #   [Quorum] 合意形成 (Vote, QuorumRule, ConsensusRound)
-│   ├── session/               #   [セッション] エンティティ + リポジトリtrait
-│   ├── orchestration/         #   [オーケストレーション] フェーズ、結果、戦略trait
-│   ├── agent/                 #   [エージェント] 自律実行の状態管理
-│   ├── tool/                  #   [ツール] ツール定義、呼び出し、リスクレベル
-│   ├── interaction/           #   [インタラクション] 対話形式、ネスト管理
-│   ├── context/               #   [コンテキスト] プロジェクト情報、リソース参照
-│   ├── prompt/                #   [プロンプト] テンプレート
-│   └── config/                #   [設定] 出力形式など
-│
-├── application/               # アプリケーション層
-│   ├── ports/                 #   ポート定義（11トレイト）
-│   ├── use_cases/             #   ユースケース実装
-│   │   ├── run_agent/         #     エージェント実行（4ファイル分割）
-│   │   ├── run_quorum.rs      #     合議実行
-│   │   ├── run_ask.rs         #     Ask インタラクション実行
-│   │   ├── gather_context.rs  #     コンテキスト収集
-│   │   ├── execute_task.rs    #     タスク実行
-│   │   ├── agent_controller.rs #    REPL/TUI コントローラー
-│   │   └── init_context.rs    #     コンテキスト初期化
-│   └── config/                #   QuorumConfig, ExecutionParams
-│
-├── infrastructure/            # インフラ層
-│   ├── copilot/               #   [Copilot] LlmGateway実装, MessageRouter
-│   ├── tools/                 #   [Tools] ToolRegistry, プロバイダー群
-│   ├── context/               #   [Context] LocalContextLoader
-│   ├── logging/               #   [Logging] JsonlConversationLogger
-│   ├── reference/             #   [Reference] GitHubReferenceResolver
-│   └── config/                #   [Config] FileConfig, ConfigLoader
-│
-├── presentation/              # プレゼンテーション層
-│   ├── cli/                   #   [CLI] コマンド定義
-│   ├── tui/                   #   [TUI] モーダルインターフェース（tab, widgets, event）
-│   ├── agent/                 #   [Agent UI] プログレス、思考表示、HiL UI
-│   ├── output/                #   [出力] フォーマッター
-│   ├── progress/              #   [進捗] レポーター
-│   └── config/                #   [設定] OutputConfig, ReplConfig
-│
-└── cli/                       # エントリポイント (DI構築)
-```
-
-#### なぜ全層で同じ分割か？
-
-```
-機能「テンプレート管理」を追加する例（他プロジェクトの場合）:
-
-domain/template/           → エンティティ、リポジトリtrait定義
-application/template/      → ユースケース実装
-infrastructure/template/   → DB実装
-presentation/template/     → ハンドラ、DTO
-
-全ての層に「template」が現れる = 縦に一貫性がある
-```
-
-この構造により：
-- **新機能追加時**: 4つの層に同名ディレクトリを追加するだけ
-- **機能削除時**: 4つのディレクトリを削除するだけ
-- **機能理解時**: 1つのドメイン名で全層を追跡可能
-
-### Plugin Architecture / プラグインアーキテクチャ
-
-垂直分割とトレイトの組み合わせにより、**プラグイン的に機能を追加**できます。
-
-#### 拡張パターン別の追加場所
-
-```
-新しいLLMプロバイダー追加（例: Ollama）:
-infrastructure/
-├── copilot/        # 既存: Copilot CLI
-└── ollama/         # 新規追加
-    ├── mod.rs
-    ├── gateway.rs  # impl LlmGateway for OllamaGateway
-    ├── session.rs  # impl LlmSession for OllamaSession
-    └── client.rs   # Ollama API クライアント
-
-新しいオーケストレーション戦略追加:
-domain/src/orchestration/
-├── strategy.rs     # OrchestrationStrategy enum + StrategyExecutor trait（既存）
-├── mode.rs         # ConsensusLevel enum（既存）
-├── scope.rs        # PhaseScope enum（既存）
-└── session_mode.rs # SessionMode（既存）
-
-新しいプレゼンテーション追加（例: HTTP API）:
-presentation/
-├── cli/            # 既存: CLI
-├── tui/            # 既存: TUI
-└── server/         # 新規追加
-    ├── mod.rs
-    ├── http.rs     # Actix-web ハンドラ
-    └── dto.rs      # リクエスト/レスポンス型
-```
-
-#### プラグイン性を支える設計原則
-
-| 原則 | 実装 | 効果 |
-|------|------|------|
-| **依存性逆転** | ドメイン層でtrait定義、インフラ層で実装 | 実装を差し替え可能 |
-| **統一インターフェース** | `LlmGateway`, `StrategyExecutor` | 新実装が既存コードと自動統合 |
-| **DIによる疎結合** | `cli/main.rs` で組み立て | 実装の選択を1箇所に集約 |
-| **型によるコンパイル時検証** | ジェネリクス `RunQuorumUseCase<G>` | 不正な組み合わせをコンパイルエラーに |
-
-### Key Design Decisions / 主要な設計判断
-
-| 判断 | 理由 |
-|------|------|
-| ドメイン層に `async-trait` のみ依存 | 非同期トレイトは本質的にドメインの一部（LLM呼び出しは非同期） |
-| `Model` を Value Object として定義 | 不変で、同一性ではなく値で比較される |
-| `Question` にバリデーションを内包 | 不正な状態を作れないようにする（空の質問を防ぐ） |
-| ユースケースにジェネリクス使用 | 実行時DI（Box<dyn>）ではなくコンパイル時DI |
-| インフラ層でプロトコル詳細を隠蔽 | JSON-RPC, LSPヘッダーなどの詳細はドメインに漏れない |
-| JSON Schema 変換を Port パターンで分離 | domain 層はツールの定義・フィルタリングのみ担当し、LLM API フォーマット（JSON Schema）への変換は `ToolSchemaPort` 経由で infrastructure 層が実装 |
-| インタラクション形式を対等な peer に | Agent / Ask / Discuss を階層化せず、全て `InteractionForm` enum の対等なバリアント |
-
-### TUI Design Philosophy / TUI 設計思想
-
-> See also: [Discussion #58: Neovim-Style Extensible TUI](https://github.com/music-brain88/copilot-quorum/discussions/58)
-
-copilot-quorum の TUI は「Vim キーバインド付きの REPL」ではなく、
-**LLM オーケストレーションに最適化されたモーダルインターフェース**として設計されています。
-
-#### Core Principle: Orchestrator, Not Editor / 核心原則: オーケストレーター、エディタではない
-
-copilot-quorum の本質は **LLM 群を指揮するオーケストレーター**です。
-テキスト編集は本業ではありません。
-
-この原則から導かれる設計判断:
-
-| 判断 | 理由 |
-|------|------|
-| NORMAL モードがホームポジション | 「指揮者の操作盤」= オーケストレーション操作が主 |
-| $EDITOR 委譲（`I`） | エディタを再実装せず、ユーザーの本物の vim/neovim を呼ぶ |
-| INSERT は対話的入力に特化 | 内蔵エディタの完成度を競わない |
-| NORMAL キーバインドはオーケストレーション操作 | `d` = Discuss, `s` = Solo, `e` = Ensemble（vim の delete/substitute ではない） |
-
-#### Input Granularity Model / 入力粒度モデル
-
-LLM への入力を **3 つのニーズ粒度** に分類し、それぞれを **vim の自然な操作** にマッピングします。
-
-```
-操作コスト:  低 ──────────────────────────────── 高
-
-             :ask            i (INSERT)       I ($EDITOR)
-             ↓               ↓                ↓
-ニーズ:      一言で済む       対話的            複雑なプロンプト
-             "Fix the bug"   応答を見ながら    システム設計の依頼
-                             追加質問          コード片を含む指示
-```
-
-| キー | モード | 用途 | vim との対応 |
-|------|--------|------|-------------|
-| `:ask <prompt>` | COMMAND | 最速の一言質問。入力して即実行 | `:!command` と同じ即時性 |
-| `i` | INSERT | 応答パネルを見ながらの対話的入力 | `i` = INSERT モードに入る |
-| `I` | $EDITOR | がっつり書く。本物の vim/neovim で編集 | `I` = "大きい" INSERT |
-
-#### Tab + Pane Architecture / タブ・ペインアーキテクチャ
-
-TUI は Vim のバッファ/ウィンドウ/タブページモデルを踏襲しています：
-
-| Vim | copilot-quorum | 説明 |
-|-----|----------------|------|
-| Buffer | `Interaction` (domain) | 対話データ（Agent/Ask/Discuss） |
-| Window | `Pane` (presentation) | 表示ユニット（会話、プログレス等を保持） |
-| Tab Page | `Tab` (presentation) | 1つ以上のペインを含むタブ |
-
-`TabManager` がタブの作成・切り替え・インタラクションとのバインドを管理します。
-
-#### Modal Architecture / モーダルアーキテクチャ
-
-```
-┌───────────┐    Esc    ┌───────────┐    :     ┌──────────────┐
-│  INSERT   │ ────────► │  NORMAL   │ ──────► │   COMMAND    │
-│           │ ◄──────── │           │ ◄────── │              │
-└───────────┘   i / a   └───────────┘   Esc   └──────────────┘
-                              │
-                              │ v (将来)
-                              ▼
-                        ┌───────────┐
-                        │  VISUAL   │
-                        └───────────┘
-```
-
----
 
 ## Layer Structure / レイヤー構成
 
@@ -727,7 +385,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 | `SessionChannel` | - | セッション専用の受信チャネル（Drop時に自動登録解除） |
 | `CopilotError` | - | Copilot通信エラー（RouterStopped含む） |
 
-> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
+> 詳細は [transport.md](./transport.md) を参照してください。
 
 ### Tools Adapter
 
@@ -761,7 +419,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 - `web_fetch` - URL からコンテンツを取得（Low risk）
 - `web_search` - Web 検索（Low risk）
 
-**Custom Tools (priority: 75, `quorum.toml` で設定):**
+**Custom Tools (priority: 75, `init.lua` の `quorum.tools.register` で設定):**
 - ユーザー定義のシェルコマンドテンプレート（default risk: High）
 
 ### Context Adapter
@@ -810,9 +468,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 
 | Type | Description |
 |------|-------------|
-| `ConfigLoader` | `quorum.toml` / `~/.config/copilot-quorum/config.toml` の読み込み |
-| `FileConfig` | ファイルベースの設定構造体（TOML デシリアライズ） |
-| `FileCustomToolConfig` | カスタムツール設定（command テンプレート + parameters） |
+| （TOML 基盤は撤去済み） | 設定は Lua スクリプティング（`infrastructure/src/scripting/`）で管理。[Configuration Reference](./configuration.md) を参照 |
 
 ---
 
@@ -826,7 +482,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 
 | Type | Description |
 |------|-------------|
-| `Cli` | CLAPコマンド定義（--ensemble, --chat, --model, etc.） |
+| `Cli` | CLAPコマンド定義（--ensemble, --solo, --model, etc.） |
 | `CliOutputFormat` | CLI用出力形式 |
 
 ### TUI Module
@@ -1003,7 +659,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 
 ### Transport Demultiplexer / トランスポート多重分離
 
-> 詳細は [systems/transport.md](../systems/transport.md) を参照してください。
+> 詳細は [transport.md](./transport.md) を参照してください。
 
 単一の TCP 接続上で複数セッションを並列運用するため、`MessageRouter` がメッセージを
 session_id ベースで各 `SessionChannel` にルーティングします。
@@ -1050,13 +706,13 @@ let synthesis = synthesize(moderator, responses, reviews).await;
 
 各 `JoinSet::spawn` 内で `gateway.create_session()` が呼ばれ、`MessageRouter` が
 session_id 毎に独立した `SessionChannel` を払い出すため、並列セッション間でメッセージが
-混線することはありません（詳細は [systems/transport.md](../systems/transport.md)）。
+混線することはありません（詳細は [transport.md](./transport.md)）。
 
 ---
 
 ## Agent System / エージェントシステム
 
-> 詳細は [systems/agent-system.md](../systems/agent-system.md) を参照してください。
+> 詳細は [agent-system.md](./agent-system.md) を参照してください。
 
 エージェントシステムは、Quorumの概念を自律タスク実行に拡張したものです。
 Solo モードで動作し、重要なポイントでは Quorum Consensus によるレビューを行います。
@@ -1157,7 +813,7 @@ UseCase (Application層)
 
 ## Tool Provider System / ツールプロバイダーシステム
 
-> 詳細は [systems/tool-system.md](../systems/tool-system.md) を参照してください。
+> 詳細は [tool-system.md](./tool-system.md) を参照してください。
 
 ツールプロバイダーシステムは、**プラグインベースのオーケストレーション**アーキテクチャを採用しています。
 
@@ -1174,8 +830,8 @@ UseCase (Application層)
    │ Builtin  │   │   CLI    │   │  Custom  │   │   MCP    │
    │ Provider │   │ Provider │   │ Provider │   │ Provider │
    └──────────┘   └──────────┘   └──────────┘   └──────────┘
-   最小限の        rg, fd, gh     quorum.toml     MCP サーバー
-   フォールバック   等をラップ    [tools.custom]   を統合
+   最小限の        rg, fd, gh     init.lua        MCP サーバー
+   フォールバック   等をラップ    tools.register   を統合
    (優先度: -100)  (優先度: 50)  (優先度: 75)    (優先度: 100)
 ```
 
@@ -1235,70 +891,9 @@ infrastructure/src/tools/
 
 ## Extension Points / 拡張ポイント
 
-### Adding New LLM Provider / 新しいLLMプロバイダーの追加
-
-`infrastructure/` に新しいアダプターを追加：
-
-```rust
-// infrastructure/src/ollama/gateway.rs
-pub struct OllamaLlmGateway { ... }
-
-#[async_trait]
-impl LlmGateway for OllamaLlmGateway {
-    async fn create_session(&self, model: &Model) -> Result<Box<dyn LlmSession>, GatewayError> {
-        // Ollama API implementation
-    }
-    // ...
-}
-```
-
-### Adding New Orchestration Strategy / 新しいオーケストレーション戦略の追加
-
-**Step 1**: `OrchestrationStrategy` enum にバリアントを追加（`domain/src/orchestration/strategy.rs`）：
-
-```rust
-pub enum OrchestrationStrategy {
-    Quorum(QuorumConfig),
-    Debate(DebateConfig),
-    NewStrategy(NewStrategyConfig),  // ← 新規バリアント追加
-}
-```
-
-**Step 2**: `StrategyExecutor` trait を実装する実行者を追加。
-
-### Adding New Tools / 新しいツールの追加
-
-#### Option 1: カスタムツール（設定のみ）
-
-`quorum.toml` に追加するだけ：
-
-```toml
-[tools.custom.my_tool]
-description = "Run my custom tool"
-command = "my-command {input}"
-risk_level = "low"
-
-[tools.custom.my_tool.parameters.input]
-description = "Input to process"
-required = true
-```
-
-#### Option 2: BuiltinProvider への追加
-
-`infrastructure/tools/builtin/` に新しいツール実装を追加し、`default_tool_spec()` に登録。
-
-#### Option 3: 新しい ToolProvider の実装
-
-`ToolProvider` trait を実装し、`ToolRegistry` に登録。
-
-### Adding New Interaction Forms / 新しいインタラクション形式の追加
-
-`domain/src/interaction/mod.rs` の `InteractionForm` にバリアントを追加し、
-対応するユースケースとプレゼンテーションを実装。
-
-### Adding New Context File Types / 新しいコンテキストファイル種別の追加
-
-`domain/context/value_objects.rs` の `KnownContextFile` enum に新しいファイル種別を追加。
+拡張ポイント（LLM プロバイダー / オーケストレーション戦略 / ツール / インタラクション形式 /
+コンテキストファイル種別の追加）の実践手順は
+[How to Extend the Codebase](../how-to/extend-the-codebase.md) を参照してください。
 
 ---
 

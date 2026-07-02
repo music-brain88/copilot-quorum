@@ -25,7 +25,7 @@ Native Tool Use API は、Anthropic の `tool_use`、OpenAI の `function_callin
 
 ---
 
-## How It Works / 仕組み
+## Implementation Overview / 実装概要
 
 ### Architecture / アーキテクチャ
 
@@ -181,15 +181,11 @@ API レベルでサポートされます。
 
 ### Turn Limit / ターン数制限
 
-```toml
-# quorum.toml
-[agent]
-max_tool_turns = 10    # デフォルト: 10
-```
+| 設定キー | 型 | デフォルト | 説明 |
+|---------|----|-----------|------|
+| `execution.max_tool_turns` | `usize` | `10` | 1 タスク内の最大ツール呼び出しターン数 |
 
-| 設定 | 型 | デフォルト | 説明 |
-|------|----|-----------|------|
-| `max_tool_turns` | `usize` | `10` | 1 タスク内の最大ツール呼び出しターン数 |
+設定方法は [Configuration Reference](./configuration.md) を参照してください。
 
 各ターンは「LLM レスポンス受信 → ツール実行 → 結果送信」の 1 サイクルです。
 1 ターンで複数のツールが呼び出される場合もあり、それらは 1 ターンとしてカウントされます。
@@ -361,24 +357,6 @@ ToolDefinition (domain)
 
 ---
 
-## Configuration / 設定
-
-```toml
-# quorum.toml
-[agent]
-max_tool_turns = 10    # Native ループの最大ターン数（デフォルト: 10）
-```
-
-```rust
-// プログラム的に設定
-let execution = ExecutionParams {
-    max_tool_turns: 15,
-    ..Default::default()
-};
-```
-
----
-
 ## Architecture / アーキテクチャ
 
 ### Key Files / 主要ファイル
@@ -434,7 +412,7 @@ Native Tool Use multi-turn loop
 - [Tool System](./tool-system.md) - ツールの定義、リスク分類、プロバイダーアーキテクチャ
 - [Agent System](./agent-system.md) - エージェントライフサイクルと Quorum Review
 - [Transport Demultiplexer](./transport.md) - MessageRouter による並列セッションルーティング
-- [Ensemble Mode](../concepts/ensemble-mode.md) - マルチモデル計画生成
-- [CLI & Configuration](../guides/cli-and-configuration.md) - 設定オプション
+- [Ensemble Mode](../explanation/ensemble-mode.md) - マルチモデル計画生成
+- [Configuration Reference](./configuration.md) - `execution.*` 設定キー
 
 <!-- LLM Context: Native Tool Use API は LLM プロバイダーの構造化ツール呼び出しで、copilot-quorum の唯一のツール実行パス（フォールバック経路なし）。ToolSchemaPort (application/src/ports/tool_schema.rs) が Port パターンで JSON Schema 変換を分離し、JsonSchemaToolConverter (infrastructure/src/tools/schema.rs) が実装。DI チェーン: cli → RunAgentUseCase/GatherContextUseCase/ExecuteTaskUseCase/RunAskUseCase → AgentController → TuiApp。CopilotSession (infrastructure/src/copilot/session.rs) は send_with_tools() で内部 ToolSessionState (別セッション ID + SessionChannel + PendingToolCall) を作成し、send_tool_results() で pending_tool_call.request_id を使って JSON-RPC レスポンスを返送。StreamingOutcome::Idle → EndTurn、ToolCall → StopReason::ToolUse + ToolSessionState 保存。Copilot SDK ワイヤーフォーマット: CopilotToolDefinition が input_schema → parameters にマッピング。マルチターンループで StopReason::ToolUse の間ツール実行を繰り返す。Low-risk は futures::join_all() で並列、High-risk は QuorumActionReviewer + 順次。max_tool_turns (デフォルト 10) でループ制限。主要ファイルは domain/src/session/response.rs、application/src/ports/llm_gateway.rs、application/src/ports/tool_schema.rs、infrastructure/src/tools/schema.rs、infrastructure/src/copilot/session.rs。 -->

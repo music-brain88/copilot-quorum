@@ -14,7 +14,7 @@
 //! owns the TCP read-half exclusively — no `Mutex` contention — and routes
 //! incoming messages to the correct [`SessionChannel`] by `session_id`.
 //!
-//! See [docs/systems/transport.md](../../../../docs/systems/transport.md) for
+//! See [docs/reference/transport.md](../../../../docs/reference/transport.md) for
 //! the full design rationale and concurrency patterns.
 
 use crate::copilot::error::{CopilotError, Result};

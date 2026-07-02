@@ -218,7 +218,7 @@ on_task_failure = "continue" # "continue" | "abort_group" | "abort_all"
 
 **Goal**: 設定ファイルでの制御、TUI でのワークフロー進捗表示
 
-- `quorum.toml` に `[workflow]` セクション追加
+- 設定（init.lua の `workflow.*` キー想定）にワークフロー設定を追加
 - TUI に DAG ベースの進捗表示（どのタスクが並列実行中か可視化）
 
 **Impact**: infrastructure (config), presentation (TUI)
