@@ -17,7 +17,9 @@ use quorum_domain::agent::model_config::ModelConfig;
 use quorum_domain::context::context_budget::ContextBudget;
 use quorum_domain::context::task_result_buffer::TaskResultBuffer;
 use quorum_domain::util::truncate_str;
-use quorum_domain::{AgentPromptTemplate, AgentState, Model, Task, TaskId, ToolExecution};
+use quorum_domain::{
+    AgentPromptTemplate, AgentState, Model, Task, TaskId, ToolExecution, looks_like_tool_call_json,
+};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -426,6 +428,9 @@ impl ExecuteTaskUseCase {
             .all_tools_schema(self.tool_executor.tool_spec());
         let max_turns = input.execution.max_tool_turns;
         let mut turn_count = 0;
+        // Retry budget for text-only / leaked-tool-call responses (#268)
+        const MAX_TOOL_NUDGES: usize = 2;
+        let mut nudge_count = 0;
         let mut all_outputs = Vec::new();
         let mut all_executions: Vec<ToolExecution> = Vec::new();
         let mut exec_counter: usize = 0;
@@ -463,27 +468,51 @@ impl ExecuteTaskUseCase {
                         "text": text,
                     }),
                 ));
-                all_outputs.push(text);
             }
 
             // Extract tool calls
             let tool_calls = response.tool_calls();
 
             if tool_calls.is_empty() {
-                // Tool specified but LLM responded with text only → retry once with nudge
-                if task.tool_name.is_some() && turn_count == 0 {
-                    warn!(
-                        "Task {}: expected tool '{}' but got text-only response, retrying with nudge",
-                        task.id,
-                        task.tool_name.as_deref().unwrap_or("?")
-                    );
-                    turn_count += 1;
+                // Detect a tool call the LLM wrote as raw JSON text instead of
+                // actually invoking it via the Native Tool Use API (#268).
+                let tool_call_leak = !text.is_empty()
+                    && looks_like_tool_call_json(&text, self.tool_executor.tool_spec());
 
-                    let nudge = format!(
-                        "You responded with text only, but this task REQUIRES calling `{}`. \
-                         Call the tool NOW. Do not respond with text.",
-                        task.tool_name.as_deref().unwrap_or("?")
+                // Text-only response where a tool was expected, or a leaked
+                // tool-call JSON → retry with a nudge. Leaked JSON is dropped
+                // from the output; ordinary text-only responses are kept.
+                let expected_tool = task.tool_name.is_some() && turn_count == 0;
+                if (tool_call_leak || expected_tool) && nudge_count < MAX_TOOL_NUDGES {
+                    if !tool_call_leak && !text.is_empty() {
+                        all_outputs.push(text.clone());
+                    }
+                    nudge_count += 1;
+                    turn_count += 1;
+                    warn!(
+                        "Task {}: {} (nudge {}/{})",
+                        task.id,
+                        if tool_call_leak {
+                            "LLM emitted a tool call as JSON text instead of invoking it"
+                        } else {
+                            "expected a tool call but got text-only response"
+                        },
+                        nudge_count,
+                        MAX_TOOL_NUDGES,
                     );
+
+                    let nudge = if tool_call_leak {
+                        "You wrote a tool invocation as JSON text instead of calling \
+                         the tool. Do NOT print JSON. Invoke the tool NOW using the \
+                         native tool-calling mechanism, then answer in natural language."
+                            .to_string()
+                    } else {
+                        format!(
+                            "You responded with text only, but this task REQUIRES calling `{}`. \
+                             Call the tool NOW. Do not respond with text.",
+                            task.tool_name.as_deref().unwrap_or("?")
+                        )
+                    };
                     self.conversation_logger.log(ConversationEvent::new(
                         "llm_prompt",
                         serde_json::json!({
@@ -492,6 +521,7 @@ impl ExecuteTaskUseCase {
                             "bytes": nudge.len(),
                             "text": nudge,
                             "nudge": true,
+                            "tool_call_leak": tool_call_leak,
                         }),
                     ));
                     response = match send_with_tools_cancellable(
@@ -504,16 +534,53 @@ impl ExecuteTaskUseCase {
                     .await
                     {
                         Ok(r) => r,
-                        Err(_) => break, // nudge failed — keep original text
+                        // Nudge failed — keep already-collected output
+                        // (leaked JSON was never pushed, so it cannot surface)
+                        Err(_) => break,
                     };
                     continue;
                 }
 
+                if tool_call_leak {
+                    // Nudge budget exhausted — suppress the raw JSON so it never
+                    // reaches the user as the final answer (#268).
+                    warn!(
+                        "Task {}: suppressing leaked tool-call JSON from output ({} bytes)",
+                        task.id,
+                        text.len()
+                    );
+                    self.conversation_logger.log(ConversationEvent::new(
+                        "tool_call_leak_suppressed",
+                        serde_json::json!({
+                            "task_id": task_id_str,
+                            "model": session.model().to_string(),
+                            "bytes": text.len(),
+                            "text": text,
+                        }),
+                    ));
+                    if all_outputs.is_empty() {
+                        return Err(RunAgentError::TaskExecutionFailed(
+                            "LLM returned a raw tool-call JSON instead of executing the tool \
+                             (retries exhausted)"
+                                .to_string(),
+                        ));
+                    }
+                    break;
+                }
+
+                if !text.is_empty() {
+                    all_outputs.push(text);
+                }
                 debug!(
                     "Task {}: no tool calls in response, ending execution loop",
                     task.id
                 );
                 break;
+            }
+
+            // Turn has tool calls — keep any accompanying text
+            if !text.is_empty() {
+                all_outputs.push(text);
             }
 
             // Check turn limit
@@ -952,5 +1019,348 @@ mod tests {
         let output = "\n\n  No matches found in .rs files\nSome other info";
         let brief = extract_task_brief(output, 150);
         assert_eq!(brief.unwrap(), "No matches found in .rs files");
+    }
+
+    // ==================== Tool-call leak tests (#268) ====================
+
+    use crate::config::ExecutionParams;
+    use crate::ports::conversation_logger::NoConversationLogger;
+    use crate::ports::llm_gateway::GatewayError;
+    use async_trait::async_trait;
+    use quorum_domain::session::response::{ContentBlock, LlmResponse, StopReason};
+    use quorum_domain::tool::entities::{
+        RiskLevel, ToolCall, ToolDefinition, ToolParameter, ToolSpec,
+    };
+    use quorum_domain::tool::value_objects::ToolResult;
+    use quorum_domain::{AgentPolicy, ConsensusLevel, PhaseScope, Plan, SessionMode};
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::Mutex;
+
+    /// Session that pops pre-scripted responses in order.
+    struct QueueSession {
+        model: Model,
+        responses: Arc<Mutex<VecDeque<LlmResponse>>>,
+    }
+
+    impl QueueSession {
+        fn pop(&self) -> LlmResponse {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| LlmResponse::from_text("(exhausted)"))
+        }
+    }
+
+    #[async_trait]
+    impl LlmSession for QueueSession {
+        fn model(&self) -> &Model {
+            &self.model
+        }
+
+        async fn send(&self, _content: &str) -> Result<String, GatewayError> {
+            Ok(self.pop().text_content())
+        }
+
+        async fn send_with_tools(
+            &self,
+            _content: &str,
+            _tools: &[serde_json::Value],
+        ) -> Result<LlmResponse, GatewayError> {
+            Ok(self.pop())
+        }
+
+        async fn send_tool_results(
+            &self,
+            _results: &[ToolResultMessage],
+        ) -> Result<LlmResponse, GatewayError> {
+            Ok(self.pop())
+        }
+    }
+
+    struct QueueGateway {
+        responses: Arc<Mutex<VecDeque<LlmResponse>>>,
+    }
+
+    #[async_trait]
+    impl LlmGateway for QueueGateway {
+        async fn create_session(&self, model: &Model) -> Result<Box<dyn LlmSession>, GatewayError> {
+            Ok(Box::new(QueueSession {
+                model: model.clone(),
+                responses: self.responses.clone(),
+            }))
+        }
+
+        async fn create_session_with_system_prompt(
+            &self,
+            model: &Model,
+            _system_prompt: &str,
+        ) -> Result<Box<dyn LlmSession>, GatewayError> {
+            self.create_session(model).await
+        }
+
+        async fn available_models(&self) -> Result<Vec<Model>, GatewayError> {
+            Ok(vec![])
+        }
+    }
+
+    /// Executor whose spec has `run_command` (required param `command`),
+    /// matching the #268 reproduction. Records executed tool names.
+    struct RecordingToolExecutor {
+        spec: ToolSpec,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl RecordingToolExecutor {
+        fn new() -> Self {
+            Self {
+                spec: ToolSpec::new().register(
+                    ToolDefinition::new("run_command", "Run a shell command", RiskLevel::High)
+                        .with_parameter(ToolParameter::new("command", "Command to run", true)),
+                ),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolExecutorPort for RecordingToolExecutor {
+        fn tool_spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        async fn execute(&self, call: &ToolCall) -> ToolResult {
+            self.calls.lock().unwrap().push(call.tool_name.clone());
+            ToolResult::success(&call.tool_name, "ok")
+        }
+
+        fn execute_sync(&self, call: &ToolCall) -> ToolResult {
+            self.calls.lock().unwrap().push(call.tool_name.clone());
+            ToolResult::success(&call.tool_name, "ok")
+        }
+    }
+
+    struct StubToolSchema;
+
+    impl ToolSchemaPort for StubToolSchema {
+        fn tool_to_schema(&self, tool: &ToolDefinition) -> serde_json::Value {
+            serde_json::json!({ "name": tool.name })
+        }
+
+        fn all_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            spec.all().map(|t| self.tool_to_schema(t)).collect()
+        }
+
+        fn low_risk_tools_schema(&self, spec: &ToolSpec) -> Vec<serde_json::Value> {
+            spec.low_risk_tools()
+                .map(|t| self.tool_to_schema(t))
+                .collect()
+        }
+    }
+
+    /// Reviewer that treats everything as low-risk (no review round-trips).
+    struct LowRiskReviewer;
+
+    #[async_trait]
+    impl ActionReviewer for LowRiskReviewer {
+        async fn review_action(
+            &self,
+            _tool_call_json: &str,
+            _task: &Task,
+            _state: &AgentState,
+            _models: &ModelConfig,
+            _progress: &dyn AgentProgressNotifier,
+        ) -> Result<ReviewDecision, RunAgentError> {
+            Ok(ReviewDecision::SkipReview)
+        }
+
+        fn is_high_risk_tool(
+            &self,
+            _tool_name: &str,
+            _arguments: &HashMap<String, serde_json::Value>,
+        ) -> bool {
+            false
+        }
+    }
+
+    struct NoopProgress;
+    impl AgentProgressNotifier for NoopProgress {}
+
+    fn make_use_case(
+        responses: Vec<LlmResponse>,
+        executor: Arc<RecordingToolExecutor>,
+    ) -> ExecuteTaskUseCase {
+        let gateway = Arc::new(QueueGateway {
+            responses: Arc::new(Mutex::new(responses.into())),
+        });
+        ExecuteTaskUseCase::new(
+            gateway,
+            executor,
+            Arc::new(StubToolSchema),
+            None,
+            Arc::new(LowRiskReviewer),
+            Arc::new(NoConversationLogger),
+        )
+    }
+
+    fn test_input() -> RunAgentInput {
+        RunAgentInput::new(
+            "List the crates in this workspace",
+            SessionMode {
+                consensus_level: ConsensusLevel::Solo,
+                phase_scope: PhaseScope::Fast,
+                strategy: Default::default(),
+            },
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            ExecutionParams {
+                max_iterations: 10,
+                max_tool_turns: 5,
+                max_tool_retries: 2,
+                working_dir: None,
+                ensemble_session_timeout: None,
+                context_budget: ContextBudget::default(),
+            },
+        )
+    }
+
+    fn test_state(input: &RunAgentInput, task: Task) -> AgentState {
+        let mut state = input.to_agent_state("agent-test");
+        let mut plan = Plan::new("List workspace crates", "test");
+        plan.add_task(task);
+        state.set_plan(plan);
+        state
+    }
+
+    /// The exact leak shape from the #268 reproduction.
+    fn leak_response() -> LlmResponse {
+        LlmResponse::from_text(
+            "```json\n{\n  \"command\": \"cargo metadata --no-deps --format-version 1\"\n}\n```",
+        )
+    }
+
+    fn tool_use_response() -> LlmResponse {
+        let mut arguments = HashMap::new();
+        arguments.insert("command".to_string(), serde_json::json!("ls"));
+        LlmResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "toolu_1".to_string(),
+                name: "run_command".to_string(),
+                input: arguments,
+            }],
+            stop_reason: Some(StopReason::ToolUse),
+            model: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn leaked_tool_call_json_is_nudged_into_real_tool_call() {
+        let executor = Arc::new(RecordingToolExecutor::new());
+        let use_case = make_use_case(
+            vec![
+                leak_response(),     // turn 0: JSON as text → nudge
+                tool_use_response(), // nudge response: actual tool call
+                LlmResponse::from_text("The workspace has 5 crates."),
+            ],
+            executor.clone(),
+        );
+        let input = test_input();
+        let mut state = test_state(&input, Task::new("1", "List crates"));
+
+        let summary = use_case
+            .execute(&input, &mut state, "system", &NoopProgress)
+            .await
+            .expect("should succeed");
+
+        assert!(summary.contains("Completed 1/1"), "summary: {}", summary);
+        assert!(summary.contains("The workspace has 5 crates."));
+        assert!(
+            !summary.contains("cargo metadata"),
+            "leaked JSON must not surface: {}",
+            summary
+        );
+        assert_eq!(
+            executor.calls.lock().unwrap().as_slice(),
+            &["run_command".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn leaked_json_fails_task_when_nudges_exhausted() {
+        let executor = Arc::new(RecordingToolExecutor::new());
+        let use_case = make_use_case(
+            vec![leak_response(), leak_response(), leak_response()],
+            executor.clone(),
+        );
+        let input = test_input();
+        let mut state = test_state(&input, Task::new("1", "List crates"));
+
+        let summary = use_case
+            .execute(&input, &mut state, "system", &NoopProgress)
+            .await
+            .expect("execute() itself should not fail");
+
+        // Task fails, but the raw JSON never surfaces
+        assert!(summary.contains("FAILED"), "summary: {}", summary);
+        assert!(
+            !summary.contains("cargo metadata"),
+            "leaked JSON must not surface: {}",
+            summary
+        );
+        assert!(executor.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn leak_after_tool_turn_is_suppressed_but_earlier_output_kept() {
+        let executor = Arc::new(RecordingToolExecutor::new());
+        let use_case = make_use_case(
+            vec![
+                tool_use_response(), // turn 1: real tool call
+                leak_response(),     // after tool result: leak → nudge
+                leak_response(),     // still leaking → nudge
+                leak_response(),     // budget exhausted → suppress
+            ],
+            executor.clone(),
+        );
+        let input = test_input();
+        let mut state = test_state(&input, Task::new("1", "List crates"));
+
+        let summary = use_case
+            .execute(&input, &mut state, "system", &NoopProgress)
+            .await
+            .expect("should succeed");
+
+        // Tool output is kept; the trailing leak is dropped
+        assert!(summary.contains("OK"), "summary: {}", summary);
+        assert!(
+            !summary.contains("cargo metadata"),
+            "leaked JSON must not surface: {}",
+            summary
+        );
+        let task = &state.plan.as_ref().unwrap().tasks[0];
+        let output = task.result.as_ref().unwrap().output.clone();
+        assert!(output.contains("[run_command]: ok"), "output: {}", output);
+        assert!(!output.contains("cargo metadata"), "output: {}", output);
+    }
+
+    #[tokio::test]
+    async fn plain_text_answer_is_kept_as_before() {
+        let executor = Arc::new(RecordingToolExecutor::new());
+        let use_case = make_use_case(
+            vec![LlmResponse::from_text(
+                "The workspace contains 5 crates: domain, application, ...",
+            )],
+            executor.clone(),
+        );
+        let input = test_input();
+        let mut state = test_state(&input, Task::new("1", "List crates"));
+
+        let summary = use_case
+            .execute(&input, &mut state, "system", &NoopProgress)
+            .await
+            .expect("should succeed");
+
+        assert!(summary.contains("Completed 1/1"), "summary: {}", summary);
+        assert!(summary.contains("The workspace contains 5 crates"));
     }
 }

@@ -51,6 +51,7 @@
 //! - [`ToolResult`] — Execution outcome with structured [`ToolResultMetadata`](value_objects::ToolResultMetadata)
 //! - [`ToolValidator`] — Pure domain trait for parameter validation
 //! - [`ToolProvider`] — Abstraction for external tool providers (MCP, etc.)
+//! - [`looks_like_tool_call_json`] — Detect tool calls leaked as JSON text (#268)
 //!
 //! # Architecture
 //!
@@ -66,11 +67,13 @@
 //! - [`crate::agent`] — Agent system that orchestrates tool usage
 //! - [`crate::orchestration`] — Quorum consensus for high-risk tool review
 
+pub mod detection;
 pub mod entities;
 pub mod provider;
 pub mod traits;
 pub mod value_objects;
 
+pub use detection::looks_like_tool_call_json;
 pub use entities::{ToolCall, ToolDefinition, ToolSpec, classify_command_risk};
 pub use provider::{ProviderError, ToolProvider};
 pub use traits::{DefaultToolValidator, ToolValidator};
