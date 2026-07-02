@@ -989,6 +989,14 @@ impl InitContextProgressNotifier for InitContextProgressBridge<'_> {
         self.log(format!("✓ {} analysis complete", model));
     }
 
+    fn on_model_failed(&self, model: &Model, error: &str) {
+        self.progress.on_quorum_model_complete(model, false);
+        self.log(format!(
+            "✗ {} unavailable — skipped ({}). Check models.review in init.lua.",
+            model, error
+        ));
+    }
+
     fn on_synthesis_start(&self) {
         self.progress.on_quorum_start("Context Synthesis", 1);
         self.log("Synthesizing analyses...");
@@ -1355,6 +1363,31 @@ mod tests {
             tx,
         );
         (controller, rx)
+    }
+
+    #[test]
+    fn init_bridge_surfaces_model_failure_to_ui() {
+        // Regression for #262: a failed model in `/init` must reach the UI
+        // conversation log, not only the WARN tracing log.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let progress = NoAgentProgress;
+        let bridge = InitContextProgressBridge {
+            progress: &progress,
+            tx,
+        };
+
+        bridge.on_model_failed(&Model::Gpt52Codex, "Model not available");
+
+        match rx.try_recv() {
+            Ok(UiEvent::ContextInitProgress { message }) => {
+                assert!(message.contains("gpt-5.2-codex"), "message: {message}");
+                assert!(
+                    message.contains("Model not available"),
+                    "message: {message}"
+                );
+            }
+            other => panic!("expected ContextInitProgress, got {other:?}"),
+        }
     }
 
     #[tokio::test]

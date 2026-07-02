@@ -42,7 +42,7 @@ quorum.config.set("agent.consensus_level", "ensemble")  -- "solo" or "ensemble"
 計画を生成・相互投票するモデル群は `models.participants` で設定します:
 
 ```lua
-quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.2-codex", "gemini-3-pro-preview" })
+quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview" })
 ```
 
 全設定キーは [Configuration Reference](../reference/configuration.md) を参照してください。

@@ -13,7 +13,7 @@
 
 -- 設定変更
 quorum.config.set("agent.hil_mode", "auto_approve")
-quorum.config["models.exploration"] = "gpt-5.2-codex"
+quorum.config["models.exploration"] = "gpt-5.3-codex"
 
 -- キーバインド
 -- 注意: builtin アクション "quit" はタブ数に関係なくアプリ全体を終了する
