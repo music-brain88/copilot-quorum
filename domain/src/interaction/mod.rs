@@ -32,8 +32,12 @@
 //! ```
 
 use crate::context::ContextMode;
+use crate::core::string::truncate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Maximum length of the query summary embedded in parent notifications.
+const PARENT_NOTIFICATION_QUERY_MAX_LEN: usize = 60;
 
 /// Maximum nesting depth for interactions.
 ///
@@ -385,6 +389,34 @@ impl InteractionResult {
             }
         }
     }
+
+    /// Convert to a notification message for the parent interaction's
+    /// conversation view.
+    ///
+    /// Unlike [`to_context_injection`](Self::to_context_injection), this
+    /// includes a summary of the original query so the parent conversation
+    /// shows what the result is answering, e.g. `[Ask] "What is 2+2?" → 4`.
+    pub fn to_parent_notification(&self, query: &str) -> String {
+        let query_summary = truncate(query.trim(), PARENT_NOTIFICATION_QUERY_MAX_LEN);
+        match self {
+            InteractionResult::AskResult { answer } => {
+                format!("[Ask] \"{}\" → {}", query_summary, answer)
+            }
+            InteractionResult::DiscussResult {
+                synthesis,
+                participant_count,
+            } => {
+                format!(
+                    "[Discuss ({} models)] \"{}\" → {}",
+                    participant_count, query_summary, synthesis
+                )
+            }
+            InteractionResult::AgentResult { summary, success } => {
+                let status = if *success { "completed" } else { "failed" };
+                format!("[Agent ({})] \"{}\" → {}", status, query_summary, summary)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -658,6 +690,54 @@ mod tests {
         };
         let injection = result.to_context_injection();
         assert_eq!(injection, "[Ask Result]: The answer is 42.");
+    }
+
+    #[test]
+    fn test_ask_result_to_parent_notification() {
+        let result = InteractionResult::AskResult {
+            answer: "4".to_string(),
+        };
+        assert_eq!(
+            result.to_parent_notification("What is 2+2?"),
+            "[Ask] \"What is 2+2?\" → 4"
+        );
+    }
+
+    #[test]
+    fn test_to_parent_notification_truncates_long_query() {
+        let result = InteractionResult::AskResult {
+            answer: "yes".to_string(),
+        };
+        let long_query = "a".repeat(100);
+        let notification = result.to_parent_notification(&long_query);
+        assert_eq!(
+            notification,
+            format!("[Ask] \"{}...\" → yes", "a".repeat(57))
+        );
+    }
+
+    #[test]
+    fn test_discuss_result_to_parent_notification() {
+        let result = InteractionResult::DiscussResult {
+            synthesis: "Approach A wins.".to_string(),
+            participant_count: 3,
+        };
+        assert_eq!(
+            result.to_parent_notification("Which approach?"),
+            "[Discuss (3 models)] \"Which approach?\" → Approach A wins."
+        );
+    }
+
+    #[test]
+    fn test_agent_result_to_parent_notification() {
+        let result = InteractionResult::AgentResult {
+            summary: "README updated.".to_string(),
+            success: true,
+        };
+        assert_eq!(
+            result.to_parent_notification("Update the README"),
+            "[Agent (completed)] \"Update the README\" → README updated."
+        );
     }
 
     #[test]
