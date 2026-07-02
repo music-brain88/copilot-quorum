@@ -60,6 +60,8 @@ pub enum UiEvent {
     // === Context Initialization ===
     /// Context initialization starting
     ContextInitStarting { model_count: usize },
+    /// Context initialization progress log (file loading, per-model analysis, synthesis)
+    ContextInitProgress { message: String },
     /// Context initialization completed
     ContextInitResult(ContextInitResultEvent),
     /// Context initialization failed
