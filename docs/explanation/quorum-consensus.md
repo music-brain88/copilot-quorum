@@ -19,24 +19,37 @@ Quorum は 2 つの主要な仕組みで構成されています：
 
 Quorum Discussion は一般的な質問への回答に、Quorum Consensus はエージェントの計画・アクションレビューに使用されます。
 
----
+実行方法は [How to Run a Quorum Discussion](../how-to/run-a-quorum-discussion.md) を参照してください。
 
-## Quick Start / クイックスタート
+### Distributed Systems Analogy / 分散システムとの概念マッピング
 
-```bash
-# Quorum Discussion（3フェーズの議論）
-copilot-quorum "What's the best way to handle errors in Rust?"
+分散データベースでは、複数ノードの過半数（quorum）が合意して初めて操作が確定します。
+copilot-quorum はこの仕組みを LLM に適用しています。
 
-# モデルを指定して Discussion
-copilot-quorum -m claude-sonnet-4.5 -m gpt-5.2-codex "Compare async/await patterns"
+| 分散システム | copilot-quorum | 対応関係 |
+|------------|----------------|----------|
+| Node (ノード) | Model (LLM) | 処理を担う個々のエンティティ |
+| Replication Factor | 参加モデル数 | 参加するノード（モデル）の数 |
+| Quorum (定足数) | Quorum Consensus | 過半数の合意で操作を確定 |
+| Read/Write 操作 | Plan/Action Review | データ操作 → タスク操作 |
+| Consistency Level | `ConsensusLevel` | 何ノード（モデル）の応答を要求するか |
 
-# 全フェーズの出力を表示
-copilot-quorum -o full "Explain the actor model"
+分散データベース Cassandra の `ConsistencyLevel` との具体的な対応：
 
-# REPL で Discussion を実行
-copilot-quorum --chat
-> /discuss What are the tradeoffs of microservices?
-```
+| Cassandra | copilot-quorum | 意味 |
+|-----------|----------------|------|
+| `ConsistencyLevel.ONE` | `ConsensusLevel::Solo` | 1 ノード（モデル）の応答で十分 |
+| `ConsistencyLevel.QUORUM` | `ConsensusLevel::Ensemble` | 過半数のノード（モデル）が合意必要 |
+
+Cassandra が `ConsistencyLevel` を変えるだけで一貫性と可用性のトレードオフを制御できるように、
+copilot-quorum も `ConsensusLevel` を `Solo` ↔ `Ensemble` に切り替えるだけで
+速度と信頼性のトレードオフを制御できます。
+
+Quorum の概念を LLM の文脈で具体化すると、3 つの機能になります：
+
+- **Quorum Discussion**: 複数モデルによる対等な議論（意見収集）— Read Quorum に相当
+- **Quorum Consensus**: 投票による合意形成（承認/却下の判定）— Write Quorum に相当
+- **Quorum Synthesis**: 複数意見の統合・矛盾解決 — Conflict Resolution に相当
 
 ---
 
@@ -131,142 +144,18 @@ graph LR
 | `AtLeast(n)` | 最低 n 票の承認で可決 | `atleast:2` → 2 票以上で承認 |
 | `Percentage(p)` | p% 以上の承認で可決 | `75%` → 75% 以上で承認 |
 
-#### Vote / 投票
-
-```rust
-pub struct Vote {
-    pub model: String,           // モデル識別子
-    pub approved: bool,          // 承認/拒否
-    pub reasoning: String,       // 理由・フィードバック
-    pub confidence: Option<f64>, // 信頼度 (0.0-1.0)
-}
-```
-
-投票結果は `VoteResult` に集約され、視覚的なサマリー（例: `[●●○]`）で表示されます。
-`●` は承認、`○` は却下を表します。
-
-#### ConsensusRound / 合意ラウンド
-
-合意形成の 1 ラウンドを記録するエンティティです。
-エージェントのプランレビューで却下された場合、修正 → 再投票のサイクルを複数ラウンド実行できます。
-
-```rust
-pub struct ConsensusRound {
-    pub round: usize,              // ラウンド番号（1から）
-    pub outcome: ConsensusOutcome, // Approved / Rejected / Pending
-    pub rule: QuorumRule,          // 使用されたルール
-    pub votes: Vec<Vote>,         // 個別投票
-    pub result: VoteResult,       // 集約結果
-}
-```
+投票が却下された場合はフィードバック付きで差し戻され、修正 → 再投票のサイクルを
+複数ラウンド実行できます。`Vote` / `VoteResult` / `ConsensusRound` などの型定義は
+[Orchestration Internals](../reference/orchestration-internals.md) を参照してください。
 
 ---
 
-## Configuration / 設定
+## Related / 関連
 
-```toml
-# quorum.toml
-
-[quorum]
-rule = "majority"        # "majority", "unanimous", "atleast:2", "75%"
-min_models = 2           # 有効な合意に必要な最小モデル数
-
-[quorum.discussion]
-models = ["claude-sonnet-4.5", "gpt-5.2-codex", "gemini-3-pro-preview"]
-moderator = "claude-opus-4.5"
-enable_peer_review = true   # Phase 2 を有効化（false でスキップ可能）
-
-[behavior]
-enable_review = true   # ピアレビューをデフォルトで有効化
-
-[output]
-format = "synthesis"   # "full"（全フェーズ表示）, "synthesis"（統合のみ）, "json"
-```
-
-CLI フラグ:
-
-| Flag | Description |
-|------|-------------|
-| `-m, --model <MODEL>` | 参加モデルを指定（複数可） |
-| `--moderator <MODEL>` | モデレーターを指定 |
-| `--no-review` | ピアレビュー (Phase 2) をスキップ |
-| `-o, --output <FORMAT>` | 出力形式（full / synthesis / json） |
-
----
-
-## Architecture / アーキテクチャ
-
-### Key Files / 主要ファイル
-
-| File | Description |
-|------|-------------|
-| `domain/src/quorum/vote.rs` | `Vote`, `VoteResult` 型の定義 |
-| `domain/src/quorum/rule.rs` | `QuorumRule` 合意ルール定義 |
-| `domain/src/quorum/consensus.rs` | `ConsensusRound`, `ConsensusOutcome` 定義 |
-| `domain/src/orchestration/` | `Phase`, `QuorumRun`, `QuorumResult`, `OrchestrationStrategy` |
-| `application/src/use_cases/run_quorum.rs` | `RunQuorumUseCase` ユースケース |
-| `domain/src/prompt/template.rs` | 各フェーズのプロンプトテンプレート |
-
-### Data Flow / データフロー
-
-```
-User Question
-    │
-    ▼
-RunQuorumUseCase
-    │
-    ├── Phase 1: Initial Query
-    │   ├── Model A (parallel) → Response A
-    │   ├── Model B (parallel) → Response B
-    │   └── Model C (parallel) → Response C
-    │
-    ├── Phase 2: Peer Review
-    │   ├── A reviews [B, C] (anonymized)
-    │   ├── B reviews [A, C] (anonymized)
-    │   └── C reviews [A, B] (anonymized)
-    │
-    └── Phase 3: Synthesis
-        └── Moderator synthesizes all → Final Consensus
-```
-
-非同期処理は `tokio` ランタイム上で `JoinSet` を使って並列化されています。
-
-### StrategyExecutor
-
-Quorum Discussion の実行フローはプラグイン可能な戦略パターンで実装されています。
-`StrategyExecutor` trait を実装することで、新しい議論戦略を追加できます。
-
-```rust
-/// Trait for executing orchestration strategies (domain/src/orchestration/strategy.rs)
-#[async_trait]
-pub trait StrategyExecutor: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn phases(&self) -> Vec<Phase>;
-    async fn execute<G: LlmGateway>(
-        &self,
-        question: &Question,
-        models: &[Model],
-        moderator: &Model,
-        gateway: &G,
-        notifier: &dyn ProgressNotifier,
-    ) -> Result<QuorumResult, DomainError>;
-}
-```
-
-| Strategy | Phases | Description |
-|----------|--------|-------------|
-| `ThreePhaseStrategy` | Initial → Review → Synthesis | 標準の 3 フェーズ議論（デフォルト） |
-| `FastStrategy` | Initial → Synthesis | レビューをスキップした高速モード |
-| `DebateStrategy` | モデル間の議論 | インターモデル討論 |
-
-定義ファイル: `domain/src/orchestration/strategy.rs`
-
----
-
-## Related Features / 関連機能
-
-- [Agent System](../systems/agent-system.md) - Quorum Consensus を計画・アクションレビューで使用
+- [How to Run a Quorum Discussion](../how-to/run-a-quorum-discussion.md) - 実行手順と設定方法
+- [Orchestration Internals](../reference/orchestration-internals.md) - 主要ファイル・データフロー・型定義
+- [Agent Behavior](./agent-behavior.md) - Quorum Consensus を使う計画・アクションレビュー
 - [Ensemble Mode](./ensemble-mode.md) - 複数モデルの独立計画生成で Quorum の仕組みを活用
-- [CLI & Configuration](../guides/cli-and-configuration.md) - `/discuss` コマンドで Discussion を実行
+- [ADR 0003: Restore Quorum Consensus Level](./design-decisions/0003-restore-quorum-consensus-level.md) - Solo/Ensemble 導入の経緯
 
 <!-- LLM Context: Quorum は copilot-quorum のコア概念。Discussion は 3 フェーズ（Initial Query → Peer Review → Synthesis）の議論プロセス。Consensus は Vote + QuorumRule による承認/却下メカニズム。StrategyExecutor trait（旧 OrchestrationStrategy trait）で議論戦略をプラグイン可能。OrchestrationStrategy は enum（Quorum/Debate の variant）。主要ファイルは domain/src/quorum/（vote.rs, rule.rs, consensus.rs）、domain/src/orchestration/strategy.rs（StrategyExecutor trait, OrchestrationStrategy enum）、application/src/use_cases/run_quorum.rs（RunQuorumUseCase）。 -->

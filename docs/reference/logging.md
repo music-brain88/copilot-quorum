@@ -22,15 +22,8 @@ copilot-quorum のログシステムは **3 種類のログ** を分離して管
 ## 操作ログ（tracing ベース）
 
 標準的な Rust の `tracing` エコシステムを使用した操作ログです。
-人間が読むための診断メッセージで、`RUST_LOG` 環境変数で制御されます。
-
-```bash
-# デバッグログ有効化
-RUST_LOG=debug cargo run -p copilot-quorum -- "Your question"
-
-# 特定クレートのみ
-RUST_LOG=quorum_infrastructure=trace cargo run -p copilot-quorum -- "Your question"
-```
+人間が読むための診断メッセージで、`RUST_LOG` 環境変数または `-v` フラグで制御されます。
+有効化の手順は [How to Debug with Logs](../how-to/debug-with-logs.md) を参照してください。
 
 ### 依存関係
 
@@ -43,12 +36,7 @@ tracing-appender = "0.2"
 
 ### 使い分けの指針
 
-| シナリオ | 使うべきログ |
-|---------|------------|
-| 「セッション作成に失敗した」 | `tracing::warn!` (操作ログ) |
-| 「LLM が 500 トークン返した」 | `ConversationLogger` (会話ログ) |
-| 「TCP 上の raw メッセージ内容」 | `tracing::debug!` (transport dump) |
-| 「ツール実行に 3 秒かかった」 | 両方（操作ログ + 会話ログの metadata） |
+シナリオ別にどのログを見るべきかは [How to Debug with Logs](../how-to/debug-with-logs.md) を参照してください。
 
 ---
 
@@ -200,5 +188,11 @@ let logger = JsonlConversationLogger::new("path/to/conversation.jsonl");
 | `application/src/ports/conversation_logger.rs` | ConversationLogger trait, ConversationEvent, NoConversationLogger |
 | `infrastructure/src/logging/mod.rs` | Module re-exports |
 | `infrastructure/src/logging/jsonl_logger.rs` | JsonlConversationLogger (JSONL 実装) |
+
+
+## Related / 関連
+
+- [How to Debug with Logs](../how-to/debug-with-logs.md) - ログの有効化と使い分け
+- [Transport Reference](./transport.md) - transport dump の発生源
 
 <!-- LLM Context: ログシステムは 3 分割設計: (1) tracing ベース操作ログ (RUST_LOG 制御), (2) ConversationLogger port による JSONL 会話トランスクリプト, (3) transport dump。ConversationLogger は application 層の port で、log() は同期・non-fallible（best-effort）。JsonlConversationLogger が infrastructure 層の実装で、Mutex<BufWriter<File>> によるスレッド安全な JSONL 書き出し。各行は type + timestamp + フラット展開された payload。NoConversationLogger はテスト用 NOP。主要ファイルは application/src/ports/conversation_logger.rs と infrastructure/src/logging/jsonl_logger.rs。 -->
