@@ -224,8 +224,11 @@ impl TuiPresenter {
         self.emit(TuiEvent::AgentError(msg));
     }
 
-    fn handle_ask_result(&self, state: &mut TuiState, result: &AskResultEvent) {
-        state.push_message(DisplayMessage::assistant(result.answer.clone()));
+    fn handle_ask_result(&self, _state: &mut TuiState, _result: &AskResultEvent) {
+        // The answer is displayed via streaming: StreamChunk accumulates into
+        // streaming_text and StreamEnd finalizes it as an assistant message
+        // (routed to the correct interaction pane). Pushing result.answer here
+        // would duplicate it (#267), so only emit the completion event.
         self.emit(TuiEvent::AgentResult {
             success: true,
             summary: "Ask completed".into(),
@@ -334,6 +337,60 @@ mod tests {
         let (presenter, _rx, mut state) = setup();
         presenter.apply(&mut state, &UiEvent::Exit);
         assert!(state.should_quit);
+    }
+
+    #[test]
+    fn test_ask_result_does_not_duplicate_streamed_answer() {
+        // Regression test for #267: the answer is finalized from streaming
+        // (StreamEnd → finalize_stream), so AskResult must not push it again.
+        let (presenter, mut rx, mut state) = setup();
+
+        // Simulate streaming of the answer followed by StreamEnd finalization
+        state.tabs.active_pane_mut().conversation.streaming_text = "4".into();
+        state.finalize_stream();
+
+        presenter.apply(
+            &mut state,
+            &UiEvent::AskResult(AskResultEvent { answer: "4".into() }),
+        );
+
+        let messages = &state.tabs.active_pane().conversation.messages;
+        let assistant_count = messages
+            .iter()
+            .filter(|m| m.role == super::super::state::MessageRole::Assistant)
+            .count();
+        assert_eq!(assistant_count, 1, "answer must appear exactly once");
+
+        // Completion event is still emitted for progress/remote consumers
+        assert!(matches!(
+            rx.try_recv().unwrap().event,
+            TuiEvent::AgentResult { success: true, .. }
+        ));
+    }
+
+    #[test]
+    fn test_ask_result_before_stream_end_does_not_duplicate() {
+        // ui_rx is prioritized over tui_event_rx (biased select!), so
+        // AskResult can be applied before StreamEnd. The answer must still
+        // appear exactly once after the stream is finalized.
+        let (presenter, _rx, mut state) = setup();
+
+        state.tabs.active_pane_mut().conversation.streaming_text = "4".into();
+
+        presenter.apply(
+            &mut state,
+            &UiEvent::AskResult(AskResultEvent { answer: "4".into() }),
+        );
+
+        // StreamEnd arrives afterwards
+        state.finalize_stream();
+
+        let messages = &state.tabs.active_pane().conversation.messages;
+        let assistant_count = messages
+            .iter()
+            .filter(|m| m.role == super::super::state::MessageRole::Assistant)
+            .count();
+        assert_eq!(assistant_count, 1, "answer must appear exactly once");
     }
 
     #[test]
