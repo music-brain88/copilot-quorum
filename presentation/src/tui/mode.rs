@@ -369,6 +369,21 @@ fn handle_visual(key: KeyEvent) -> KeyAction {
     }
 }
 
+/// Whether a `Char` key event is genuine text input.
+///
+/// Control chords are never text: the legacy terminal encoding maps NUL
+/// (0x00) to Ctrl+Space, which crossterm parses as `Char(' ')` + CONTROL.
+/// Headless ptys can deliver a stray NUL at startup, which without this
+/// guard shows up as a space in the input buffer (#270). Ctrl+Space on a
+/// real terminal (e.g. IME toggle leaking through) hits the same path.
+/// SHIFT stays allowed (uppercase letters), and so does ALT (Alt+Enter is
+/// matched explicitly before the `Char` arms).
+fn is_text_input(key: &KeyEvent) -> bool {
+    !key.modifiers.intersects(
+        KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::HYPER | KeyModifiers::META,
+    )
+}
+
 fn handle_insert(key: KeyEvent) -> KeyAction {
     match key.code {
         KeyCode::Esc => KeyAction::ExitToNormal,
@@ -386,7 +401,7 @@ fn handle_insert(key: KeyEvent) -> KeyAction {
         KeyCode::Right => KeyAction::CursorRight,
         KeyCode::Home => KeyAction::CursorHome,
         KeyCode::End => KeyAction::CursorEnd,
-        KeyCode::Char(c) => KeyAction::InsertChar(c),
+        KeyCode::Char(c) if is_text_input(&key) => KeyAction::InsertChar(c),
         _ => KeyAction::None,
     }
 }
@@ -400,7 +415,7 @@ fn handle_command(key: KeyEvent) -> KeyAction {
         KeyCode::Right => KeyAction::CursorRight,
         KeyCode::Home => KeyAction::CursorHome,
         KeyCode::End => KeyAction::CursorEnd,
-        KeyCode::Char(c) => KeyAction::InsertChar(c),
+        KeyCode::Char(c) if is_text_input(&key) => KeyAction::InsertChar(c),
         _ => KeyAction::None,
     }
 }
@@ -500,6 +515,42 @@ mod tests {
         assert_eq!(
             handle_key_event(InputMode::Insert, key, None),
             KeyAction::InsertChar('[')
+        );
+    }
+
+    #[test]
+    fn test_ctrl_space_does_not_insert() {
+        // NUL (0x00) is the legacy encoding of Ctrl+Space; crossterm parses
+        // it as Char(' ') + CONTROL. Headless ptys can deliver a stray NUL
+        // at startup — it must not become a space in the input (#270).
+        let key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL);
+        for mode in [InputMode::Insert, InputMode::Command] {
+            assert_eq!(
+                handle_key_event(mode, key, None),
+                KeyAction::None,
+                "Ctrl+Space must not insert text in {:?}",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn test_control_modified_char_does_not_insert() {
+        // Control chords are commands, not text (Vim behavior)
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        for mode in [InputMode::Insert, InputMode::Command] {
+            assert_eq!(handle_key_event(mode, key, None), KeyAction::None);
+        }
+    }
+
+    #[test]
+    fn test_shifted_char_still_inserts() {
+        // Uppercase letters arrive with SHIFT under kitty protocol —
+        // they must still be treated as text input
+        let key = KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Insert, key, None),
+            KeyAction::InsertChar('X')
         );
     }
 
