@@ -63,8 +63,21 @@ pub(super) fn handle_action(
             let cmd = state.take_command();
             state.mode = InputMode::Normal;
             if !cmd.is_empty() {
-                if cmd == "q" || cmd == "quit" || cmd == "exit" {
+                if cmd == "qa" || cmd == "qall" || cmd == "quitall" || cmd == "exit" {
+                    // Vim-style: :qa / :qall always quits the whole app.
                     state.should_quit = true;
+                } else if cmd == "q" || cmd == "quit" {
+                    // Vim-style: with multiple tabs, :q closes the current tab
+                    // (:tabclose); on the last tab it quits the app.
+                    if state.tabs.len() > 1 {
+                        if let Some(flash) =
+                            super::app_tab_command::handle_tab_command(state, "tabclose", cmd_tx)
+                        {
+                            state.set_flash(flash);
+                        }
+                    } else {
+                        state.should_quit = true;
+                    }
                 } else if let Some(flash) =
                     super::app_tab_command::handle_tab_command(state, &cmd, cmd_tx)
                 {
