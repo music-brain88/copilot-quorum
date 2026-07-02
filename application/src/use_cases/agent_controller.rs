@@ -935,11 +935,9 @@ impl InitContextProgressNotifier for InitContextProgressBridge<'_> {
     }
 
     fn on_analysis_start(&self, model_count: usize) {
-        self.progress.on_quorum_start("Context Analysis", model_count);
-        self.log(format!(
-            "Analyzing project with {} models...",
-            model_count
-        ));
+        self.progress
+            .on_quorum_start("Context Analysis", model_count);
+        self.log(format!("Analyzing project with {} models...", model_count));
     }
 
     fn on_model_complete(&self, model: &Model) {
