@@ -137,7 +137,7 @@ impl ReplPresenter {
                     "⚠️".yellow(),
                     ".quorum/context.md".cyan()
                 );
-                println!("Use {} to regenerate.", "/init --force".cyan());
+                println!("Use {} to regenerate.", "/init! (or /init --force)".cyan());
                 println!();
             }
             UiEvent::CommandError { message } => {
@@ -247,7 +247,7 @@ impl ReplPresenter {
         println!("  /agent <task>        - Agent (autonomous task execution)");
         println!();
         println!("{}", "Other Commands:".bold());
-        println!("  /init [--force]      - Initialize project context");
+        println!("  /init[!]             - Initialize project context (! = force regenerate)");
         println!("  /config              - Show current configuration");
         println!("  /clear               - Clear conversation history");
         println!("  /verbose             - Toggle verbose mode");
