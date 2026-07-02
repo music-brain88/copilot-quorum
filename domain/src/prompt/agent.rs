@@ -570,6 +570,9 @@ Output format:
 ## Key Directories
 [Important directories and their purposes]
 
+## Build & Test
+[How to build, test, and run the project — include concrete commands]
+
 ## Key Concepts
 [Important domain concepts or abstractions]
 
@@ -1040,5 +1043,25 @@ mod tests {
 
         assert!(prompt.contains("[✓] Run unit tests"));
         assert!(prompt.contains("[✗] Run integration tests"));
+    }
+
+    #[test]
+    fn test_context_synthesis_system_includes_build_section() {
+        let prompt = AgentPromptTemplate::context_synthesis_system();
+
+        // The analysis prompt collects Build System info, so the synthesis
+        // output template must retain a Build section — otherwise the
+        // build/test commands are dropped from context.md (issue #291).
+        assert!(prompt.contains("## Build & Test"));
+        assert!(prompt.contains("## Overview"));
+        assert!(prompt.contains("## Key Concepts"));
+    }
+
+    #[test]
+    fn test_context_analysis_asks_about_build_system() {
+        let prompt = AgentPromptTemplate::context_analysis("Cargo.toml\nsrc/main.rs");
+
+        assert!(prompt.contains("Build System"));
+        assert!(prompt.contains("Cargo.toml"));
     }
 }
