@@ -126,6 +126,13 @@ impl TuiPresenter {
                 self.emit(TuiEvent::AgentError(error.clone()));
             }
             UiEvent::ContextInitStarting { model_count } => {
+                // Mark the pane as running so the header shows the live phase
+                // instead of "Ready" while context generation is in flight.
+                {
+                    let progress = &mut state.tabs.active_pane_mut().progress;
+                    progress.is_running = true;
+                    progress.phase_name = "Gathering Context".to_string();
+                }
                 state.push_message(DisplayMessage::system(format!(
                     "Initializing context with {} models...",
                     model_count
@@ -255,6 +262,7 @@ impl TuiPresenter {
         let progress = &mut state.tabs.active_pane_mut().progress;
         progress.current_phase = None;
         progress.quorum_status = None;
+        progress.is_running = false;
     }
 
     fn emit(&self, event: TuiEvent) {
@@ -578,5 +586,52 @@ mod tests {
         assert!(!state.tabs.active_pane().progress.is_running);
         // streaming text finalized + error message
         assert!(state.tabs.active_pane().conversation.messages.len() >= 2);
+    }
+
+    #[test]
+    fn test_context_init_marks_header_running_then_idle() {
+        // Regression test for #261: while /init runs, the header must show the
+        // live phase (is_running = true) instead of "Ready"; once the context
+        // is saved it returns to idle.
+        let (presenter, _rx, mut state) = setup();
+
+        presenter.apply(&mut state, &UiEvent::ContextInitStarting { model_count: 2 });
+        assert!(
+            state.tabs.active_pane().progress.is_running,
+            "header must report a running phase during init"
+        );
+        assert_eq!(
+            state.tabs.active_pane().progress.phase_name,
+            "Gathering Context"
+        );
+
+        presenter.apply(
+            &mut state,
+            &UiEvent::ContextInitResult(ContextInitResultEvent {
+                path: ".quorum/context.md".into(),
+                content: "ctx".into(),
+                contributing_models: vec!["m".into()],
+            }),
+        );
+        assert!(
+            !state.tabs.active_pane().progress.is_running,
+            "header must return to idle after init completes"
+        );
+    }
+
+    #[test]
+    fn test_context_init_error_resets_running() {
+        // A failed /init must also clear the running flag so the header does
+        // not stay stuck on a phase.
+        let (presenter, _rx, mut state) = setup();
+
+        presenter.apply(&mut state, &UiEvent::ContextInitStarting { model_count: 2 });
+        presenter.apply(
+            &mut state,
+            &UiEvent::ContextInitError {
+                error: "boom".into(),
+            },
+        );
+        assert!(!state.tabs.active_pane().progress.is_running);
     }
 }
