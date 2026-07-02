@@ -522,6 +522,9 @@ fn format_ymd(date: chrono::NaiveDate) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::llm_gateway::LlmSession;
+    use quorum_domain::context::{KnownContextFile, LoadedContextFile};
+    use std::sync::Mutex;
 
     #[test]
     fn test_init_context_input() {
@@ -589,5 +592,81 @@ mod tests {
         let now = chrono::Local::now();
         let expected = format_ymd(now.date_naive());
         assert_eq!(current_date_from(now), expected);
+    }
+
+    /// Gateway whose sessions never open, so every model analysis fails.
+    struct FailingGateway;
+
+    #[async_trait::async_trait]
+    impl LlmGateway for FailingGateway {
+        async fn create_session(
+            &self,
+            _model: &Model,
+        ) -> Result<Box<dyn LlmSession>, GatewayError> {
+            Err(GatewayError::Other("session unavailable".into()))
+        }
+
+        async fn create_session_with_system_prompt(
+            &self,
+            model: &Model,
+            _system_prompt: &str,
+        ) -> Result<Box<dyn LlmSession>, GatewayError> {
+            self.create_session(model).await
+        }
+
+        async fn available_models(&self) -> Result<Vec<Model>, GatewayError> {
+            Ok(vec![])
+        }
+    }
+
+    /// Context loader stub that reports one loadable file and no existing output.
+    struct StubLoader;
+
+    impl ContextLoaderPort for StubLoader {
+        fn load_known_files(&self, _project_root: &Path) -> Vec<LoadedContextFile> {
+            vec![LoadedContextFile::new(
+                KnownContextFile::CargoToml,
+                "/project/Cargo.toml",
+                "[package]\nname = \"demo\"",
+            )]
+        }
+
+        fn context_file_exists(&self, _project_root: &Path) -> bool {
+            false
+        }
+
+        fn write_context_file(&self, _project_root: &Path, _content: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingProgress {
+        failed: Mutex<Vec<String>>,
+    }
+
+    impl InitContextProgressNotifier for RecordingProgress {
+        fn on_model_failed(&self, model: &Model, _error: &str) {
+            self.failed.lock().unwrap().push(model.to_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_model_failure_is_reported_to_progress() {
+        // Regression test for #261: a model that fails during analysis must be
+        // surfaced via on_model_failed, not silently swallowed.
+        let use_case = InitContextUseCase::new(Arc::new(FailingGateway), Arc::new(StubLoader));
+        let input = InitContextInput::new("/project", vec![Model::default()])
+            .with_moderator(Model::default());
+        let progress = RecordingProgress::default();
+
+        let result = use_case.execute_with_progress(input, &progress).await;
+
+        assert!(matches!(result, Err(InitContextError::AllModelsFailed)));
+        assert_eq!(
+            progress.failed.lock().unwrap().len(),
+            1,
+            "the failed model must be reported exactly once"
+        );
     }
 }
