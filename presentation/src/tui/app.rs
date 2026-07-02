@@ -350,6 +350,15 @@ impl TuiApp {
 
     /// Run the TUI main loop
     pub async fn run(&mut self) -> io::Result<()> {
+        // Validate the remote-control socket path (--listen) up front, before
+        // touching the terminal. A too-long path otherwise fails deep in libc
+        // bind() with the opaque "SUN_LEN" message *after* raw mode is enabled,
+        // corrupting the screen; validating here surfaces a friendly error on a
+        // clean terminal. (#272)
+        if let Some(path) = &self.listen_path {
+            super::remote::validate_socket_path(path)?;
+        }
+
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();

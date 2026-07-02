@@ -55,7 +55,8 @@ use super::tab::PaneKind;
 use quorum_domain::HumanDecision;
 use quorum_domain::interaction::InteractionForm;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -102,6 +103,42 @@ impl RemoteError {
 }
 
 // ---------------------------------------------------------------------------
+// Socket path validation
+// ---------------------------------------------------------------------------
+
+/// Maximum byte length of a Unix domain socket path.
+///
+/// `sockaddr_un.sun_path` holds 108 bytes on Linux/Android (104 on
+/// macOS/BSD), including the trailing NUL — so the usable path is one byte
+/// shorter. Binding a longer path fails deep inside libc with the opaque
+/// "path must be shorter than SUN_LEN"; we check up front instead. (#272)
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) const MAX_SOCKET_PATH_LEN: usize = 107;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub(super) const MAX_SOCKET_PATH_LEN: usize = 103;
+
+/// Validate that `path` fits within the Unix domain socket length limit.
+///
+/// Returns a human-readable `InvalidInput` error (byte count + limit +
+/// example) rather than letting `UnixListener::bind` fail later with the
+/// opaque libc `SUN_LEN` message. Called from `TuiApp::run` before the
+/// terminal is put into raw mode, so the message reaches the user on a
+/// clean screen. (#272)
+pub(super) fn validate_socket_path(path: &Path) -> std::io::Result<()> {
+    let len = path.as_os_str().as_bytes().len();
+    if len > MAX_SOCKET_PATH_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "ソケットパスが長すぎます ({len} バイト、上限は {MAX_SOCKET_PATH_LEN} バイト)。\
+                 短いパスを指定してください: --listen /tmp/quorum.sock"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Socket listener
 // ---------------------------------------------------------------------------
 
@@ -113,6 +150,7 @@ pub fn spawn_listener(
     path: PathBuf,
     tx: mpsc::UnboundedSender<RemoteRequest>,
 ) -> std::io::Result<()> {
+    validate_socket_path(&path)?;
     if path.exists() {
         std::fs::remove_file(&path)?;
     }
@@ -1013,6 +1051,30 @@ mod tests {
         assert_eq!(err.code, -32602);
         // Nothing was fed: input buffer untouched
         assert_eq!(state.tabs.active_pane().input, "");
+    }
+
+    #[test]
+    fn validate_socket_path_accepts_short_path() {
+        assert!(validate_socket_path(Path::new("/tmp/quorum.sock")).is_ok());
+        // Exactly at the limit is allowed.
+        let at_limit = "a".repeat(MAX_SOCKET_PATH_LEN);
+        assert!(validate_socket_path(Path::new(&at_limit)).is_ok());
+    }
+
+    #[test]
+    fn validate_socket_path_rejects_long_path_with_friendly_message() {
+        let too_long = "a".repeat(MAX_SOCKET_PATH_LEN + 1);
+        let err = validate_socket_path(Path::new(&too_long)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let msg = err.to_string();
+        // Human-readable: no libc jargon, includes both byte counts.
+        assert!(
+            !msg.contains("SUN_LEN"),
+            "message leaked libc jargon: {msg}"
+        );
+        assert!(msg.contains(&(MAX_SOCKET_PATH_LEN + 1).to_string()));
+        assert!(msg.contains(&MAX_SOCKET_PATH_LEN.to_string()));
+        assert!(msg.contains("--listen"));
     }
 
     #[test]
