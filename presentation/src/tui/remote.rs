@@ -737,9 +737,16 @@ fn command_exec(
         return Err(RemoteError::invalid_params("'command' must not be empty"));
     }
 
-    if cmd == "q" || cmd == "quit" || cmd == "exit" {
-        state.should_quit = true;
-        return Ok(json!({"ok": true, "quit": true}));
+    match super::app_tab_command::handle_quit_command(state, &cmd, cmd_tx) {
+        super::app_tab_command::QuitOutcome::QuitApp => {
+            state.should_quit = true;
+            return Ok(json!({"ok": true, "quit": true}));
+        }
+        super::app_tab_command::QuitOutcome::TabClosed(flash) => {
+            state.set_flash(flash.clone());
+            return Ok(json!({"ok": true, "quit": false, "flash": flash}));
+        }
+        super::app_tab_command::QuitOutcome::NotQuit => {}
     }
     if let Some(flash) = super::app_tab_command::handle_tab_command(state, &cmd, cmd_tx) {
         state.set_flash(flash.clone());
@@ -1181,5 +1188,100 @@ mod tests {
         assert_eq!(result["layout"]["preset"], "default");
         assert_eq!(result["layout"]["flex_threshold"], 120);
         assert!(result["visual_selection"].is_null());
+    }
+
+    #[test]
+    fn command_exec_q_on_last_tab_quits() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        assert_eq!(state.tabs.len(), 1);
+
+        let result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "command.exec",
+            &json!({"command": "q"}),
+        )
+        .unwrap();
+        assert_eq!(result["quit"], true);
+        assert!(state.should_quit);
+    }
+
+    #[test]
+    fn command_exec_q_with_multiple_tabs_closes_tab() {
+        use super::super::tab::PaneKind;
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        assert_eq!(state.tabs.len(), 2);
+
+        let result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "command.exec",
+            &json!({"command": "q"}),
+        )
+        .unwrap();
+        // Tab closed, app stays alive.
+        assert_eq!(result["quit"], false);
+        assert!(result.get("flash").is_some());
+        assert!(!state.should_quit);
+        assert_eq!(state.tabs.len(), 1);
+    }
+
+    #[test]
+    fn command_exec_q_bang_is_tab_aware() {
+        use super::super::tab::PaneKind;
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+
+        // With 2 tabs, `q!` closes the tab (does not reach the controller's /q).
+        let result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "command.exec",
+            &json!({"command": "q!"}),
+        )
+        .unwrap();
+        assert_eq!(result["quit"], false);
+        assert!(!state.should_quit);
+        assert_eq!(state.tabs.len(), 1);
+
+        // On the last tab, `q!` quits the app.
+        let result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "command.exec",
+            &json!({"command": "q!"}),
+        )
+        .unwrap();
+        assert_eq!(result["quit"], true);
+        assert!(state.should_quit);
+    }
+
+    #[test]
+    fn command_exec_qa_quits_with_multiple_tabs() {
+        use super::super::tab::PaneKind;
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        assert_eq!(state.tabs.len(), 2);
+
+        let result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "command.exec",
+            &json!({"command": "qa"}),
+        )
+        .unwrap();
+        assert_eq!(result["quit"], true);
+        assert!(state.should_quit);
     }
 }

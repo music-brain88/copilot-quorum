@@ -65,7 +65,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
                 }
                 crate::tui::mode::InputMode::Insert => "Enter:send  Esc:normal  Ctrl+C:quit".into(),
                 crate::tui::mode::InputMode::Command => {
-                    "Enter:execute  Esc:cancel  q:quit  help:commands".into()
+                    "Enter:execute  Esc:cancel  q:close tab  qa:quit  help:commands".into()
                 }
                 crate::tui::mode::InputMode::Visual => {
                     "hjkl/wb:extend  y/Enter:yank  Esc/v:cancel".into()

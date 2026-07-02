@@ -16,6 +16,8 @@ quorum.config.set("agent.hil_mode", "auto_approve")
 quorum.config["models.exploration"] = "gpt-5.2-codex"
 
 -- キーバインド
+-- 注意: builtin アクション "quit" はタブ数に関係なくアプリ全体を終了する
+-- (:qa 相当。タブを閉じる :q 相当の builtin は未実装 — #284)
 quorum.keymap.set("normal", "q", "quit")
 quorum.keymap.set("normal", "r", function()
     quorum.config.set("agent.hil_mode", "interactive")

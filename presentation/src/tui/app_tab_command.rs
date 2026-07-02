@@ -6,6 +6,59 @@ use super::tab::PaneKind;
 use quorum_domain::interaction::InteractionForm;
 use tokio::sync::mpsc;
 
+/// Outcome of a quit-family command (`:q`, `:qa`, ...).
+pub(super) enum QuitOutcome {
+    /// Not a quit-family command.
+    NotQuit,
+    /// Quit the whole app (caller sets `should_quit`).
+    QuitApp,
+    /// Closed the active tab; flash message to display.
+    TabClosed(String),
+}
+
+/// Handle quit-family commands with Vim-style tab-aware semantics:
+/// `:q`/`:quit` close the active tab when multiple tabs are open and quit the
+/// app on the last one; `:qa`/`:qall`/`quitall`/`exit` always quit the app.
+/// A trailing bang (`:q!`) is accepted and behaves the same — there is no
+/// unsaved-buffer state to discard.
+///
+/// Shared by the TUI command path (`KeyAction::SubmitCommand`) and the Remote
+/// Control API (`command.exec`) so the two never diverge.
+pub(super) fn handle_quit_command(
+    state: &mut TuiState,
+    cmd: &str,
+    cmd_tx: &mpsc::UnboundedSender<TuiCommand>,
+) -> QuitOutcome {
+    let normalized = cmd.trim();
+    let normalized = normalized.strip_suffix('!').unwrap_or(normalized);
+    match normalized {
+        "qa" | "qall" | "quitall" | "exit" => QuitOutcome::QuitApp,
+        "q" | "quit" => match close_active_tab(state, cmd_tx) {
+            Some(flash) => QuitOutcome::TabClosed(flash),
+            // Last tab — nothing left to close, quit the app.
+            None => QuitOutcome::QuitApp,
+        },
+        _ => QuitOutcome::NotQuit,
+    }
+}
+
+/// Try to close the active tab. On success, resyncs the controller's active
+/// interaction with the new active tab and returns the flash message.
+/// Returns None when this is the last tab (which cannot be closed).
+fn close_active_tab(
+    state: &mut TuiState,
+    cmd_tx: &mpsc::UnboundedSender<TuiCommand>,
+) -> Option<String> {
+    if !state.tabs.close_active() {
+        return None;
+    }
+    // Sync active_interaction_id with the new active tab
+    if let PaneKind::Interaction(_, Some(id)) = state.tabs.active_pane().kind {
+        let _ = cmd_tx.send(TuiCommand::ActivateInteraction(id));
+    }
+    Some(format!("Tab closed ({} remaining)", state.tabs.len()))
+}
+
 /// Handle tab-related commands locally (no controller round-trip).
 /// Returns Some(flash_message) if a tab command was handled, None otherwise.
 pub(super) fn handle_tab_command(
@@ -54,15 +107,10 @@ pub(super) fn handle_tab_command(
     }
 
     if trimmed == "tabclose" {
-        if state.tabs.close_active() {
-            // Sync active_interaction_id with the new active tab
-            if let PaneKind::Interaction(_, Some(id)) = state.tabs.active_pane().kind {
-                let _ = cmd_tx.send(TuiCommand::ActivateInteraction(id));
-            }
-            return Some(format!("Tab closed ({} remaining)", state.tabs.len()));
-        } else {
-            return Some("Cannot close last tab".into());
-        }
+        return Some(match close_active_tab(state, cmd_tx) {
+            Some(flash) => flash,
+            None => "Cannot close last tab".into(),
+        });
     }
 
     if trimmed == "tabnew" || trimmed.starts_with("tabnew ") {
@@ -82,4 +130,85 @@ pub(super) fn handle_tab_command(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup() -> (
+        TuiState,
+        mpsc::UnboundedSender<TuiCommand>,
+        mpsc::UnboundedReceiver<TuiCommand>,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (TuiState::new(), tx, rx)
+    }
+
+    #[test]
+    fn quit_on_last_tab_quits_app() {
+        let (mut state, tx, _rx) = setup();
+        assert!(matches!(
+            handle_quit_command(&mut state, "q", &tx),
+            QuitOutcome::QuitApp
+        ));
+    }
+
+    #[test]
+    fn quit_with_multiple_tabs_closes_tab() {
+        let (mut state, tx, _rx) = setup();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        assert_eq!(state.tabs.len(), 2);
+        assert!(matches!(
+            handle_quit_command(&mut state, "quit", &tx),
+            QuitOutcome::TabClosed(_)
+        ));
+        assert_eq!(state.tabs.len(), 1);
+    }
+
+    #[test]
+    fn bang_variant_is_tab_aware() {
+        let (mut state, tx, _rx) = setup();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Ask, None));
+        assert!(matches!(
+            handle_quit_command(&mut state, "q!", &tx),
+            QuitOutcome::TabClosed(_)
+        ));
+        // Last tab — bang quits the app.
+        assert!(matches!(
+            handle_quit_command(&mut state, "q!", &tx),
+            QuitOutcome::QuitApp
+        ));
+    }
+
+    #[test]
+    fn qa_always_quits_app() {
+        let (mut state, tx, _rx) = setup();
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, None));
+        for cmd in ["qa", "qall", "quitall", "exit", "qa!"] {
+            assert!(matches!(
+                handle_quit_command(&mut state, cmd, &tx),
+                QuitOutcome::QuitApp
+            ));
+        }
+        // No tab was closed along the way.
+        assert_eq!(state.tabs.len(), 2);
+    }
+
+    #[test]
+    fn non_quit_commands_pass_through() {
+        let (mut state, tx, _rx) = setup();
+        for cmd in ["tabclose", "solo", "quite", "q2"] {
+            assert!(matches!(
+                handle_quit_command(&mut state, cmd, &tx),
+                QuitOutcome::NotQuit
+            ));
+        }
+    }
 }

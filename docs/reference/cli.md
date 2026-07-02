@@ -76,7 +76,8 @@ TUI の Command モード（`:`）で使えるコマンド（抜粋）:
 | `:tabnew [form]` | 新規タブ作成（form: agent / ask / discuss） |
 | `:tabs` | タブ一覧を表示 |
 | `:tabclose` | アクティブタブを閉じる |
-| `:q` | 終了 |
+| `:q` / `:quit` | 複数タブ時はアクティブタブを閉じる（`:tabclose` 相当）。最後の 1 枚ではアプリ終了 |
+| `:qa` / `:qall` | 全タブを閉じてアプリ終了（Vim 準拠） |
 
 モード操作やキーバインドの全体像は [How to Use the TUI](../how-to/use-the-tui.md) を参照してください。
 
@@ -90,4 +91,4 @@ TUI の Command モード（`:`）で使えるコマンド（抜粋）:
 - [How to Use the TUI](../how-to/use-the-tui.md) - モーダル操作の使い方
 - [Orchestration Axes](../explanation/orchestration-axes.md) - `/solo` `/scope` `/strategy` が変更する 3 軸の意味
 
-<!-- LLM Context: CLI フラグは presentation/src/cli/commands.rs で定義。--solo/--ensemble(排他), --no-quorum, -m/--model(複数可), --final-review, -w/--working-dir, -o/--output, -v(count), --show-votes, -q/--quiet, --log-dir, --no-log-file, --show-config, --listen(Remote Control API)。--chat/--config/--moderator/--no-review フラグは存在しない(旧ドキュメントの残骸)。REPL: /solo /ens /fast /scope /strategy /council /init /config /clear /quit。TUI command mode: agent/ask/discuss <query>, tabnew, tabs, tabclose。 -->
+<!-- LLM Context: CLI フラグは presentation/src/cli/commands.rs で定義。--solo/--ensemble(排他), --no-quorum, -m/--model(複数可), --final-review, -w/--working-dir, -o/--output, -v(count), --show-votes, -q/--quiet, --log-dir, --no-log-file, --show-config, --listen(Remote Control API)。--chat/--config/--moderator/--no-review フラグは存在しない(旧ドキュメントの残骸)。REPL: /solo /ens /fast /scope /strategy /council /init /config /clear /quit。TUI command mode: agent/ask/discuss <query>, tabnew, tabs, tabclose, q/quit(タブ数>1 で tabclose 相当・最後の1枚で終了), qa/qall(全体終了)。 -->
