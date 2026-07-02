@@ -1068,7 +1068,10 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         let msg = err.to_string();
         // Human-readable: no libc jargon, includes both byte counts.
-        assert!(!msg.contains("SUN_LEN"), "message leaked libc jargon: {msg}");
+        assert!(
+            !msg.contains("SUN_LEN"),
+            "message leaked libc jargon: {msg}"
+        );
         assert!(msg.contains(&(MAX_SOCKET_PATH_LEN + 1).to_string()));
         assert!(msg.contains(&MAX_SOCKET_PATH_LEN.to_string()));
         assert!(msg.contains("--listen"));
