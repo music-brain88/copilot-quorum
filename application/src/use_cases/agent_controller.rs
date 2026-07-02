@@ -295,6 +295,10 @@ impl AgentController {
         let command = parts.first().copied().unwrap_or("");
         let args = parts.get(1).copied().unwrap_or("").trim();
 
+        // Vim-style bang: `:init!` / `:q!` — strip the trailing `!` and pass
+        // it as a force flag to commands that support it.
+        let (command, bang) = split_bang(command);
+
         match command {
             "/quit" | "/exit" | "/q" => {
                 let _ = self.tx.send(UiEvent::Exit);
@@ -414,7 +418,7 @@ impl AgentController {
                 CommandAction::Continue
             }
             "/init" => {
-                self.run_init_context(args).await;
+                self.run_init_context(args, bang).await;
                 CommandAction::Continue
             }
             "/verbose" => {
@@ -594,8 +598,10 @@ impl AgentController {
     }
 
     /// Run context initialization
-    pub async fn run_init_context(&self, args: &str) {
-        let force = args.contains("--force") || args.contains("-f");
+    ///
+    /// `bang` は Vim スタイルの強制フラグ（`:init!`）。`--force` / `-f` と等価。
+    pub async fn run_init_context(&self, args: &str, bang: bool) {
+        let force = bang || args.contains("--force") || args.contains("-f");
 
         let working_dir = self
             .config()
@@ -883,6 +889,17 @@ impl AgentController {
 ///
 /// This is a helper that replaces the ConsoleFormatter usage from presentation.
 /// In the future, this could be moved to a domain service.
+/// Split a Vim-style bang off a command name.
+///
+/// `"/init!"` → `("/init", true)`, `"/q!"` → `("/q", true)`, `"/init"` → `("/init", false)`.
+/// A bare `"/"` or `"!"` is returned unchanged.
+fn split_bang(command: &str) -> (&str, bool) {
+    match command.strip_suffix('!') {
+        Some(base) if !base.is_empty() && base != "/" => (base, true),
+        _ => (command, false),
+    }
+}
+
 fn format_quorum_output(result: &QuorumResult, format: OutputFormat) -> String {
     match format {
         OutputFormat::Json => serde_json::to_string_pretty(result).unwrap_or_default(),
@@ -1050,6 +1067,18 @@ impl SpawnContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_split_bang() {
+        assert_eq!(split_bang("/init!"), ("/init", true));
+        assert_eq!(split_bang("/q!"), ("/q", true));
+        assert_eq!(split_bang("/init"), ("/init", false));
+        assert_eq!(split_bang("/quit"), ("/quit", false));
+        // degenerate inputs stay unchanged
+        assert_eq!(split_bang("!"), ("!", false));
+        assert_eq!(split_bang("/!"), ("/!", false));
+        assert_eq!(split_bang(""), ("", false));
+    }
     use crate::ports::agent_progress::NoAgentProgress;
     use crate::ports::context_loader::ContextLoaderPort;
     use crate::ports::human_intervention::{HumanInterventionError, HumanInterventionPort};

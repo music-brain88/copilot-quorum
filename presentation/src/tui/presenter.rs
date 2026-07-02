@@ -132,7 +132,7 @@ impl TuiPresenter {
                 )));
             }
             UiEvent::ContextAlreadyExists => {
-                state.set_flash("Context file already exists. Use /init --force to regenerate.");
+                state.set_flash("Context file already exists. Use :init! to regenerate.");
             }
             UiEvent::CommandError { message } => {
                 self.emit(TuiEvent::CommandError(message.clone()));
