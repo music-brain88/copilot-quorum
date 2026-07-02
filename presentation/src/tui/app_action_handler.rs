@@ -60,34 +60,28 @@ pub(super) fn handle_action(
             }
         }
         KeyAction::SubmitCommand => {
-            let cmd = state.take_command();
+            // Trim so `:q ` (trailing space) matches the same as `:q`,
+            // mirroring the Remote Control API (remote.rs command_exec).
+            let cmd = state.take_command().trim().to_string();
             state.mode = InputMode::Normal;
             if !cmd.is_empty() {
-                if cmd == "qa" || cmd == "qall" || cmd == "quitall" || cmd == "exit" {
-                    // Vim-style: :qa / :qall always quits the whole app.
-                    state.should_quit = true;
-                } else if cmd == "q" || cmd == "quit" {
-                    // Vim-style: with multiple tabs, :q closes the current tab
-                    // (:tabclose); on the last tab it quits the app.
-                    if state.tabs.len() > 1 {
+                use super::app_tab_command::QuitOutcome;
+                match super::app_tab_command::handle_quit_command(state, &cmd, cmd_tx) {
+                    QuitOutcome::QuitApp => state.should_quit = true,
+                    QuitOutcome::TabClosed(flash) => state.set_flash(flash),
+                    QuitOutcome::NotQuit => {
                         if let Some(flash) =
-                            super::app_tab_command::handle_tab_command(state, "tabclose", cmd_tx)
+                            super::app_tab_command::handle_tab_command(state, &cmd, cmd_tx)
                         {
                             state.set_flash(flash);
+                        } else {
+                            let interaction_id = state.active_interaction_id();
+                            let _ = cmd_tx.send(TuiCommand::HandleCommand {
+                                interaction_id,
+                                command: cmd,
+                            });
                         }
-                    } else {
-                        state.should_quit = true;
                     }
-                } else if let Some(flash) =
-                    super::app_tab_command::handle_tab_command(state, &cmd, cmd_tx)
-                {
-                    state.set_flash(flash);
-                } else {
-                    let interaction_id = state.active_interaction_id();
-                    let _ = cmd_tx.send(TuiCommand::HandleCommand {
-                        interaction_id,
-                        command: cmd,
-                    });
                 }
             }
         }

@@ -42,7 +42,7 @@ scripts/tui-rpc.py /tmp/quorum.sock keys.feed '{"keys": ["i", "h", "i", "Esc"]}'
 | `panes.list` | — | 全タブ/ペインのメタデータ(form, title, message_count, streaming, scroll) |
 | `pane.read` | `{tab?, last?}` | 会話メッセージを構造化 JSON で取得(画面スクレイピング不要) |
 | `input.send` | `{text}` | アクティブペインへプロンプト送信(`SubmitInput` と同一経路) |
-| `command.exec` | `{command}` | `:` コマンド実行(`solo`, `tabnew ask`, `q` 等) |
+| `command.exec` | `{command}` | `:` コマンド実行(`solo`, `tabnew ask`, `q` 等)。`q` はタブが複数あれば `{quit: false, flash}` でタブを閉じ、最後の 1 枚で `{quit: true}`。全体終了は `qa` |
 | `interaction.spawn` | `{form, query}` | Agent/Ask/Discuss タブを生成 |
 | `interaction.activate` | `{interaction_id}` | 指定インタラクションのタブへフォーカス |
 | `hil.respond` | `{decision}` | 保留中の HiL モーダルに approve/reject を返す |
