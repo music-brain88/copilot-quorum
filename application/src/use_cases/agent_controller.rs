@@ -17,7 +17,9 @@ use crate::ports::ui_event::{
     AgentErrorEvent, AgentResultEvent, AskResultEvent, ConfigSnapshot, ContextInitResultEvent,
     InteractionCompletedEvent, InteractionSpawnedEvent, QuorumResultEvent, UiEvent, WelcomeInfo,
 };
-use crate::use_cases::init_context::{InitContextInput, InitContextUseCase};
+use crate::use_cases::init_context::{
+    InitContextInput, InitContextProgressNotifier, InitContextUseCase,
+};
 use crate::use_cases::run_agent::RunAgentUseCase;
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
@@ -26,7 +28,7 @@ use quorum_domain::interaction::{
     InteractionForm, InteractionId, InteractionResult, InteractionTree,
 };
 use quorum_domain::util::truncate_str;
-use quorum_domain::{ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
+use quorum_domain::{AgentPhase, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc;
@@ -289,7 +291,7 @@ impl AgentController {
     pub async fn handle_command(
         &mut self,
         cmd: &str,
-        _progress: &dyn AgentProgressNotifier,
+        progress: &dyn AgentProgressNotifier,
     ) -> CommandAction {
         let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
         let command = parts.first().copied().unwrap_or("");
@@ -418,7 +420,7 @@ impl AgentController {
                 CommandAction::Continue
             }
             "/init" => {
-                self.run_init_context(args, bang).await;
+                self.run_init_context(args, bang, progress).await;
                 CommandAction::Continue
             }
             "/verbose" => {
@@ -600,7 +602,12 @@ impl AgentController {
     /// Run context initialization
     ///
     /// `bang` は Vim スタイルの強制フラグ（`:init!`）。`--force` / `-f` と等価。
-    pub async fn run_init_context(&self, args: &str, bang: bool) {
+    pub async fn run_init_context(
+        &self,
+        args: &str,
+        bang: bool,
+        progress: &dyn AgentProgressNotifier,
+    ) {
         let force = bang || args.contains("--force") || args.contains("-f");
 
         let working_dir = self
@@ -639,9 +646,14 @@ impl AgentController {
             input = input.with_force(true);
         }
 
-        // Run the initialization
+        // Run the initialization, bridging progress to both the Progress pane
+        // (via AgentProgressNotifier) and the conversation log (via UiEvent)
+        let bridge = InitContextProgressBridge {
+            progress,
+            tx: self.tx.clone(),
+        };
         let use_case = InitContextUseCase::new(self.gateway.clone(), self.context_loader.clone());
-        let result = use_case.execute(input).await;
+        let result = use_case.execute_with_progress(input, &bridge).await;
 
         match result {
             Ok(output) => {
@@ -897,6 +909,51 @@ fn split_bang(command: &str) -> (&str, bool) {
     match command.strip_suffix('!') {
         Some(base) if !base.is_empty() && base != "/" => (base, true),
         _ => (command, false),
+    }
+}
+
+/// Bridges [`InitContextProgressNotifier`] callbacks to the generic
+/// [`AgentProgressNotifier`] (Progress pane: phase + quorum vote bar) and the
+/// [`UiEvent`] channel (conversation log lines).
+struct InitContextProgressBridge<'a> {
+    progress: &'a dyn AgentProgressNotifier,
+    tx: mpsc::UnboundedSender<UiEvent>,
+}
+
+impl InitContextProgressBridge<'_> {
+    fn log(&self, message: impl Into<String>) {
+        let _ = self.tx.send(UiEvent::ContextInitProgress {
+            message: message.into(),
+        });
+    }
+}
+
+impl InitContextProgressNotifier for InitContextProgressBridge<'_> {
+    fn on_loading_files(&self) {
+        self.progress.on_phase_change(&AgentPhase::ContextGathering);
+        self.log("Loading project files...");
+    }
+
+    fn on_analysis_start(&self, model_count: usize) {
+        self.progress.on_quorum_start("Context Analysis", model_count);
+        self.log(format!(
+            "Analyzing project with {} models...",
+            model_count
+        ));
+    }
+
+    fn on_model_complete(&self, model: &Model) {
+        self.progress.on_quorum_model_complete(model, true);
+        self.log(format!("✓ {} analysis complete", model));
+    }
+
+    fn on_synthesis_start(&self) {
+        self.progress.on_quorum_start("Context Synthesis", 1);
+        self.log("Synthesizing analyses...");
+    }
+
+    fn on_complete(&self, _path: &str) {
+        self.progress.on_phase_change(&AgentPhase::Completed);
     }
 }
 

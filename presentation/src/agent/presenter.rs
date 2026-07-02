@@ -118,6 +118,9 @@ impl ReplPresenter {
                 println!("Analyzing project with {} models...", model_count);
                 println!();
             }
+            UiEvent::ContextInitProgress { message } => {
+                println!("{}", message.dimmed());
+            }
             UiEvent::ContextInitResult(result) => self.render_context_init_result(result),
             UiEvent::ContextInitError { error } => {
                 println!();

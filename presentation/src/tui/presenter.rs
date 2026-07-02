@@ -122,6 +122,9 @@ impl TuiPresenter {
                     model_count
                 )));
             }
+            UiEvent::ContextInitProgress { message } => {
+                state.push_message(DisplayMessage::system(message.clone()));
+            }
             UiEvent::ContextInitResult(result) => {
                 self.handle_context_init_result(state, result);
             }
@@ -130,6 +133,7 @@ impl TuiPresenter {
                     "Context init failed: {}",
                     error
                 )));
+                Self::reset_progress(state);
             }
             UiEvent::ContextAlreadyExists => {
                 state.set_flash("Context file already exists. Use :init! to regenerate.");
@@ -246,6 +250,14 @@ impl TuiPresenter {
             result.path
         )));
         state.set_flash("Context initialized successfully");
+        Self::reset_progress(state);
+    }
+
+    /// Return the Progress pane to its idle state after context init finishes.
+    fn reset_progress(state: &mut TuiState) {
+        let progress = &mut state.tabs.active_pane_mut().progress;
+        progress.current_phase = None;
+        progress.quorum_status = None;
     }
 
     fn emit(&self, event: TuiEvent) {
