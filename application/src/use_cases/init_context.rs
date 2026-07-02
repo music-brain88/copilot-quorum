@@ -437,7 +437,7 @@ impl InitContextUseCase {
             input.moderator
         );
 
-        let date = chrono_lite_date();
+        let date = current_date();
         let synthesis_prompt = AgentPromptTemplate::context_synthesis(&analyses, &date);
         let system_prompt = AgentPromptTemplate::context_synthesis_system();
 
@@ -491,25 +491,32 @@ impl InitContextUseCase {
     }
 }
 
-/// Gets the current date as a string (YYYY-MM-DD format).
+/// Gets the current local date as a string (YYYY-MM-DD format).
 ///
-/// Uses a simplified calculation that's accurate enough for display purposes.
-fn chrono_lite_date() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+/// Delegates all calendar arithmetic (leap years, month lengths) to `chrono`
+/// instead of the previous hand-rolled epoch-day calculation, which ignored
+/// leap years and assumed 30-day months and could drift the date up to ~15
+/// days into the future.
+fn current_date() -> String {
+    current_date_from(chrono::Local::now())
+}
 
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+/// Formats the given instant as its local calendar date (`YYYY-MM-DD`).
+///
+/// Takes the "now" instant as a parameter so tests can capture a single
+/// `Local::now()` and feed both the value under test and the expectation
+/// from it, avoiding a midnight-boundary race between two separate clock
+/// reads.
+fn current_date_from<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> String {
+    format_ymd(now.date_naive())
+}
 
-    // Simple date calculation (approximate, good enough for display)
-    let days = secs / 86400;
-    let years = days / 365;
-    let remaining_days = days % 365;
-    let months = remaining_days / 30;
-    let day = remaining_days % 30 + 1;
-
-    format!("{}-{:02}-{:02}", 1970 + years, months + 1, day)
+/// Formats a [`chrono::NaiveDate`] as `YYYY-MM-DD`.
+///
+/// Extracted as a pure function so date-boundary behaviour (leap years,
+/// month lengths) can be unit-tested without depending on the system clock.
+fn format_ymd(date: chrono::NaiveDate) -> String {
+    date.format("%Y-%m-%d").to_string()
 }
 
 #[cfg(test)]
@@ -524,5 +531,63 @@ mod tests {
 
         assert_eq!(input.project_root, "/project");
         assert!(input.force);
+    }
+
+    use chrono::{Days, NaiveDate};
+
+    /// Builds the date that corresponds to `days` since the Unix epoch.
+    fn date_from_epoch_days(days: u64) -> NaiveDate {
+        NaiveDate::from_ymd_opt(1970, 1, 1)
+            .unwrap()
+            .checked_add_days(Days::new(days))
+            .unwrap()
+    }
+
+    #[test]
+    fn format_ymd_zero_pads_month_and_day() {
+        let date = NaiveDate::from_ymd_opt(2026, 7, 2).unwrap();
+        assert_eq!(format_ymd(date), "2026-07-02");
+    }
+
+    /// Regression test for #290: the old `chrono_lite_date()` computed
+    /// `196 % 30 + 1 = 17` for epoch day 20636 and returned `2026-07-17`,
+    /// drifting 15 days into the future. chrono must return the real date.
+    #[test]
+    fn regression_epoch_day_20636_is_july_2nd() {
+        let date = date_from_epoch_days(20636);
+        assert_eq!(format_ymd(date), "2026-07-02");
+    }
+
+    #[test]
+    fn handles_leap_day() {
+        // 2024 is a leap year, so Feb 29 exists.
+        let leap_day = NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
+        assert_eq!(format_ymd(leap_day), "2024-02-29");
+
+        // Day after the leap day rolls into March.
+        let next = leap_day.checked_add_days(Days::new(1)).unwrap();
+        assert_eq!(format_ymd(next), "2024-03-01");
+    }
+
+    #[test]
+    fn handles_end_of_month_and_year_boundaries() {
+        // 31-day month boundary (July -> August).
+        let end_of_july = NaiveDate::from_ymd_opt(2026, 7, 31).unwrap();
+        let next = end_of_july.checked_add_days(Days::new(1)).unwrap();
+        assert_eq!(format_ymd(next), "2026-08-01");
+
+        // Year boundary.
+        let new_year_eve = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+        let new_year = new_year_eve.checked_add_days(Days::new(1)).unwrap();
+        assert_eq!(format_ymd(new_year), "2026-01-01");
+    }
+
+    #[test]
+    fn current_date_matches_local_now() {
+        // Capture "now" once so both sides use the same instant — reading the
+        // clock twice could straddle midnight and flake the assertion.
+        let now = chrono::Local::now();
+        let expected = format_ymd(now.date_naive());
+        assert_eq!(current_date_from(now), expected);
     }
 }
