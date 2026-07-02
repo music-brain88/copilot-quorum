@@ -74,6 +74,7 @@ pub use session::{
     stream::StreamEvent,
 };
 pub use tool::{
+    detection::looks_like_tool_call_json,
     entities::{
         RiskLevel, ToolCall, ToolDefinition, ToolParameter, ToolSpec, classify_command_risk,
     },
