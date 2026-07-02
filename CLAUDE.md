@@ -54,6 +54,38 @@ cargo run -p copilot-quorum -- -m claude-haiku-4.5
 cargo run -p copilot-quorum -- /init
 ```
 
+## Debugging the TUI (Remote Control API)
+
+Claude Code (や他のコーディングエージェント) から実際に TUI を起動して「見て・操作して・検証する」ためのワークフロー。
+TUI のバグ再現・修正確認はコードリーディングだけで済ませず、この方法で実機確認すること。
+
+```bash
+# 1. Build first, then launch the TUI headless with a JSON-RPC socket.
+#    - TUI は TTY 必須 → `script` で疑似端末を与えてバックグラウンド起動する
+#    - ソケットパスは短く (Unix socket の SUN_LEN ~108 文字制限。長いと "path must be shorter than SUN_LEN" で落ちる)
+cargo build
+script -qefc "./target/debug/copilot-quorum --listen /tmp/quorum-dbg.sock" /dev/null &
+
+# 2. Drive it with the reference client (method 一覧は docs/reference/tui-remote-control.md)
+scripts/tui-rpc.py /tmp/quorum-dbg.sock state.get                          # モード・モデル・flash 等
+scripts/tui-rpc.py /tmp/quorum-dbg.sock command.exec '{"command": "init!"}' # `:` コマンド実行
+scripts/tui-rpc.py /tmp/quorum-dbg.sock input.send '{"text": "Fix the bug"}'
+scripts/tui-rpc.py /tmp/quorum-dbg.sock hil.respond '{"decision": "approve"}'
+
+# 3. "See" the screen — ユーザーが見ているものと同じ画面をオフスクリーン描画で取得
+scripts/tui-rpc.py /tmp/quorum-dbg.sock screen.capture '{"width": 140, "height": 40}' \
+  | python3 -c "import json,sys; print('\n'.join(json.load(sys.stdin)['lines']))"
+scripts/tui-rpc.py /tmp/quorum-dbg.sock pane.read '{"last": 5}'            # 会話ログを構造化 JSON で
+
+# 4. Clean up
+scripts/tui-rpc.py /tmp/quorum-dbg.sock command.exec '{"command": "q!"}'
+```
+
+Tips:
+- `screen.capture` を実行前後で取れば「修正が画面にどう反映されたか」を diff で検証できる
+- LLM 呼び出しを伴う操作 (`init!` 等) は非同期。完了は `pane.read` のメッセージ (例: "Context saved to") をポーリングして検知する
+- `keys.feed` はキーボードと同一のディスパッチ経路なので、キーバインドや HiL モーダルのデバッグにも使える
+
 ## Configuration
 
 Configuration via Lua: `~/.config/copilot-quorum/init.lua` (plugins in `plugins/*.lua`)
