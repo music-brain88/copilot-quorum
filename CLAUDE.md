@@ -157,7 +157,7 @@ quorum.providers.set_default("copilot")
 ```
            cli/                 # Entrypoint, DI assembly
              |
-      presentation/             # CLI, chat REPL, output formatters
+      presentation/             # CLI, TUI, output formatters
              |
 infrastructure/ --> application/   # Adapters --> Use cases + ports
         |                |
@@ -171,7 +171,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 | domain | `quorum-domain` | Entities, value objects, traits (Model, Question, Phase, QuorumResult, AgentState, Plan, Task, ToolCall, ConsensusLevel, PhaseScope, OrchestrationStrategy, LlmResponse, ContentBlock, StopReason) |
 | application | `quorum-application` | Use cases (RunQuorumUseCase, RunAgentUseCase), port traits (LlmGateway, ProgressNotifier, ToolExecutorPort, ToolResultMessage) |
 | infrastructure | `quorum-infrastructure` | Copilot CLI adapter, LocalToolExecutor (file, command, search tools) |
-| presentation | `quorum-presentation` | CLI commands, ChatRepl, ConsoleFormatter, ProgressReporter |
+| presentation | `quorum-presentation` | CLI commands, TuiApp, ConsoleFormatter, ProgressReporter |
 | cli | `copilot-quorum` | main.rs with dependency injection |
 
 ### Key Traits
