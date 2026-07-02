@@ -1223,7 +1223,7 @@ mod tests {
         // Reviews use multiple high-performance models
         assert_eq!(config.review.len(), 2);
         assert!(config.review.contains(&Model::ClaudeSonnet45));
-        assert!(config.review.contains(&Model::Gpt52Codex));
+        assert!(config.review.contains(&Model::Gpt53Codex));
     }
 
     #[test]
