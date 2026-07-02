@@ -23,6 +23,81 @@ use super::state::{TuiInputConfig, TuiState};
 pub(super) enum SideEffect {
     LaunchEditor,
 }
+
+/// Everything needed to process a terminal event outside `&self TuiApp`.
+///
+/// Borrowed from `TuiApp` via [`TuiApp::input_deps`] — lets the same key
+/// dispatch run from the remote `keys.feed` handler and from unit tests
+/// (a full `TuiApp` cannot be constructed in tests: it spawns a controller
+/// task and needs a gateway).
+pub(super) struct InputDeps<'a> {
+    pub cmd_tx: &'a mpsc::UnboundedSender<TuiCommand>,
+    pub pending_hil_tx: &'a Arc<Mutex<Option<oneshot::Sender<HumanDecision>>>>,
+    pub custom_keymap: &'a mode::CustomKeymap,
+    pub scripting_engine: &'a Arc<dyn quorum_application::ScriptingEnginePort>,
+    pub clipboard: &'a Arc<dyn ClipboardPort>,
+    pub content_registry: &'a std::cell::RefCell<ContentRegistry>,
+}
+
+/// Handle a terminal (crossterm) event — same code path for keyboard input
+/// and remote `keys.feed` injection.
+/// Returns a `SideEffect` if the main loop needs to perform a terminal-level action.
+pub(super) fn dispatch_terminal_event(
+    state: &mut TuiState,
+    event: crossterm::event::Event,
+    deps: &InputDeps<'_>,
+) -> Option<SideEffect> {
+    match event {
+        crossterm::event::Event::Key(key) => {
+            // If HiL modal is showing, handle y/n/Esc
+            if state.hil_prompt.is_some() {
+                super::app_hil::handle_hil_key(state, deps.pending_hil_tx, key);
+                return None;
+            }
+
+            // If help is showing, Esc or ? closes it
+            if state.show_help {
+                match key.code {
+                    crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('?') => {
+                        state.show_help = false;
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check custom keymap (from Lua) before built-in bindings
+            if let Some(custom_action) = deps.custom_keymap.lookup(state.mode, &key) {
+                state.pending_key = None;
+                return super::app_action_handler::handle_action(
+                    state,
+                    custom_action.clone(),
+                    deps.cmd_tx,
+                    deps.scripting_engine,
+                    deps.clipboard,
+                    deps.content_registry,
+                );
+            }
+
+            let action = mode::handle_key_event(state.mode, key, state.pending_key);
+            if let KeyAction::PendingKey(c) = action {
+                state.pending_key = Some(c);
+                return None;
+            }
+            state.pending_key = None;
+            super::app_action_handler::handle_action(
+                state,
+                action,
+                deps.cmd_tx,
+                deps.scripting_engine,
+                deps.clipboard,
+                deps.content_registry,
+            )
+        }
+        crossterm::event::Event::Resize(_, _) => None,
+        _ => None,
+    }
+}
 use crossterm::{
     event::{
         DisableMouseCapture, EnableMouseCapture, EventStream, KeyboardEnhancementFlags,
@@ -385,12 +460,14 @@ impl TuiApp {
 
                 // Remote control requests (--listen socket)
                 Some(remote_request) = remote_rx.recv() => {
-                    super::remote::handle_request(
-                        &mut state,
-                        &self.cmd_tx,
-                        &self.pending_hil_tx,
-                        remote_request,
-                    );
+                    let terminal_size = terminal
+                        .size()
+                        .unwrap_or(ratatui::layout::Size::new(80, 24));
+                    let ctx = super::remote::RemoteContext {
+                        deps: self.input_deps(),
+                        terminal_size,
+                    };
+                    super::remote::handle_request(&mut state, &ctx, remote_request);
                 }
 
                 // Tick for flash expiry, spinner animation, etc.
@@ -484,6 +561,18 @@ impl TuiApp {
         Ok(())
     }
 
+    /// Borrow the dependencies needed for terminal-event dispatch.
+    pub(super) fn input_deps(&self) -> InputDeps<'_> {
+        InputDeps {
+            cmd_tx: &self.cmd_tx,
+            pending_hil_tx: &self.pending_hil_tx,
+            custom_keymap: &self.custom_keymap,
+            scripting_engine: &self.scripting_engine,
+            clipboard: &self.clipboard,
+            content_registry: &self.content_registry,
+        }
+    }
+
     /// Handle a terminal (crossterm) event.
     /// Returns a `SideEffect` if the main loop needs to perform a terminal-level action.
     fn handle_terminal_event(
@@ -491,55 +580,6 @@ impl TuiApp {
         state: &mut TuiState,
         event: crossterm::event::Event,
     ) -> Option<SideEffect> {
-        match event {
-            crossterm::event::Event::Key(key) => {
-                // If HiL modal is showing, handle y/n/Esc
-                if state.hil_prompt.is_some() {
-                    super::app_hil::handle_hil_key(state, &self.pending_hil_tx, key);
-                    return None;
-                }
-
-                // If help is showing, Esc or ? closes it
-                if state.show_help {
-                    match key.code {
-                        crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('?') => {
-                            state.show_help = false;
-                            return None;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Check custom keymap (from Lua) before built-in bindings
-                if let Some(custom_action) = self.custom_keymap.lookup(state.mode, &key) {
-                    state.pending_key = None;
-                    return super::app_action_handler::handle_action(
-                        state,
-                        custom_action.clone(),
-                        &self.cmd_tx,
-                        &self.scripting_engine,
-                        &self.clipboard,
-                        &self.content_registry,
-                    );
-                }
-
-                let action = mode::handle_key_event(state.mode, key, state.pending_key);
-                if let KeyAction::PendingKey(c) = action {
-                    state.pending_key = Some(c);
-                    return None;
-                }
-                state.pending_key = None;
-                super::app_action_handler::handle_action(
-                    state,
-                    action,
-                    &self.cmd_tx,
-                    &self.scripting_engine,
-                    &self.clipboard,
-                    &self.content_registry,
-                )
-            }
-            crossterm::event::Event::Resize(_, _) => None,
-            _ => None,
-        }
+        dispatch_terminal_event(state, event, &self.input_deps())
     }
 }

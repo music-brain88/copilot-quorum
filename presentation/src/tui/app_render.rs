@@ -22,19 +22,19 @@ pub(super) fn build_default_registry() -> ContentRegistry {
         .register(Box::new(ToolLogRenderer))
 }
 
-/// Render all widgets via registry-driven dispatch.
-pub(super) fn render(
-    frame: &mut ratatui::Frame,
+/// Compute the frame layout for `state` at `area`.
+///
+/// Single source of truth shared by [`render`] (with `frame.area()`) and the
+/// remote `layout.get` / `screen.capture` methods (with an arbitrary size).
+pub(super) fn compute_layout(
     state: &TuiState,
-    content_registry: &RefCell<ContentRegistry>,
-) {
-    use super::surface::SurfaceLayout;
-
+    area: ratatui::layout::Rect,
+) -> (MainLayout, Vec<super::surface::SurfaceId>) {
     let pane_surfaces = state.route.required_pane_surfaces();
     let show_tab_bar = state.tabs.len() > 1;
     let layout = if state.layout_config.preset.is_builtin() {
         MainLayout::compute_with_layout(
-            frame.area(),
+            area,
             state.input_line_count() as u16,
             state.tui_config.max_input_height,
             show_tab_bar,
@@ -46,7 +46,7 @@ pub(super) fn render(
         let splits = state.layout_config.resolve_splits(pane_surfaces.len());
         let direction = state.layout_config.resolve_direction();
         MainLayout::compute_with_splits(
-            frame.area(),
+            area,
             state.input_line_count() as u16,
             state.tui_config.max_input_height,
             show_tab_bar,
@@ -54,6 +54,18 @@ pub(super) fn render(
             direction,
         )
     };
+    (layout, pane_surfaces)
+}
+
+/// Render all widgets via registry-driven dispatch.
+pub(super) fn render(
+    frame: &mut ratatui::Frame,
+    state: &TuiState,
+    content_registry: &RefCell<ContentRegistry>,
+) {
+    use super::surface::SurfaceLayout;
+
+    let (layout, pane_surfaces) = compute_layout(state, frame.area());
 
     // Build surface layout from the computed main layout + pane surfaces
     let surfaces = SurfaceLayout::from_main_layout(&layout, &pane_surfaces);

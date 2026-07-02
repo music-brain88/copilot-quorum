@@ -21,6 +21,7 @@ mod mode;
 mod presenter;
 mod progress;
 mod remote;
+mod remote_view;
 mod route;
 mod state;
 mod surface;
