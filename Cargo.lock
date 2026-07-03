@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "copilot-quorum"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2455,7 +2455,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quorum-application"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2471,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "quorum-domain"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "quorum-infrastructure"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "quorum-presentation"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "clap",
