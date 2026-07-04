@@ -131,17 +131,32 @@ fn print_output(
             println!("{}", synthesis.conclusion);
         }
         ReviewOutputFormat::Json => {
-            let vote_result = VoteResult::from_votes(votes);
-            let target = QuorumTarget::pr_review(pr, title);
-            let payload =
-                QuorumResultPayload::new(QuorumTopic::PrReview, Some(target), &vote_result)
-                    .with_synthesis(synthesis);
             let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let record = payload.to_record(timestamp);
+            let record = build_json_record(pr, title, votes, synthesis, timestamp);
             println!("{}", serde_json::to_string_pretty(&record)?);
         }
     }
     Ok(())
+}
+
+/// Build the `quorum_result` v1 record for `--output json`.
+///
+/// `QuorumTarget::pr_review` already returns `None` when neither `pr` nor
+/// `title` is known (e.g. a bare stdin diff) — pass it straight through
+/// rather than wrapping it in `Some(..)`, so `target` is omitted from the
+/// record entirely instead of serializing as `"target": {}`.
+fn build_json_record(
+    pr: Option<u64>,
+    title: Option<String>,
+    votes: Vec<Vote>,
+    synthesis: SynthesisResult,
+    timestamp: String,
+) -> serde_json::Value {
+    let vote_result = VoteResult::from_votes(votes);
+    let target = QuorumTarget::pr_review(pr, title);
+    let payload = QuorumResultPayload::new(QuorumTopic::PrReview, target, &vote_result)
+        .with_synthesis(synthesis);
+    payload.to_record(timestamp)
 }
 
 /// Fetch a PR's diff and title via the `gh` CLI.
@@ -181,4 +196,51 @@ async fn fetch_pr_diff(pr: u64) -> Result<(String, Option<String>)> {
         .filter(|title| !title.is_empty());
 
     Ok((diff, title))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_votes() -> Vec<Vote> {
+        vec![Vote::approve("claude-opus-4.5", "Looks safe")]
+    }
+
+    fn sample_synthesis() -> SynthesisResult {
+        SynthesisResult::new("claude-opus-4.5", "Looks good, ship it.")
+    }
+
+    // Regression test: `--diff` / stdin review (no --pr, so no title either)
+    // must omit `target` entirely, per the `quorum_result` contract
+    // ("target: object? — omitted when absent", docs/reference/logging.md).
+    // This previously serialized as `"target": {}` because the caller always
+    // wrapped `QuorumTarget::pr_review(..)` in `Some(..)`.
+    #[test]
+    fn json_record_omits_target_for_diff_or_stdin_review() {
+        let record = build_json_record(
+            None,
+            None,
+            sample_votes(),
+            sample_synthesis(),
+            "2026-07-04T00:00:00.000Z".to_string(),
+        );
+        assert!(
+            record.get("target").is_none(),
+            "expected no `target` key, got: {}",
+            record
+        );
+    }
+
+    #[test]
+    fn json_record_includes_target_for_pr_review() {
+        let record = build_json_record(
+            Some(123),
+            Some("Fix the bug".to_string()),
+            sample_votes(),
+            sample_synthesis(),
+            "2026-07-04T00:00:00.000Z".to_string(),
+        );
+        assert_eq!(record["target"]["pr"], 123);
+        assert_eq!(record["target"]["title"], "Fix the bug");
+    }
 }
