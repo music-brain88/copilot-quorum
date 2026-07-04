@@ -65,7 +65,8 @@ pub mod vote;
 pub use consensus::{ConsensusOutcome, ConsensusRound};
 pub use parsing::{parse_final_review_response, parse_review_response, parse_vote_score};
 pub use result_event::{
-    QUORUM_RESULT_API_VERSION, QuorumResultEnvelope, QuorumTarget, QuorumTopic,
+    QUORUM_RESULT_API_VERSION, QUORUM_RESULT_EVENT_TYPE, QuorumResultPayload, QuorumTarget,
+    QuorumTopic,
 };
 pub use rule::QuorumRule;
 pub use vote::{Vote, VoteResult, VoteVerdict};

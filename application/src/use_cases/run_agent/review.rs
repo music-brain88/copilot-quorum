@@ -13,7 +13,7 @@ use crate::ports::tool_executor::ToolExecutorPort;
 use async_trait::async_trait;
 use quorum_domain::agent::model_config::ModelConfig;
 use quorum_domain::quorum::parsing::{parse_final_review_response, parse_review_response};
-use quorum_domain::quorum::{QuorumResultEnvelope, QuorumTarget, QuorumTopic, Vote, VoteResult};
+use quorum_domain::quorum::{QuorumResultPayload, QuorumTarget, QuorumTopic, Vote, VoteResult};
 use quorum_domain::{AgentPromptTemplate, AgentState, Model, Task};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -163,7 +163,7 @@ impl ActionReviewer for QuorumActionReviewer {
         let review = VoteResult::from_votes(votes);
 
         self.event_publisher
-            .publish(AppEvent::QuorumResult(QuorumResultEnvelope::new(
+            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
                 QuorumTopic::ActionReview,
                 Some(QuorumTarget::action(
                     task.id.to_string(),
@@ -316,7 +316,7 @@ impl RunAgentUseCase {
         let result = VoteResult::from_votes(votes);
 
         self.event_publisher()
-            .publish(AppEvent::QuorumResult(QuorumResultEnvelope::new(
+            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
                 QuorumTopic::PlanReview,
                 None,
                 &result,
@@ -420,7 +420,7 @@ impl RunAgentUseCase {
         let result = VoteResult::from_votes(votes);
 
         self.event_publisher()
-            .publish(AppEvent::QuorumResult(QuorumResultEnvelope::new(
+            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
                 QuorumTopic::FinalReview,
                 None,
                 &result,

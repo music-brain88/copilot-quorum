@@ -270,7 +270,7 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 - `ToolCallAfter` — tool_name, success, duration_ms, output_preview/error
 - `PhaseChanged` — phase name as string
 - `PlanCreated` — objective, task_count
-- `QuorumResult` — topic, approved, approve_count, reject_count, votes_json（`EventPublisher` 継ぎ目経由。progress bridge ではない）
+- `QuorumResult` — topic, approved, approve_count, reject_count, api_version, rule, task_id?, tool?, feedback?, votes_json（`EventPublisher` 継ぎ目経由。progress bridge ではない）
 - `CompositeProgressNotifier<'a>` — borrowed refs, delegates to TUI + ScriptProgressBridge
 - `ScriptProgressBridge` — maps AgentProgressNotifier → ScriptingEnginePort::emit_event()
 - ToolCallBefore: Vim BufWritePre timing + BufWriteCmd cancel = hybrid design

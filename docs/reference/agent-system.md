@@ -134,7 +134,7 @@ impl QuorumConfig {
 | File | Description |
 |------|-------------|
 | `mod.rs` | メインフロー（`execute_with_progress`）、`RunAgentUseCase` 定義、Flow テスト基盤 |
-| `types.rs` | `RunAgentInput`, `RunAgentOutput`, `RunAgentError`, `PlanningResult`, `QuorumReviewResult` |
+| `types.rs` | `RunAgentInput`, `RunAgentOutput`, `RunAgentError`, `PlanningResult` |
 | `hil.rs` | `handle_human_intervention()`, `handle_execution_confirmation()` |
 | `planning.rs` | `create_plan()`, `create_ensemble_plans()`（並列生成 + 投票 + 選択） |
 | `review.rs` | `review_plan()`, `final_review()`, `QuorumActionReviewer`（`ActionReviewer` 実装） |
@@ -166,7 +166,7 @@ Pending ──> Running ──> Completed
 
 | File | Description |
 |------|-------------|
-| `domain/src/agent/entities.rs` | `AgentState`, `Plan`, `Task`, `AgentPhase`, `ReviewRound`, `ModelVote` |
+| `domain/src/agent/entities.rs` | `AgentState`, `Plan`, `Task`, `AgentPhase`, `ReviewRound` |
 | `domain/src/agent/model_config.rs` | `ModelConfig`（ロールベースモデル設定） |
 | `domain/src/agent/agent_policy.rs` | `AgentPolicy`, `HilAction`（ドメインポリシー） |
 | `domain/src/agent/tool_execution.rs` | `ToolExecution`, `ToolExecutionState`（ステートマシン） |
@@ -198,7 +198,7 @@ RunAgentUseCase::execute_with_progress() (Application層)
 │   ├── Solo: LlmSession.send_with_tools() → Plan (Native Tool Use)
 │   └── Ensemble: JoinSet で並列生成 → 投票 → 選択
 │
-├── Phase 3: review_plan() → QuorumReviewResult
+├── Phase 3: review_plan() → VoteResult
 │   ├── Model A: Vote (APPROVE/REJECT)
 │   ├── Model B: Vote
 │   └── Model C: Vote
@@ -247,7 +247,7 @@ AgentController ──→ UiEvent ──→ TuiPresenter ──→ TuiState muta
 `EventPublisher` port（`application/src/ports/event_publisher.rs`）を通る単一の発行点を持ちます。
 
 ```rust
-pub enum AppEvent { QuorumResult(QuorumResultEnvelope) }  // variant は今後増える
+pub enum AppEvent { QuorumResult(QuorumResultPayload) }  // variant は今後増える
 pub trait EventPublisher: Send + Sync {
     fn publish(&self, event: AppEvent);  // sync・fire-and-forget
 }

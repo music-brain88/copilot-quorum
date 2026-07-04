@@ -100,10 +100,11 @@ Vim/Neovim のプラグインエコシステムに倣い、段階的に構築さ
 | `ToolCallAfter` | No | tool_name, success, duration_ms, output_preview/error |
 | `PhaseChanged` | No | phase (string) |
 | `PlanCreated` | No | objective, task_count |
-| `QuorumResult` | No | topic, approved, approve_count, reject_count, votes_json (JSON) |
+| `QuorumResult` | No | topic, approved, approve_count, reject_count, api_version, rule, task_id?, tool?, feedback?, votes_json (JSON) |
 
 `QuorumResult` は `EventPublisher` 継ぎ目経由で配信される（progress bridge 経由ではない）。
-`votes_json` は `quorum_result` v1 エンベロープの votes 配列（[Logging](logging.md) 参照）。
+`task_id` / `tool` は action_review の相関情報（他 topic では nil）、`feedback` は否決時のみ。
+`votes_json` は `quorum_result` v1 契約の votes 配列（[Logging](logging.md) 参照）。
 
 ### ToolCallBefore キャンセルフロー
 

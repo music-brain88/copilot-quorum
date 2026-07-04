@@ -141,8 +141,12 @@ let logger = JsonlConversationLogger::new("path/to/conversation.jsonl");
 
 合議レビュー（plan / action / final review）の完了時に記録される構造化イベント。
 JSONL・将来の headless `review` サブコマンド stdout（#300）・Remote Control API（#302）で
-**同一のエンベロープ**を共有する（RFC Discussion #304）。ドメイン型は
-`quorum_domain::quorum::QuorumResultEnvelope`。
+**同一のレコード形状**を共有する（RFC Discussion #304）。
+
+- **payload** = `quorum_domain::quorum::QuorumResultPayload`（`type` / `timestamp` 以外の全フィールド）
+- **完全なレコード** = payload + `type` + `timestamp`。JSONL sink はこの 2 フィールドを注入する。
+  それ以外の sink（stdout / RPC）は **`QuorumResultPayload::to_record(timestamp)`** で
+  同一形状を生成すること — 3 面のスキーマが構造的にズレない
 
 ```json
 {"type":"quorum_result","timestamp":"2026-07-04T10:30:00.123Z",

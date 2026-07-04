@@ -1,4 +1,4 @@
-//! `quorum_result` event envelope — the shared serialization contract
+//! `quorum_result` event — the shared serialization contract
 //!
 //! This is the single vocabulary for quorum vote results consumed outside
 //! the process: the JSONL conversation log, the future headless `review`
@@ -9,15 +9,20 @@
 //! - Per-vote outcome is a `verdict` (`approve` / `reject` / `abstain` /
 //!   `model_error`), not a boolean. `abstain` and `model_error` are recorded
 //!   for visibility but excluded from the voting denominator.
-//! - `type` and `timestamp` fields are injected by the log sink and are not
-//!   part of this envelope.
+//! - A full `quorum_result` **record** = [`QuorumResultPayload`] + `type` +
+//!   `timestamp`. The JSONL sink injects those two fields when logging;
+//!   every other sink (stdout, RPC) must produce the identical shape via
+//!   [`QuorumResultPayload::to_record`] so the three surfaces never drift.
 
 use super::rule::QuorumRule;
 use super::vote::{Vote, VoteResult};
 use serde::{Deserialize, Serialize};
 
-/// Schema version of the `quorum_result` envelope
+/// Schema version of the `quorum_result` contract
 pub const QUORUM_RESULT_API_VERSION: u32 = 1;
+
+/// The `type` field value of a `quorum_result` record
+pub const QUORUM_RESULT_EVENT_TYPE: &str = "quorum_result";
 
 /// What was being decided by the quorum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,10 +68,13 @@ impl QuorumTarget {
     }
 }
 
-/// The `quorum_result` event payload (v1)
+/// The `quorum_result` payload (v1) — everything except `type` / `timestamp`
+///
+/// Sinks that don't inject those fields themselves (unlike the JSONL logger)
+/// should emit [`Self::to_record`] instead of serializing this directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuorumResultEnvelope {
-    /// Schema version of this envelope
+pub struct QuorumResultPayload {
+    /// Schema version of this payload
     pub api_version: u32,
     /// What was being decided
     pub topic: QuorumTopic,
@@ -84,8 +92,8 @@ pub struct QuorumResultEnvelope {
     pub feedback: Option<String>,
 }
 
-impl QuorumResultEnvelope {
-    /// Build a v1 envelope from an aggregated vote result
+impl QuorumResultPayload {
+    /// Build a v1 payload from an aggregated vote result
     pub fn new(topic: QuorumTopic, target: Option<QuorumTarget>, result: &VoteResult) -> Self {
         Self {
             api_version: QUORUM_RESULT_API_VERSION,
@@ -97,6 +105,25 @@ impl QuorumResultEnvelope {
             feedback: result.aggregated_feedback.clone(),
         }
     }
+
+    /// Build the complete `quorum_result` record: payload + `type` + `timestamp`
+    ///
+    /// Produces the exact shape the JSONL sink writes, for use by other
+    /// sinks (headless `review` stdout, RPC). `timestamp` is RFC 3339 UTC.
+    pub fn to_record(&self, timestamp: impl Into<String>) -> serde_json::Value {
+        let mut record = serde_json::to_value(self).unwrap_or_default();
+        if let Some(map) = record.as_object_mut() {
+            map.insert(
+                "type".to_string(),
+                serde_json::Value::String(QUORUM_RESULT_EVENT_TYPE.to_string()),
+            );
+            map.insert(
+                "timestamp".to_string(),
+                serde_json::Value::String(timestamp.into()),
+            );
+        }
+        record
+    }
 }
 
 #[cfg(test)]
@@ -106,20 +133,20 @@ mod tests {
     // Golden test: pins the v1 JSON contract. If this test needs changing,
     // the api_version must be bumped and consumers notified.
     #[test]
-    fn test_envelope_v1_json_shape() {
+    fn test_payload_v1_json_shape() {
         let votes = vec![
             Vote::approve("claude-opus-4.5", "Safe command"),
             Vote::reject("gpt-5.3-codex", "Risky flag"),
             Vote::model_error("gemini-3.1-pro-preview", "gateway timeout"),
         ];
         let result = VoteResult::from_votes(votes);
-        let envelope = QuorumResultEnvelope::new(
+        let payload = QuorumResultPayload::new(
             QuorumTopic::ActionReview,
             Some(QuorumTarget::action("task-1", Some("run_command".into()))),
             &result,
         );
 
-        let json = serde_json::to_value(&envelope).unwrap();
+        let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(
             json,
             serde_json::json!({
@@ -142,13 +169,28 @@ mod tests {
     }
 
     #[test]
-    fn test_envelope_omits_empty_optionals() {
+    fn test_payload_omits_empty_optionals() {
         let result = VoteResult::from_votes(vec![Vote::approve("m", "ok")]);
-        let envelope = QuorumResultEnvelope::new(QuorumTopic::PlanReview, None, &result);
-        let json = serde_json::to_value(&envelope).unwrap();
+        let payload = QuorumResultPayload::new(QuorumTopic::PlanReview, None, &result);
+        let json = serde_json::to_value(&payload).unwrap();
 
         assert_eq!(json["topic"], "plan_review");
         assert!(json.get("target").is_none());
         assert!(json.get("feedback").is_none());
+    }
+
+    // Golden test: the full record = payload + type + timestamp, matching
+    // what the JSONL sink writes. Other sinks must use to_record().
+    #[test]
+    fn test_to_record_matches_jsonl_shape() {
+        let result = VoteResult::from_votes(vec![Vote::approve("m", "ok")]);
+        let payload = QuorumResultPayload::new(QuorumTopic::PlanReview, None, &result);
+        let record = payload.to_record("2026-07-04T10:30:00.123Z");
+
+        assert_eq!(record["type"], "quorum_result");
+        assert_eq!(record["timestamp"], "2026-07-04T10:30:00.123Z");
+        assert_eq!(record["api_version"], 1);
+        assert_eq!(record["topic"], "plan_review");
+        assert_eq!(record["votes"][0]["verdict"], "approve");
     }
 }
