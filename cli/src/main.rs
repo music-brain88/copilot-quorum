@@ -514,6 +514,13 @@ async fn main() -> Result<()> {
         if let Some(listen_path) = &cli.listen {
             tui_app = tui_app.with_listen(listen_path.clone());
         }
+        // A positional QUESTION only reaches this branch when --headless
+        // forced it (a real terminal always sends QUESTION down the
+        // single-request path below instead) — feed it as the first
+        // request rather than silently dropping it.
+        if let Some(question) = cli.question.take() {
+            tui_app = tui_app.with_initial_request(question);
+        }
         if cli.headless {
             tui_app.run_headless().await?;
         } else {

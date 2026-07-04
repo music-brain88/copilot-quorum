@@ -325,6 +325,25 @@ impl TuiApp {
         self
     }
 
+    /// Feed `request` to the root interaction as if it had been typed into
+    /// the active pane, right after construction.
+    ///
+    /// Used to run the CLI's positional `QUESTION` as the first request in
+    /// `--headless` mode (`copilot-quorum --headless --listen SOCK "..."`)
+    /// instead of silently discarding it — with a real terminal, a `QUESTION`
+    /// always takes the single-request path instead of the TUI, so this is
+    /// only reachable in practice when `--headless` forced the TUI branch.
+    /// Safe to queue before `run`/`run_headless` starts: the welcome message
+    /// is already enqueued by the controller task at construction time, so
+    /// it is always displayed first regardless of when this is sent.
+    pub fn with_initial_request(self, request: impl Into<String>) -> Self {
+        let _ = self.cmd_tx.send(TuiCommand::ProcessRequest {
+            interaction_id: None,
+            request: request.into(),
+        });
+        self
+    }
+
     pub fn with_tui_config(mut self, config: TuiInputConfig) -> Self {
         self.tui_config = config;
         self
