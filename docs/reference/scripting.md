@@ -100,6 +100,11 @@ Vim/Neovim のプラグインエコシステムに倣い、段階的に構築さ
 | `ToolCallAfter` | No | tool_name, success, duration_ms, output_preview/error |
 | `PhaseChanged` | No | phase (string) |
 | `PlanCreated` | No | objective, task_count |
+| `QuorumResult` | No | topic, approved, approve_count, reject_count, api_version, rule, task_id?, tool?, feedback?, votes_json (JSON) |
+
+`QuorumResult` は `EventPublisher` 継ぎ目経由で配信される（progress bridge 経由ではない）。
+`task_id` / `tool` は action_review の相関情報（他 topic では nil）、`feedback` は否決時のみ。
+`votes_json` は `quorum_result` v1 契約の votes 配列（[Logging](logging.md) 参照）。
 
 ### ToolCallBefore キャンセルフロー
 
@@ -145,6 +150,7 @@ RunAgentUseCase.execute_with_progress(input, &composite_progress)
 | `ToolCallAfter` | 3 | No | ツール実行後 |
 | `PhaseChanged` | 3 | No | エージェントフェーズ変更 |
 | `PlanCreated` | 3 | No | プラン作成 |
+| `QuorumResult` | 3 | No | 合議レビュー完了（投票内訳付き） |
 | `ContentRegistered` | 2 | No | コンテンツ登録 |
 
 ---
@@ -174,4 +180,4 @@ RunAgentUseCase.execute_with_progress(input, &composite_progress)
 | `infrastructure/src/scripting/sandbox.rs` | Sandbox (C module blocking) |
 | `cli/src/main.rs` | DI wiring, init.lua + plugins/ loading |
 
-<!-- LLM Context: Scripting system Phase 1-3. Events: 11 types (ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, RouteChanged, ToolCallBefore, ToolCallAfter, PhaseChanged, PlanCreated, ContentRegistered). ToolCallBefore is cancellable. Plugin loading: alphabetical order in ~/.config/copilot-quorum/plugins/. Commands: quorum.command.register(name, opts). CompositeProgressNotifier delegates to TUI + ScriptProgressBridge. -->
+<!-- LLM Context: Scripting system Phase 1-3. Events: 12 types (ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, RouteChanged, ToolCallBefore, ToolCallAfter, PhaseChanged, PlanCreated, QuorumResult, ContentRegistered). ToolCallBefore is cancellable. QuorumResult is delivered via the EventPublisher seam (not the progress bridge); votes_json carries quorum_result v1 votes. Plugin loading: alphabetical order in ~/.config/copilot-quorum/plugins/. Commands: quorum.command.register(name, opts). CompositeProgressNotifier delegates to TUI + ScriptProgressBridge. -->

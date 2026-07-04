@@ -231,14 +231,14 @@ impl AgentProgressNotifier for TuiProgressBridge {
         &self,
         phase: &str,
         approved: bool,
-        votes: &[(String, bool, String)],
+        votes: &[quorum_domain::Vote],
         feedback: Option<&str>,
     ) {
         // Emit individual votes then completion
-        for (model, vote, _reasoning) in votes {
+        for vote in votes {
             self.emit(TuiEvent::QuorumModelVote {
-                model: model.clone(),
-                approved: *vote,
+                model: vote.model.clone(),
+                approved: vote.is_approve(),
             });
         }
         self.emit(TuiEvent::QuorumComplete {

@@ -134,7 +134,7 @@ impl QuorumConfig {
 | File | Description |
 |------|-------------|
 | `mod.rs` | メインフロー（`execute_with_progress`）、`RunAgentUseCase` 定義、Flow テスト基盤 |
-| `types.rs` | `RunAgentInput`, `RunAgentOutput`, `RunAgentError`, `PlanningResult`, `QuorumReviewResult` |
+| `types.rs` | `RunAgentInput`, `RunAgentOutput`, `RunAgentError`, `PlanningResult` |
 | `hil.rs` | `handle_human_intervention()`, `handle_execution_confirmation()` |
 | `planning.rs` | `create_plan()`, `create_ensemble_plans()`（並列生成 + 投票 + 選択） |
 | `review.rs` | `review_plan()`, `final_review()`, `QuorumActionReviewer`（`ActionReviewer` 実装） |
@@ -166,7 +166,7 @@ Pending ──> Running ──> Completed
 
 | File | Description |
 |------|-------------|
-| `domain/src/agent/entities.rs` | `AgentState`, `Plan`, `Task`, `AgentPhase`, `ReviewRound`, `ModelVote` |
+| `domain/src/agent/entities.rs` | `AgentState`, `Plan`, `Task`, `AgentPhase`, `ReviewRound` |
 | `domain/src/agent/model_config.rs` | `ModelConfig`（ロールベースモデル設定） |
 | `domain/src/agent/agent_policy.rs` | `AgentPolicy`, `HilAction`（ドメインポリシー） |
 | `domain/src/agent/tool_execution.rs` | `ToolExecution`, `ToolExecutionState`（ステートマシン） |
@@ -180,6 +180,7 @@ Pending ──> Running ──> Completed
 | `application/src/config/quorum_config.rs` | `QuorumConfig`（4型コンテナ） |
 | `application/src/ports/agent_progress.rs` | `AgentProgressNotifier`（進捗通知ポート） |
 | `application/src/ports/ui_event.rs` | `UiEvent`（Application→Presentation 出力ポート） |
+| `application/src/ports/event_publisher.rs` | `EventPublisher`（typed イベントの継ぎ目） |
 | `infrastructure/src/reference/github.rs` | `GitHubReferenceResolver`（`gh` CLI 解決） |
 | `infrastructure/src/tools/` | `LocalToolExecutor` 実装 |
 
@@ -197,7 +198,7 @@ RunAgentUseCase::execute_with_progress() (Application層)
 │   ├── Solo: LlmSession.send_with_tools() → Plan (Native Tool Use)
 │   └── Ensemble: JoinSet で並列生成 → 投票 → 選択
 │
-├── Phase 3: review_plan() → QuorumReviewResult
+├── Phase 3: review_plan() → VoteResult
 │   ├── Model A: Vote (APPROVE/REJECT)
 │   ├── Model B: Vote
 │   └── Model C: Vote
@@ -239,6 +240,22 @@ AgentController ──→ UiEvent ──→ TuiPresenter ──→ TuiState muta
 | Errors | `CommandError`, `UnknownCommand` |
 
 定義ファイル: `application/src/ports/ui_event.rs`
+
+### EventPublisher — typed イベントの継ぎ目
+
+合議結果（`quorum_result`）のような**外部消費される typed イベント**は、
+`EventPublisher` port（`application/src/ports/event_publisher.rs`）を通る単一の発行点を持ちます。
+
+```rust
+pub enum AppEvent { QuorumResult(QuorumResultPayload) }  // variant は今後増える
+pub trait EventPublisher: Send + Sync {
+    fn publish(&self, event: AppEvent);  // sync・fire-and-forget
+}
+```
+
+- 購読者: `ConversationLogEventPublisher`（JSONL）、`ScriptEventPublisher`（Lua `QuorumResult` イベント）。`CompositeEventPublisher` でファンアウト
+- これは意図的に「バス」ではなく**バスに後で差し替えられる継ぎ目**（RFC Discussion #304）。将来の Application / Interaction Event Bus は impl 差し替え + `AppEvent` variant 追加で導入され、呼び出し側は変わらない
+- エンベロープの JSON 契約は [Logging](logging.md) の `quorum_result` v1 を参照
 
 ### Progress Notification / 進捗通知
 

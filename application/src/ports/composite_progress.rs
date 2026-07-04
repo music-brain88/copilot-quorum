@@ -186,7 +186,7 @@ impl AgentProgressNotifier for CompositeProgressNotifier<'_> {
         &self,
         phase: &str,
         approved: bool,
-        votes: &[(String, bool, String)],
+        votes: &[quorum_domain::Vote],
         feedback: Option<&str>,
     ) {
         delegate!(

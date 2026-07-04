@@ -4,15 +4,16 @@
 //! [`QuorumActionReviewer`] implementation of [`ActionReviewer`].
 
 use super::RunAgentUseCase;
-use super::types::{QuorumReviewResult, RunAgentError, RunAgentInput};
+use super::types::{RunAgentError, RunAgentInput};
 use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
 use crate::ports::agent_progress::AgentProgressNotifier;
-use crate::ports::conversation_logger::ConversationEvent;
+use crate::ports::event_publisher::{AppEvent, EventPublisher};
 use crate::ports::llm_gateway::{GatewayError, LlmGateway};
 use crate::ports::tool_executor::ToolExecutorPort;
 use async_trait::async_trait;
 use quorum_domain::agent::model_config::ModelConfig;
 use quorum_domain::quorum::parsing::{parse_final_review_response, parse_review_response};
+use quorum_domain::quorum::{QuorumResultPayload, QuorumTarget, QuorumTopic, Vote, VoteResult};
 use quorum_domain::{AgentPromptTemplate, AgentState, Model, Task};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -46,6 +47,7 @@ pub(crate) struct QuorumActionReviewer {
     gateway: Arc<dyn LlmGateway>,
     tool_executor: Arc<dyn ToolExecutorPort>,
     cancellation_token: Option<CancellationToken>,
+    event_publisher: Arc<dyn EventPublisher>,
 }
 
 impl QuorumActionReviewer {
@@ -53,13 +55,24 @@ impl QuorumActionReviewer {
         gateway: Arc<dyn LlmGateway>,
         tool_executor: Arc<dyn ToolExecutorPort>,
         cancellation_token: Option<CancellationToken>,
+        event_publisher: Arc<dyn EventPublisher>,
     ) -> Self {
         Self {
             gateway,
             tool_executor,
             cancellation_token,
+            event_publisher,
         }
     }
+}
+
+/// Extract the tool name from a serialized tool call for the event target.
+fn tool_name_from_json(tool_call_json: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(tool_call_json)
+        .ok()?
+        .get("name")?
+        .as_str()
+        .map(String::from)
 }
 
 #[async_trait]
@@ -126,11 +139,16 @@ impl ActionReviewer for QuorumActionReviewer {
                         if approved { "APPROVE" } else { "REJECT" }
                     );
                     progress.on_quorum_model_complete(&model, approved);
-                    votes.push((model.to_string(), approved, feedback));
+                    votes.push(if approved {
+                        Vote::approve(model.to_string(), feedback)
+                    } else {
+                        Vote::reject(model.to_string(), feedback)
+                    });
                 }
                 Ok((model, Err(e))) => {
                     warn!("Model {} failed to review: {}", model, e);
                     progress.on_quorum_model_complete(&model, false);
+                    votes.push(Vote::model_error(model.to_string(), e.to_string()));
                 }
                 Err(e) => {
                     warn!("Task join error: {}", e);
@@ -138,26 +156,36 @@ impl ActionReviewer for QuorumActionReviewer {
             }
         }
 
-        if votes.is_empty() {
+        if !votes.iter().any(Vote::is_cast) {
             return Err(RunAgentError::QuorumFailed);
         }
 
-        let review = QuorumReviewResult::from_votes(votes);
+        let review = VoteResult::from_votes(votes);
+
+        self.event_publisher
+            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
+                QuorumTopic::ActionReview,
+                Some(QuorumTarget::action(
+                    task.id.to_string(),
+                    tool_name_from_json(tool_call_json),
+                )),
+                &review,
+            )));
 
         // Notify with detailed vote information
         progress.on_quorum_complete_with_votes(
             "action_review",
-            review.approved,
+            review.passed,
             &review.votes,
-            review.feedback.as_deref(),
+            review.aggregated_feedback.as_deref(),
         );
 
-        if review.approved {
+        if review.passed {
             Ok(ReviewDecision::Approved)
         } else {
             Ok(ReviewDecision::Rejected(
                 review
-                    .feedback
+                    .aggregated_feedback
                     .unwrap_or_else(|| "Rejected by quorum".to_string()),
             ))
         }
@@ -195,7 +223,7 @@ impl RunAgentUseCase {
         input: &RunAgentInput,
         state: &AgentState,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<QuorumReviewResult, RunAgentError> {
+    ) -> Result<VoteResult, RunAgentError> {
         let plan = state
             .plan
             .as_ref()
@@ -204,22 +232,14 @@ impl RunAgentUseCase {
         // Skip plan review if configured to do so (e.g., --no-quorum flag)
         if !input.policy.require_plan_review {
             info!("Plan review disabled, auto-approving plan");
-            return Ok(QuorumReviewResult {
-                approved: true,
-                votes: vec![],
-                feedback: None,
-            });
+            return Ok(VoteResult::skipped());
         }
 
         let models = &input.models.review;
         if models.is_empty() {
             // No quorum models configured, auto-approve
             info!("No quorum models configured, auto-approving plan");
-            return Ok(QuorumReviewResult {
-                approved: true,
-                votes: vec![],
-                feedback: None,
-            });
+            return Ok(VoteResult::skipped());
         }
 
         info!("Starting plan review with {} models", models.len());
@@ -272,12 +292,16 @@ impl RunAgentUseCase {
                         if approved { "APPROVE" } else { "REJECT" }
                     );
                     progress.on_quorum_model_complete(&model, approved);
-                    votes.push((model.to_string(), approved, feedback));
+                    votes.push(if approved {
+                        Vote::approve(model.to_string(), feedback)
+                    } else {
+                        Vote::reject(model.to_string(), feedback)
+                    });
                 }
                 Ok((model, Err(e))) => {
                     warn!("Model {} failed to review: {}", model, e);
                     progress.on_quorum_model_complete(&model, false);
-                    // Treat failure as abstain (don't count)
+                    votes.push(Vote::model_error(model.to_string(), e.to_string()));
                 }
                 Err(e) => {
                     warn!("Task join error: {}", e);
@@ -285,26 +309,18 @@ impl RunAgentUseCase {
             }
         }
 
-        if votes.is_empty() {
+        if !votes.iter().any(Vote::is_cast) {
             return Err(RunAgentError::QuorumFailed);
         }
 
-        let result = QuorumReviewResult::from_votes(votes);
+        let result = VoteResult::from_votes(votes);
 
-        self.conversation_logger.log(ConversationEvent::new(
-            "quorum_result",
-            serde_json::json!({
-                "topic": "plan_review",
-                "approved": result.approved,
-                "votes": result.votes.iter().map(|(model, approved, feedback)| {
-                    serde_json::json!({
-                        "model": model,
-                        "approved": approved,
-                        "feedback": feedback,
-                    })
-                }).collect::<Vec<_>>(),
-            }),
-        ));
+        self.event_publisher()
+            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
+                QuorumTopic::PlanReview,
+                None,
+                &result,
+            )));
 
         // Note: UI notification is handled by the caller (execute_with_progress)
         // to maintain separation between business logic and presentation
@@ -319,18 +335,14 @@ impl RunAgentUseCase {
         state: &AgentState,
         results_summary: &str,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<QuorumReviewResult, RunAgentError> {
+    ) -> Result<VoteResult, RunAgentError> {
         let plan = state.plan.as_ref().ok_or_else(|| {
             RunAgentError::TaskExecutionFailed("No plan for final review".to_string())
         })?;
 
         let models = &input.models.review;
         if models.is_empty() {
-            return Ok(QuorumReviewResult {
-                approved: true,
-                votes: vec![],
-                feedback: None,
-            });
+            return Ok(VoteResult::skipped());
         }
 
         info!("Starting final review with {} models", models.len());
@@ -384,11 +396,16 @@ impl RunAgentUseCase {
                         if approved { "SUCCESS" } else { "ISSUES" }
                     );
                     progress.on_quorum_model_complete(&model, approved);
-                    votes.push((model.to_string(), approved, feedback));
+                    votes.push(if approved {
+                        Vote::approve(model.to_string(), feedback)
+                    } else {
+                        Vote::reject(model.to_string(), feedback)
+                    });
                 }
                 Ok((model, Err(e))) => {
                     warn!("Model {} failed to review: {}", model, e);
                     progress.on_quorum_model_complete(&model, false);
+                    votes.push(Vote::model_error(model.to_string(), e.to_string()));
                 }
                 Err(e) => {
                     warn!("Task join error: {}", e);
@@ -396,11 +413,19 @@ impl RunAgentUseCase {
             }
         }
 
-        if votes.is_empty() {
+        if !votes.iter().any(Vote::is_cast) {
             return Err(RunAgentError::QuorumFailed);
         }
 
-        let result = QuorumReviewResult::from_votes(votes);
+        let result = VoteResult::from_votes(votes);
+
+        self.event_publisher()
+            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
+                QuorumTopic::FinalReview,
+                None,
+                &result,
+            )));
+
         // Note: UI notification is handled by the caller (execute_with_progress)
         // to maintain separation between business logic and presentation
 

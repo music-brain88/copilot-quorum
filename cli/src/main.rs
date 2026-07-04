@@ -543,11 +543,20 @@ async fn main() -> Result<()> {
     let human_intervention = Arc::new(InteractiveHumanIntervention::new());
     let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
+    let event_publisher = quorum_application::CompositeEventPublisher::new(vec![
+        Arc::new(quorum_application::ConversationLogEventPublisher::new(
+            conversation_logger.clone(),
+        )) as Arc<dyn quorum_application::EventPublisher>,
+        Arc::new(quorum_application::ScriptEventPublisher::new(
+            scripting_engine.clone(),
+        )),
+    ]);
     let mut use_case =
         RunAgentUseCase::with_context_loader(gateway, tool_executor, tool_schema, context_loader)
             .with_cancellation(cancellation_token.clone())
             .with_human_intervention(human_intervention)
-            .with_conversation_logger(conversation_logger);
+            .with_conversation_logger(conversation_logger)
+            .with_event_publisher(Arc::new(event_publisher));
     if let Some(resolver) = reference_resolver {
         use_case = use_case.with_reference_resolver(Arc::new(resolver));
     }

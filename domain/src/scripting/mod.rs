@@ -40,6 +40,10 @@ pub enum ScriptEventType {
     /// Fired when the agent creates a plan.
     /// Data: objective (string), task_count (int)
     PlanCreated,
+    /// Fired when a quorum review concludes (plan / action / final review).
+    /// Data: topic (string), approved (bool), approve_count (int),
+    /// reject_count (int), votes_json (JSON string, `quorum_result` v1 votes)
+    QuorumResult,
 }
 
 impl ScriptEventType {
@@ -57,6 +61,7 @@ impl ScriptEventType {
             Self::ToolCallAfter => "ToolCallAfter",
             Self::PhaseChanged => "PhaseChanged",
             Self::PlanCreated => "PlanCreated",
+            Self::QuorumResult => "QuorumResult",
         }
     }
 
@@ -82,6 +87,7 @@ impl std::str::FromStr for ScriptEventType {
             "ToolCallAfter" => Ok(Self::ToolCallAfter),
             "PhaseChanged" => Ok(Self::PhaseChanged),
             "PlanCreated" => Ok(Self::PlanCreated),
+            "QuorumResult" => Ok(Self::QuorumResult),
             other => Err(format!("unknown event: '{}'", other)),
         }
     }
@@ -157,6 +163,7 @@ mod tests {
             ScriptEventType::ToolCallAfter,
             ScriptEventType::PhaseChanged,
             ScriptEventType::PlanCreated,
+            ScriptEventType::QuorumResult,
         ];
         for event in &events {
             let name = event.as_str();
@@ -183,6 +190,7 @@ mod tests {
         assert!(!ScriptEventType::ToolCallAfter.is_cancellable());
         assert!(!ScriptEventType::PhaseChanged.is_cancellable());
         assert!(!ScriptEventType::PlanCreated.is_cancellable());
+        assert!(!ScriptEventType::QuorumResult.is_cancellable());
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod composite_progress;
 pub mod config_accessor;
 pub mod context_loader;
 pub mod conversation_logger;
+pub mod event_publisher;
 pub mod human_intervention;
 pub mod llm_gateway;
 pub mod progress;

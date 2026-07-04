@@ -137,6 +137,51 @@ let logger = JsonlConversationLogger::new("path/to/conversation.jsonl");
 
 ---
 
+## `quorum_result` イベント（v1 契約）
+
+合議レビュー（plan / action / final review）の完了時に記録される構造化イベント。
+JSONL・将来の headless `review` サブコマンド stdout（#300）・Remote Control API（#302）で
+**同一のレコード形状**を共有する（RFC Discussion #304）。
+
+- **payload** = `quorum_domain::quorum::QuorumResultPayload`（`type` / `timestamp` 以外の全フィールド）
+- **完全なレコード** = payload + `type` + `timestamp`。JSONL sink はこの 2 フィールドを注入する。
+  それ以外の sink（stdout / RPC）は **`QuorumResultPayload::to_record(timestamp)`** で
+  同一形状を生成すること — 3 面のスキーマが構造的にズレない
+
+```json
+{"type":"quorum_result","timestamp":"2026-07-04T10:30:00.123Z",
+ "api_version":1,"topic":"action_review",
+ "target":{"task_id":"task-1","tool":"run_command"},
+ "approved":true,"rule":"majority",
+ "votes":[
+   {"model":"claude-opus-4.5","verdict":"approve","reasoning":"...","confidence":null},
+   {"model":"gpt-5.3-codex","verdict":"reject","reasoning":"...","confidence":null},
+   {"model":"gemini-3.1-pro-preview","verdict":"model_error","reasoning":"gateway timeout","confidence":null}
+ ],
+ "feedback":"gpt-5.3-codex: ..."}
+```
+
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| `api_version` | int | エンベロープのスキーマバージョン（現在 1） |
+| `topic` | string | `plan_review` / `action_review` / `final_review` |
+| `target` | object? | topic 依存の対象識別（action_review: `task_id`, `tool`）。なければ省略 |
+| `approved` | bool | 投票の集計結果 |
+| `rule` | string | 集計ルール（現在は `majority` 固定） |
+| `votes[].verdict` | string | `approve` / `reject` / `abstain` / `model_error` |
+| `feedback` | string? | 否決時の rejection feedback 集約。承認時は省略 |
+
+**verdict のセマンティクス**: 分母に入るのは cast された票（`approve` + `reject`）のみ。
+`abstain` / `model_error` は可視化のために記録されるが集計には影響しない
+（モデル不達が否決に化けない）。全票が非 cast の場合はレビュー自体がエラー
+（`QuorumFailed`）になる。
+
+このイベントは `EventPublisher` 継ぎ目（`application/ports/event_publisher.rs`）経由で
+発行され、JSONL（`ConversationLogEventPublisher`）と Lua の `QuorumResult` イベント
+（`ScriptEventPublisher`）へファンアウトされる。
+
+---
+
 ## Architecture / アーキテクチャ
 
 ### レイヤーマッピング
