@@ -16,6 +16,7 @@
 
 use super::rule::QuorumRule;
 use super::vote::{Vote, VoteResult};
+use crate::orchestration::value_objects::SynthesisResult;
 use serde::{Deserialize, Serialize};
 
 /// Schema version of the `quorum_result` contract
@@ -34,6 +35,8 @@ pub enum QuorumTopic {
     ActionReview,
     /// Final review of the completed work
     FinalReview,
+    /// Headless review of a PR/diff (#300)
+    PrReview,
 }
 
 impl QuorumTopic {
@@ -43,6 +46,7 @@ impl QuorumTopic {
             Self::PlanReview => "plan_review",
             Self::ActionReview => "action_review",
             Self::FinalReview => "final_review",
+            Self::PrReview => "pr_review",
         }
     }
 }
@@ -56,6 +60,12 @@ pub struct QuorumTarget {
     /// Tool being reviewed (action_review)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// PR number being reviewed (pr_review)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u64>,
+    /// PR title (pr_review)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 impl QuorumTarget {
@@ -64,6 +74,17 @@ impl QuorumTarget {
         Self {
             task_id: Some(task_id.into()),
             tool,
+            ..Default::default()
+        }
+    }
+
+    /// Target for a PR/diff review (#300). Both fields are optional since a
+    /// bare `git diff | copilot-quorum review` has neither.
+    pub fn pr_review(pr: Option<u64>, title: Option<String>) -> Self {
+        Self {
+            pr,
+            title,
+            ..Default::default()
         }
     }
 }
@@ -90,6 +111,9 @@ pub struct QuorumResultPayload {
     /// Aggregated rejection feedback, if the vote did not pass
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feedback: Option<String>,
+    /// Moderator's synthesized review (pr_review; additive to v1, #300)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synthesis: Option<SynthesisResult>,
 }
 
 impl QuorumResultPayload {
@@ -103,7 +127,14 @@ impl QuorumResultPayload {
             rule: QuorumRule::Majority,
             votes: result.votes.clone(),
             feedback: result.aggregated_feedback.clone(),
+            synthesis: None,
         }
+    }
+
+    /// Attach the moderator's synthesized review (pr_review, #300).
+    pub fn with_synthesis(mut self, synthesis: SynthesisResult) -> Self {
+        self.synthesis = Some(synthesis);
+        self
     }
 
     /// Build the complete `quorum_result` record: payload + `type` + `timestamp`
@@ -177,6 +208,46 @@ mod tests {
         assert_eq!(json["topic"], "plan_review");
         assert!(json.get("target").is_none());
         assert!(json.get("feedback").is_none());
+        assert!(json.get("synthesis").is_none());
+    }
+
+    #[test]
+    fn test_pr_review_topic_and_target() {
+        assert_eq!(QuorumTopic::PrReview.as_str(), "pr_review");
+
+        let target = QuorumTarget::pr_review(Some(123), Some("Fix the bug".into()));
+        let json = serde_json::to_value(&target).unwrap();
+        assert_eq!(json, serde_json::json!({"pr": 123, "title": "Fix the bug"}));
+
+        // A bare stdin diff has neither
+        let bare = QuorumTarget::pr_review(None, None);
+        assert_eq!(serde_json::to_value(&bare).unwrap(), serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_with_synthesis_populates_and_serializes() {
+        let result = VoteResult::from_votes(vec![
+            Vote::approve("claude-opus-4.5", "Safe"),
+            Vote::reject("gpt-5.3-codex", "Missing tests"),
+        ]);
+        let synthesis =
+            SynthesisResult::new("claude-opus-4.5", "Overall solid, but add test coverage.");
+        let payload = QuorumResultPayload::new(
+            QuorumTopic::PrReview,
+            Some(QuorumTarget::pr_review(Some(123), Some("Fix login".into()))),
+            &result,
+        )
+        .with_synthesis(synthesis);
+
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["topic"], "pr_review");
+        assert_eq!(json["target"]["pr"], 123);
+        assert_eq!(json["target"]["title"], "Fix login");
+        assert_eq!(json["synthesis"]["moderator"], "claude-opus-4.5");
+        assert_eq!(
+            json["synthesis"]["conclusion"],
+            "Overall solid, but add test coverage."
+        );
     }
 
     // Golden test: the full record = payload + type + timestamp, matching

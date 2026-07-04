@@ -62,7 +62,7 @@ pub use orchestration::{
     stream_context::StreamContext,
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
-pub use prompt::{AgentPromptTemplate, PromptTemplate};
+pub use prompt::{AgentPromptTemplate, PromptTemplate, ReviewPromptTemplate};
 pub use providers::{
     AnthropicProviderConfig, BedrockProviderConfig, OpenAiProviderConfig, ProviderConfig,
 };

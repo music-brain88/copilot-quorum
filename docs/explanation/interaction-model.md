@@ -1,8 +1,8 @@
 # Interaction Model / インタラクションモデル
 
-> Unified peer-form architecture for Agent, Ask, and Discuss interactions
+> Unified peer-form architecture for Agent, Ask, Discuss, and Review interactions
 >
-> Agent / Ask / Discuss を対等な peer form として統一するアーキテクチャ
+> Agent / Ask / Discuss / Review を対等な peer form として統一するアーキテクチャ
 
 ---
 
@@ -10,7 +10,7 @@
 
 copilot-quorum では、ユーザーとシステムの対話を **Interaction** という単一の抽象で表現します。
 従来の「Agent が主で Ask / Discuss が従属」というモデルではなく、
-3 つの form が **対等な peer**（Vim の `buftype` パターン）として扱われます。
+4 つの form が **対等な peer**（Vim の `buftype` パターン）として扱われます。
 
 ```
 Vim:
@@ -23,15 +23,18 @@ copilot-quorum:
   Interaction(form=Agent)    ← 自律実行
   Interaction(form=Ask)      ← 問い合わせ
   Interaction(form=Discuss)  ← 合議
+  Interaction(form=Review)   ← PR/diff レビュー（#300）
   → 全て Interaction の form。Agent が他の親ではない。
 ```
 
 > **設計背景**: Discussion [#138](https://github.com/music-brain88/copilot-quorum/discussions/138) で提案された
-> "Unified Interaction Architecture" に基づく。
+> "Unified Interaction Architecture" に基づく。`Review` form は RFC Discussion
+> [#304](https://github.com/music-brain88/copilot-quorum/discussions/304) D2 でこの原則に従って追加された
+> （headless `review` サブコマンド専用の ad-hoc パスにはしなかった）。
 
 ---
 
-## InteractionForm — 3 つの対等な form
+## InteractionForm — 4 つの対等な form
 
 `InteractionForm` は対話の形式を表す enum で、各 form は独立した peer です。
 
@@ -41,19 +44,20 @@ enum InteractionForm {
     Agent,    // 自律タスク実行（計画 → ツール使用 → レビュー）
     Ask,      // 単一質問 → 回答（read-only ツール）
     Discuss,  // 多モデル議論 / Quorum council
+    Review,   // 多モデル PR/diff レビュー（read-only、ツール実行なし、#300）
 }
 ```
 
 ### 各 form の特性
 
-| 特性 | Agent | Ask | Discuss |
-|------|-------|-----|---------|
-| **説明** | 自律タスク実行 | 単一 Q&A | 多モデル議論 |
-| **ツール** | 全て（risk-based review） | read-only | なし |
-| **SessionMode** | ✓ | ✓（モデル選択のみ） | ✓ |
-| **AgentPolicy** | ✓ | — | — |
-| **ExecutionParams** | ✓ | ✓（`max_tool_turns`） | — |
-| **デフォルト ContextMode** | `Full` | `Projected` | `Full` |
+| 特性 | Agent | Ask | Discuss | Review |
+|------|-------|-----|---------|--------|
+| **説明** | 自律タスク実行 | 単一 Q&A | 多モデル議論 | PR/diff レビュー |
+| **ツール** | 全て（risk-based review） | read-only | なし | なし |
+| **SessionMode** | ✓ | ✓（モデル選択のみ） | ✓ | ✓（未使用、将来拡張用） |
+| **AgentPolicy** | ✓ | — | — | — |
+| **ExecutionParams** | ✓ | ✓（`max_tool_turns`） | — | — |
+| **デフォルト ContextMode** | `Full` | `Projected` | `Full` | `Fresh` |
 
 ### Config 必要性の判定メソッド
 
@@ -337,4 +341,4 @@ Phase A (実装済み) → Phase B (計画中) → Phase C (将来)
 | `presentation/src/tui/state.rs` | TUI state integration |
 | `presentation/src/tui/event.rs` | InteractionForm in event routing |
 
-<!-- LLM Context: InteractionForm は Agent / Ask / Discuss の3つの対等な peer form。ContextMode (Full / Projected / Fresh) はコンテキスト伝播量を制御する cross-cutting 概念で、Vim のバッファコマンドにアナロジー。InteractionTree は HashMap ベースのツリー構造で再帰ネスティングを管理、DEFAULT_MAX_NESTING_DEPTH = 3。InteractionResult の to_context_injection() で子の結果を親に注入。TUI では PaneKind::Interaction として Tab/Pane モデルに統合。Spawn は Phase A（ユーザー起動）が実装済み、Phase B（ツールベース）/ Phase C（ポリシー自動化）は計画中。主要ファイルは domain/src/interaction/mod.rs。 -->
+<!-- LLM Context: InteractionForm は Agent / Ask / Discuss / Review の4つの対等な peer form(Review は #300, RFC #304 D2 で追加)。ContextMode (Full / Projected / Fresh) はコンテキスト伝播量を制御する cross-cutting 概念で、Vim のバッファコマンドにアナロジー。Review のデフォルト ContextMode は Fresh(会話履歴を持たない自己完結レビュー)。InteractionTree は HashMap ベースのツリー構造で再帰ネスティングを管理、DEFAULT_MAX_NESTING_DEPTH = 3。InteractionResult の to_context_injection() で子の結果を親に注入(ReviewResult は approved/votes/synthesis を運ぶ)。TUI では PaneKind::Interaction として Tab/Pane モデルに統合。Spawn は Phase A（ユーザー起動）が実装済み、Phase B（ツールベース）/ Phase C（ポリシー自動化）は計画中。headless review サブコマンドは AgentController::prepare_root_spawn で真の root interaction(parent=None)として spawn される(既存の prepare_spawn は active_interaction_id の子として spawn するため区別)。主要ファイルは domain/src/interaction/mod.rs。 -->

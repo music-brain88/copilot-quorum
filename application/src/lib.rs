@@ -47,6 +47,9 @@ pub use use_cases::run_ask::{RunAskError, RunAskInput, RunAskUseCase};
 // Re-export ErrorCategory from domain (was previously in run_agent)
 pub use quorum_domain::ErrorCategory;
 pub use use_cases::run_quorum::{RunQuorumInput, RunQuorumUseCase};
+pub use use_cases::run_review::{
+    RunReviewError, RunReviewInput, RunReviewOutput, RunReviewUseCase,
+};
 
 // Extracted use cases (Phase 1 + Phase 4)
 pub use ports::action_reviewer::{ActionReviewer, ReviewDecision};

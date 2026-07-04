@@ -23,7 +23,7 @@ pub struct PaneId(pub usize);
 /// What kind of content a pane displays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneKind {
-    /// An interaction pane — Agent, Ask, or Discuss.
+    /// An interaction pane — Agent, Ask, Discuss, or Review.
     Interaction(InteractionForm, Option<InteractionId>),
 }
 
@@ -34,6 +34,7 @@ impl PaneKind {
             PaneKind::Interaction(InteractionForm::Agent, _) => "Agent",
             PaneKind::Interaction(InteractionForm::Ask, _) => "Ask",
             PaneKind::Interaction(InteractionForm::Discuss, _) => "Discuss",
+            PaneKind::Interaction(InteractionForm::Review, _) => "Review",
         }
     }
 }

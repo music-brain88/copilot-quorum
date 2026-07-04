@@ -72,6 +72,12 @@ impl ReplPresenter {
                 println!("{} {}", "Error:".red().bold(), error);
                 println!();
             }
+            UiEvent::ReviewError { error } => {
+                println!("{} {}", "❌".red(), "Review failed".red().bold());
+                println!();
+                println!("{} {}", "Error:".red().bold(), error);
+                println!();
+            }
             UiEvent::InteractionSpawned(event) => {
                 let parent = event
                     .parent_id

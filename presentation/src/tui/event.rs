@@ -58,6 +58,17 @@ pub enum TuiCommand {
         query: String,
         context_mode_override: Option<ContextMode>,
     },
+    /// Spawn a brand new root-level interaction (no parent) and report its
+    /// id back. Used by headless entry points (e.g. #300's `review`
+    /// subcommand) that start a fresh interaction rather than nesting under
+    /// whichever interaction happens to be active — see
+    /// `AgentController::prepare_root_spawn`.
+    SpawnRootInteraction {
+        form: InteractionForm,
+        label: String,
+        material: String,
+        respond_to: oneshot::Sender<InteractionId>,
+    },
     /// Activate an existing interaction
     ActivateInteraction(InteractionId),
     /// Cancel the in-flight interaction bound to a (now closed) tab.

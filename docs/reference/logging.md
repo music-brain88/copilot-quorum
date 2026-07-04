@@ -139,8 +139,8 @@ let logger = JsonlConversationLogger::new("path/to/conversation.jsonl");
 
 ## `quorum_result` イベント（v1 契約）
 
-合議レビュー（plan / action / final review）の完了時に記録される構造化イベント。
-JSONL・将来の headless `review` サブコマンド stdout（#300）・Remote Control API（#302）で
+合議レビュー（plan / action / final / pr review）の完了時に記録される構造化イベント。
+JSONL・headless `review` サブコマンド stdout（#300）・Remote Control API（#302）で
 **同一のレコード形状**を共有する（RFC Discussion #304）。
 
 - **payload** = `quorum_domain::quorum::QuorumResultPayload`（`type` / `timestamp` 以外の全フィールド）
@@ -161,15 +161,35 @@ JSONL・将来の headless `review` サブコマンド stdout（#300）・Remote
  "feedback":"gpt-5.3-codex: ..."}
 ```
 
+`pr_review`（`copilot-quorum review`、#300）は `target` に `pr` / `title` を持ち、
+moderator が投票を統合した `synthesis` を追加で含む（どちらも additive — 既存の
+plan/action/final review では省略される）:
+
+```json
+{"type":"quorum_result","timestamp":"2026-07-04T10:30:00.123Z",
+ "api_version":1,"topic":"pr_review",
+ "target":{"pr":123,"title":"Fix the bug in login.rs"},
+ "approved":true,"rule":"majority",
+ "votes":[{"model":"claude-opus-4.5","verdict":"approve","reasoning":"...","confidence":null}],
+ "synthesis":{"moderator":"claude-opus-4.5","conclusion":"...",
+   "key_points":[],"consensus":[],"disagreements":[]}}
+```
+
 | フィールド | 型 | 説明 |
 |-----------|------|------|
 | `api_version` | int | エンベロープのスキーマバージョン（現在 1） |
-| `topic` | string | `plan_review` / `action_review` / `final_review` |
-| `target` | object? | topic 依存の対象識別（action_review: `task_id`, `tool`）。なければ省略 |
+| `topic` | string | `plan_review` / `action_review` / `final_review` / `pr_review` |
+| `target` | object? | topic 依存の対象識別（action_review: `task_id`, `tool`。pr_review: `pr`, `title`）。なければ省略 |
 | `approved` | bool | 投票の集計結果 |
 | `rule` | string | 集計ルール（現在は `majority` 固定） |
 | `votes[].verdict` | string | `approve` / `reject` / `abstain` / `model_error` |
 | `feedback` | string? | 否決時の rejection feedback 集約。承認時は省略 |
+| `synthesis` | object? | moderator による統合レビュー（pr_review のみ。`moderator`, `conclusion`, `key_points`, `consensus`, `disagreements`） |
+
+**注**: `pr_review` を JSONL に発行する `RunReviewUseCase` は `target` を持たずに publish する
+（review 対象の PR 番号/タイトルは呼び出し元の CLI 層のみが知っている一時情報のため）。
+`copilot-quorum review --output json` の stdout はここに `target` を合成してから出力する —
+JSONL の監査ログと stdout の最終契約とで `target` の有無が異なるのは意図的な実装判断。
 
 **verdict のセマンティクス**: 分母に入るのは cast された票（`approve` + `reject`）のみ。
 `abstain` / `model_error` は可視化のために記録されるが集計には影響しない

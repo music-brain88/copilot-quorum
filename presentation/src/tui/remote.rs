@@ -25,7 +25,7 @@
 //! | `pane.read`            | `{tab?: usize, last?: usize}`         | conversation messages (structured) |
 //! | `input.send`           | `{text: string}`                      | submit prompt to active pane |
 //! | `command.exec`         | `{command: string}`                   | run `:command` (e.g. "solo", "tabnew ask") |
-//! | `interaction.spawn`    | `{form: "agent"\|"ask"\|"discuss", query: string}` | spawn interaction (new tab) |
+//! | `interaction.spawn`    | `{form: "agent"\|"ask"\|"discuss"\|"review", query: string}` | spawn interaction (new tab) |
 //! | `interaction.activate` | `{interaction_id: usize}`             | focus an interaction's tab |
 //! | `hil.respond`          | `{decision: "approve"\|"reject"}`     | answer a pending HiL modal |
 //!
@@ -781,8 +781,13 @@ fn parse_form(s: &str) -> Result<InteractionForm, RemoteError> {
         "agent" => Ok(InteractionForm::Agent),
         "ask" => Ok(InteractionForm::Ask),
         "discuss" => Ok(InteractionForm::Discuss),
+        // `query` is the raw diff text for a Review spawn — no PR metadata
+        // or focus (that's only available via the `review` CLI subcommand,
+        // #300). Spawned as a child of the active interaction, same as the
+        // other forms.
+        "review" => Ok(InteractionForm::Review),
         other => Err(RemoteError::invalid_params(format!(
-            "unknown form '{other}' (expected agent|ask|discuss)"
+            "unknown form '{other}' (expected agent|ask|discuss|review)"
         ))),
     }
 }

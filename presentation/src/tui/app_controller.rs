@@ -123,6 +123,25 @@ pub(super) async fn controller_task(
                             }
                         }
                     }
+                    TuiCommand::SpawnRootInteraction {
+                        form,
+                        label,
+                        material,
+                        respond_to,
+                    } => {
+                        let (root_id, label, material) =
+                            controller.prepare_root_spawn(form, label, material);
+                        let _ = respond_to.send(root_id);
+
+                        let context = controller.build_spawn_context_for(root_id);
+                        let tx = progress_tx.clone();
+                        tasks.spawn(async move {
+                            let progress = TuiProgressBridge::for_interaction(tx, root_id);
+                            context
+                                .execute(Some(root_id), form, label, material, &progress)
+                                .await
+                        });
+                    }
                     TuiCommand::ActivateInteraction(id) => {
                         controller.set_active_interaction(id);
                     }

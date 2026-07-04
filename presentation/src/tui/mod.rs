@@ -28,7 +28,7 @@ mod surface;
 pub mod tab;
 mod widgets;
 
-pub use app::TuiApp;
+pub use app::{InteractionOutcome, TuiApp};
 pub use content::{
     ContentRegistry, ContentRenderer, ContentSlot, ConversationContent, ProgressContent,
 };

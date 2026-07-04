@@ -24,6 +24,18 @@ pub(super) enum SideEffect {
     LaunchEditor,
 }
 
+/// Outcome of awaiting a specific interaction via [`TuiApp::run_headless_until`].
+#[derive(Debug, Clone)]
+pub enum InteractionOutcome {
+    /// The interaction completed and produced a structured result.
+    Completed(InteractionResult),
+    /// The interaction failed before producing a result (see the message for
+    /// what a `*Error` `UiEvent` reported).
+    Failed(String),
+    /// The process was interrupted (`:q!`, Ctrl+C, SIGTERM) before completion.
+    Interrupted,
+}
+
 /// Everything needed to process a terminal event outside `&self TuiApp`.
 ///
 /// Borrowed from `TuiApp` via [`TuiApp::input_deps`] — lets the same key
@@ -133,7 +145,9 @@ use quorum_application::{
     AgentController, ClipboardPort, ContextLoaderPort, ConversationLogger, LlmGateway, NoClipboard,
     NoConversationLogger, ToolExecutorPort, ToolSchemaPort, TuiAccessorPort, UiEvent,
 };
-use quorum_domain::{ConsensusLevel, HumanDecision, Model};
+use quorum_domain::{
+    ConsensusLevel, HumanDecision, InteractionForm, InteractionId, InteractionResult, Model,
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -342,6 +356,32 @@ impl TuiApp {
             request: request.into(),
         });
         self
+    }
+
+    /// Spawn a brand new root-level interaction (no parent) and return its id
+    /// once the controller task has created it.
+    ///
+    /// Used by headless entry points that start a fresh interaction rather
+    /// than nesting under whichever interaction happens to be active (e.g.
+    /// #300's `review` subcommand). Pair with [`Self::run_headless_until`] to
+    /// await its completion.
+    pub async fn spawn_root_interaction(
+        &self,
+        form: InteractionForm,
+        label: impl Into<String>,
+        material: impl Into<String>,
+    ) -> io::Result<InteractionId> {
+        let (respond_to, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(TuiCommand::SpawnRootInteraction {
+                form,
+                label: label.into(),
+                material: material.into(),
+                respond_to,
+            })
+            .map_err(|_| io::Error::other("controller task unavailable"))?;
+        rx.await
+            .map_err(|_| io::Error::other("controller task dropped without responding"))
     }
 
     pub fn with_tui_config(mut self, config: TuiInputConfig) -> Self {
@@ -562,12 +602,9 @@ impl TuiApp {
     /// through CLI parsing. Exits on `:q!` / `:qa` (via `command.exec`) or on
     /// SIGINT/SIGTERM, since there is no keyboard to type a quit command.
     ///
-    /// Extension point for #300: a `run_headless_until(interaction_id)` would
-    /// compare each `ui_event` / `routed` event's interaction id against the
-    /// awaited one in the branches below and `return` its result instead of
-    /// looping forever — no change to channel ownership needed, since this
-    /// loop is already the sole consumer of `ui_rx` / `tui_event_rx` (see PR
-    /// description for why this was chosen over a spawn-time oneshot).
+    /// See [`Self::run_headless_until`] for the #300 sibling that awaits one
+    /// specific interaction instead of running forever — used by the `review`
+    /// subcommand, which doesn't take `--listen` at all.
     pub async fn run_headless(&mut self) -> io::Result<()> {
         let path = self.listen_path.clone().ok_or_else(|| {
             io::Error::new(
@@ -665,6 +702,119 @@ impl TuiApp {
         }
 
         Ok(())
+    }
+
+    /// Run the headless event loop until a specific interaction completes (or
+    /// fails / the process is interrupted), returning its outcome instead of
+    /// looping forever like [`Self::run_headless`].
+    ///
+    /// Used by #300's `review` subcommand: build a headless `TuiApp`, spawn a
+    /// Review interaction via [`Self::spawn_root_interaction`], then await it
+    /// here. Unlike `run_headless`, `--listen` is optional — `review` doesn't
+    /// take a `--listen` flag at all, but a future caller that also wants the
+    /// socket open (e.g. for `screen.capture` while a review runs) can still
+    /// set one via [`Self::with_listen`].
+    ///
+    /// RFC #304 D2/D3 originally sketched this as comparing the awaited
+    /// `interaction_id` against each `ui_event`'s id inline. In practice the
+    /// success path needs the *structured* [`InteractionResult`], not just
+    /// the notification text — so [`InteractionCompletedEvent`] now carries
+    /// it, and this loop returns it directly. Failure is signaled by the
+    /// relevant `*Error` `UiEvent` instead, since a headless caller only ever
+    /// has one interaction in flight, so any error unambiguously belongs to it.
+    pub async fn run_headless_until(
+        &mut self,
+        interaction_id: InteractionId,
+    ) -> io::Result<InteractionOutcome> {
+        use quorum_application::UiEvent;
+
+        let mut state = TuiState::new();
+        state.tui_config = self.tui_config.clone();
+        state.layout_config = self.layout_config.clone();
+        state.route = super::route::RouteTable::from_preset_and_overrides(
+            self.layout_config.preset.clone(),
+            &self.layout_config.route_overrides,
+        );
+
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+
+        let (remote_tx, mut remote_rx) = mpsc::unbounded_channel::<super::remote::RemoteRequest>();
+        if let Some(path) = self.listen_path.clone() {
+            super::remote::validate_socket_path(&path)?;
+            super::remote::spawn_listener(path, remote_tx)?;
+        } else {
+            drop(remote_tx);
+        }
+
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+        loop {
+            self.apply_tui_changes(&mut state);
+
+            if state.should_quit {
+                return Ok(InteractionOutcome::Interrupted);
+            }
+
+            tokio::select! {
+                biased;
+
+                Some(ui_event) = self.ui_rx.recv() => {
+                    let outcome = match &ui_event {
+                        UiEvent::InteractionCompleted(event) if event.id == interaction_id => {
+                            event.result.clone().map(InteractionOutcome::Completed)
+                        }
+                        UiEvent::AskError { error }
+                        | UiEvent::QuorumError { error }
+                        | UiEvent::ReviewError { error }
+                        | UiEvent::InteractionSpawnError { error } => {
+                            Some(InteractionOutcome::Failed(error.clone()))
+                        }
+                        UiEvent::AgentError(e) => Some(InteractionOutcome::Failed(e.error.clone())),
+                        _ => None,
+                    };
+                    self.presenter.apply(&mut state, &ui_event);
+                    if let Some(outcome) = outcome {
+                        return Ok(outcome);
+                    }
+                }
+
+                Some(routed) = self.tui_event_rx.recv() => {
+                    super::app_event_dispatch::apply_routed_tui_event(
+                        &mut state,
+                        &self.content_registry,
+                        routed,
+                    );
+                }
+
+                Some(hil_request) = self.hil_rx.recv() => {
+                    super::app_hil::handle_hil_request(
+                        &mut state,
+                        &self.pending_hil_tx,
+                        hil_request,
+                    );
+                }
+
+                Some(remote_request) = remote_rx.recv() => {
+                    let ctx = super::remote::RemoteContext {
+                        deps: self.input_deps(),
+                        terminal_size: headless_terminal_size(),
+                    };
+                    super::remote::handle_request(&mut state, &ctx, remote_request);
+                }
+
+                _ = tick.tick() => {
+                    state.expire_flash(Duration::from_secs(5));
+                }
+
+                _ = tokio::signal::ctrl_c() => {
+                    return Ok(InteractionOutcome::Interrupted);
+                }
+                _ = sigterm.recv() => {
+                    return Ok(InteractionOutcome::Interrupted);
+                }
+            }
+        }
     }
 
     /// Suspend the TUI, launch $EDITOR, and resume.
