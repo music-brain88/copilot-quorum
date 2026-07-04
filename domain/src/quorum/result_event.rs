@@ -78,14 +78,20 @@ impl QuorumTarget {
         }
     }
 
-    /// Target for a PR/diff review (#300). Both fields are optional since a
-    /// bare `git diff | copilot-quorum review` has neither.
-    pub fn pr_review(pr: Option<u64>, title: Option<String>) -> Self {
-        Self {
+    /// Target for a PR/diff review (#300). Returns `None` when neither `pr`
+    /// nor `title` is known (e.g. a bare `git diff | copilot-quorum review`
+    /// via stdin) — the `quorum_result` contract omits `target` entirely in
+    /// that case rather than serializing an empty object, so this returns
+    /// `Option<Self>` instead of always producing a `QuorumTarget`.
+    pub fn pr_review(pr: Option<u64>, title: Option<String>) -> Option<Self> {
+        if pr.is_none() && title.is_none() {
+            return None;
+        }
+        Some(Self {
             pr,
             title,
             ..Default::default()
-        }
+        })
     }
 }
 
@@ -215,13 +221,32 @@ mod tests {
     fn test_pr_review_topic_and_target() {
         assert_eq!(QuorumTopic::PrReview.as_str(), "pr_review");
 
-        let target = QuorumTarget::pr_review(Some(123), Some("Fix the bug".into()));
+        let target =
+            QuorumTarget::pr_review(Some(123), Some("Fix the bug".into())).expect("has pr/title");
         let json = serde_json::to_value(&target).unwrap();
         assert_eq!(json, serde_json::json!({"pr": 123, "title": "Fix the bug"}));
 
-        // A bare stdin diff has neither
-        let bare = QuorumTarget::pr_review(None, None);
-        assert_eq!(serde_json::to_value(&bare).unwrap(), serde_json::json!({}));
+        // A bare stdin diff has neither — no target at all, not an empty object
+        assert_eq!(QuorumTarget::pr_review(None, None), None);
+    }
+
+    // Regression test: a bare `git diff | copilot-quorum review` (no --pr,
+    // no title) must omit `target` from the record entirely, per the
+    // `quorum_result` contract ("target: object? — omitted when absent").
+    // An earlier version of the `review` CLI handler always wrapped
+    // `QuorumTarget::pr_review(..)` in `Some(..)`, producing `"target": {}`
+    // instead of omitting the key.
+    #[test]
+    fn test_payload_omits_target_when_pr_review_has_neither_pr_nor_title() {
+        let result = VoteResult::from_votes(vec![Vote::approve("m", "ok")]);
+        let payload = QuorumResultPayload::new(
+            QuorumTopic::PrReview,
+            QuorumTarget::pr_review(None, None),
+            &result,
+        );
+        let json = serde_json::to_value(&payload).unwrap();
+
+        assert!(json.get("target").is_none());
     }
 
     #[test]
@@ -234,7 +259,7 @@ mod tests {
             SynthesisResult::new("claude-opus-4.5", "Overall solid, but add test coverage.");
         let payload = QuorumResultPayload::new(
             QuorumTopic::PrReview,
-            Some(QuorumTarget::pr_review(Some(123), Some("Fix login".into()))),
+            QuorumTarget::pr_review(Some(123), Some("Fix login".into())),
             &result,
         )
         .with_synthesis(synthesis);
