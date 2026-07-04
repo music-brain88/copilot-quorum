@@ -26,6 +26,7 @@
 | `--no-log-file` | | 会話ログファイルを無効化 |
 | `--show-config` | | 解決された設定と init.lua パスを表示して終了 |
 | `--listen <PATH>` | | Remote Control API のソケットを開いて TUI を起動 |
+| `--headless` | | 実ターミナルなしでイベントループを起動（`--listen` 必須。詳細は [tui-remote-control.md](./tui-remote-control.md#headless-mode--ヘッドレスモード-303)） |
 
 定義ファイル: `presentation/src/cli/commands.rs`
 
@@ -91,4 +92,4 @@ TUI の Command モード（`:`）で使えるコマンド（抜粋）:
 - [How to Use the TUI](../how-to/use-the-tui.md) - モーダル操作の使い方
 - [Orchestration Axes](../explanation/orchestration-axes.md) - `/solo` `/scope` `/strategy` が変更する 3 軸の意味
 
-<!-- LLM Context: CLI フラグは presentation/src/cli/commands.rs で定義。--solo/--ensemble(排他), --no-quorum, -m/--model(複数可), --final-review, -w/--working-dir, -o/--output, -v(count), --show-votes, -q/--quiet, --log-dir, --no-log-file, --show-config, --listen(Remote Control API)。--chat/--config/--moderator/--no-review フラグは存在しない(旧ドキュメントの残骸)。REPL: /solo /ens /fast /scope /strategy /council /init /config /clear /quit。TUI command mode: agent/ask/discuss <query>, tabnew, tabs, tabclose, q/quit(タブ数>1 で tabclose 相当・最後の1枚で終了), qa/qall(全体終了)。 -->
+<!-- LLM Context: CLI フラグは presentation/src/cli/commands.rs で定義。--solo/--ensemble(排他), --no-quorum, -m/--model(複数可), --final-review, -w/--working-dir, -o/--output, -v(count), --show-votes, -q/--quiet, --log-dir, --no-log-file, --show-config, --listen(Remote Control API), --headless(--listen 必須、TTY なしでイベントループのみ起動 — #303)。--chat/--config/--moderator/--no-review フラグは存在しない(旧ドキュメントの残骸)。REPL: /solo /ens /fast /scope /strategy /council /init /config /clear /quit。TUI command mode: agent/ask/discuss <query>, tabnew, tabs, tabclose, q/quit(タブ数>1 で tabclose 相当・最後の1枚で終了), qa/qall(全体終了)。 -->

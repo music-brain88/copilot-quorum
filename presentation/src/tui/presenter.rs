@@ -100,17 +100,20 @@ impl TuiPresenter {
                 }
             }
             UiEvent::InteractionCompleted(event) => {
-                // Root interaction completions (parent_id = None) are not propagated;
-                // only child completions need to notify their parent's tab.
-                if let Some(parent_id) = event.parent_id {
-                    let _ = self.event_tx.send(RoutedTuiEvent::for_interaction(
-                        parent_id,
-                        TuiEvent::InteractionCompleted {
-                            parent_id: Some(parent_id),
-                            result_text: event.result_text.clone(),
-                        },
-                    ));
-                }
+                // Route to the parent's tab so a spawned child's result shows
+                // there (existing behavior). A root interaction (no parent)
+                // has no parent tab to notify — route to its own tab instead
+                // of dropping the event, so headless callers (#300's `review`)
+                // can observe root completion via `pane.read` / `state.get`
+                // instead of it being silently swallowed (#303, RFC #304 D3).
+                let target = event.parent_id.unwrap_or(event.id);
+                let _ = self.event_tx.send(RoutedTuiEvent::for_interaction(
+                    target,
+                    TuiEvent::InteractionCompleted {
+                        parent_id: event.parent_id,
+                        result_text: event.result_text.clone(),
+                    },
+                ));
             }
             UiEvent::InteractionSpawnError { error } => {
                 let message = format!("Interaction spawn error: {}", error);
@@ -506,6 +509,69 @@ mod tests {
         let content = &state.tabs.active_pane().conversation.messages[0].content;
         assert!(content.contains("[models]  decision=claude-sonnet-4.5"));
         assert!(!content.contains("[runtime]"));
+    }
+
+    #[test]
+    fn test_interaction_completed_child_routes_to_parent_tab() {
+        use quorum_application::InteractionCompletedEvent;
+        use quorum_domain::interaction::{InteractionForm, InteractionId};
+
+        let (presenter, mut rx, mut state) = setup();
+        presenter.apply(
+            &mut state,
+            &UiEvent::InteractionCompleted(InteractionCompletedEvent {
+                id: InteractionId(2),
+                form: InteractionForm::Ask,
+                parent_id: Some(InteractionId(1)),
+                result_text: "[Ask] done".into(),
+            }),
+        );
+
+        let routed = rx.try_recv().expect("event should be routed");
+        assert_eq!(routed.interaction_id, Some(InteractionId(1)));
+        match routed.event {
+            TuiEvent::InteractionCompleted {
+                parent_id,
+                result_text,
+            } => {
+                assert_eq!(parent_id, Some(InteractionId(1)));
+                assert_eq!(result_text, "[Ask] done");
+            }
+            other => panic!("Expected InteractionCompleted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_interaction_completed_root_routes_to_own_tab() {
+        // Regression test for #303 / RFC #304 D3: a root interaction (no
+        // parent) must not be silently dropped — headless callers (#300's
+        // `review`) need to observe its own completion.
+        use quorum_application::InteractionCompletedEvent;
+        use quorum_domain::interaction::{InteractionForm, InteractionId};
+
+        let (presenter, mut rx, mut state) = setup();
+        presenter.apply(
+            &mut state,
+            &UiEvent::InteractionCompleted(InteractionCompletedEvent {
+                id: InteractionId(0),
+                form: InteractionForm::Agent,
+                parent_id: None,
+                result_text: "done".into(),
+            }),
+        );
+
+        let routed = rx.try_recv().expect("root completion must be propagated");
+        assert_eq!(routed.interaction_id, Some(InteractionId(0)));
+        match routed.event {
+            TuiEvent::InteractionCompleted {
+                parent_id,
+                result_text,
+            } => {
+                assert_eq!(parent_id, None);
+                assert_eq!(result_text, "done");
+            }
+            other => panic!("Expected InteractionCompleted, got {:?}", other),
+        }
     }
 
     #[test]

@@ -187,7 +187,11 @@ fn apply_tui_event_to_interaction(
         } => {
             let target_id = parent_id.unwrap_or(id);
             state.push_message_to(target_id, DisplayMessage::system(result_text));
-            state.set_flash("Child interaction completed");
+            state.set_flash(if parent_id.is_some() {
+                "Child interaction completed"
+            } else {
+                "Interaction completed"
+            });
         }
         TuiEvent::QuorumStart { phase, model_count } => {
             if let Some(pane) = state.tabs.pane_for_interaction_mut(id) {
@@ -526,6 +530,41 @@ mod tests {
         let active = state.tabs.active_pane();
         assert!(active.conversation.streaming_text.is_empty());
         assert!(active.conversation.messages.is_empty());
+    }
+
+    #[test]
+    fn test_interaction_completed_root_pushes_to_own_pane_with_generic_flash() {
+        // Regression test for #303: root completions (parent_id = None) are
+        // routed to their own interaction id (see presenter.rs), and this
+        // dispatch must render the result there rather than assuming a parent.
+        let mut state = TuiState::new();
+        let registry = RefCell::new(ContentRegistry::new());
+        let id = InteractionId(0);
+        state
+            .tabs
+            .create_tab(PaneKind::Interaction(InteractionForm::Agent, Some(id)));
+
+        apply_routed_tui_event(
+            &mut state,
+            &registry,
+            RoutedTuiEvent::for_interaction(
+                id,
+                TuiEvent::InteractionCompleted {
+                    parent_id: None,
+                    result_text: "root done".into(),
+                },
+            ),
+        );
+
+        let pane = state.tabs.pane_for_interaction_mut(id).unwrap();
+        assert!(
+            pane.conversation
+                .messages
+                .iter()
+                .any(|m| m.content == "root done")
+        );
+        let (flash, _) = state.flash_message.expect("flash should be set");
+        assert_eq!(flash, "Interaction completed");
     }
 
     #[test]

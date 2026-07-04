@@ -143,6 +143,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::human_intervention::TuiHumanIntervention;
 
+/// Terminal size assumed for `screen.capture` / `layout.get` when there is
+/// no real terminal to query — the historical TTY-lookup-failure fallback
+/// (#272) promoted to the explicit headless-mode default (#303, RFC #304 D3).
+fn headless_terminal_size() -> ratatui::layout::Size {
+    ratatui::layout::Size::new(80, 24)
+}
+
 /// Main TUI application
 pub struct TuiApp {
     // -- Actor channels --
@@ -495,7 +502,7 @@ impl TuiApp {
                 Some(remote_request) = remote_rx.recv() => {
                     let terminal_size = terminal
                         .size()
-                        .unwrap_or(ratatui::layout::Size::new(80, 24));
+                        .unwrap_or_else(|_| headless_terminal_size());
                     let ctx = super::remote::RemoteContext {
                         deps: self.input_deps(),
                         terminal_size,
@@ -521,6 +528,122 @@ impl TuiApp {
             DisableMouseCapture
         )?;
         terminal.show_cursor()?;
+
+        Ok(())
+    }
+
+    /// Run the TUI event loop headless: no raw mode, no alternate screen, no
+    /// `EventStream`, no `terminal.draw`. Input arrives only through the
+    /// `--listen` socket; `screen.capture` still off-screen-renders the same
+    /// `TuiState` (`remote_view::capture_screen`), so an external agent sees
+    /// exactly what a TTY user would (#303, RFC #304 D3).
+    ///
+    /// Requires `--listen` — enforced by clap's `requires` on `--headless`,
+    /// re-checked here since `TuiApp` can be constructed without going
+    /// through CLI parsing. Exits on `:q!` / `:qa` (via `command.exec`) or on
+    /// SIGINT/SIGTERM, since there is no keyboard to type a quit command.
+    ///
+    /// Extension point for #300: a `run_headless_until(interaction_id)` would
+    /// compare each `ui_event` / `routed` event's interaction id against the
+    /// awaited one in the branches below and `return` its result instead of
+    /// looping forever — no change to channel ownership needed, since this
+    /// loop is already the sole consumer of `ui_rx` / `tui_event_rx` (see PR
+    /// description for why this was chosen over a spawn-time oneshot).
+    pub async fn run_headless(&mut self) -> io::Result<()> {
+        let path = self.listen_path.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ヘッドレスモードには --listen が必須です(ソケットなしでは操作できなくなります)。\
+                 例: copilot-quorum --headless --listen /tmp/quorum.sock",
+            )
+        })?;
+        super::remote::validate_socket_path(&path)?;
+
+        let mut state = TuiState::new();
+        state.tui_config = self.tui_config.clone();
+        state.layout_config = self.layout_config.clone();
+        state.route = super::route::RouteTable::from_preset_and_overrides(
+            self.layout_config.preset.clone(),
+            &self.layout_config.route_overrides,
+        );
+
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+
+        // Remote control socket (--listen). Unlike `run()`, this is not
+        // optional here — headless with no listener would be unoperable,
+        // which is why `--headless` requires `--listen` up front.
+        let (remote_tx, mut remote_rx) = mpsc::unbounded_channel::<super::remote::RemoteRequest>();
+        super::remote::spawn_listener(path, remote_tx)?;
+
+        // No terminal to catch Ctrl+C as a raw-mode key event, so listen for
+        // the process signals directly.
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+        // Send welcome
+        let _ = self.cmd_tx.send(TuiCommand::HandleCommand {
+            interaction_id: None,
+            command: "__welcome".into(),
+        });
+
+        loop {
+            // Apply pending Lua scripting changes (same as `run()`, minus the draw)
+            self.apply_tui_changes(&mut state);
+
+            if state.should_quit {
+                break;
+            }
+
+            tokio::select! {
+                biased;
+
+                // UiEvents from controller (via AgentController → ui_tx)
+                Some(ui_event) = self.ui_rx.recv() => {
+                    self.presenter.apply(&mut state, &ui_event);
+                }
+
+                // TuiEvents from progress bridge / presenter
+                Some(routed) = self.tui_event_rx.recv() => {
+                    super::app_event_dispatch::apply_routed_tui_event(
+                        &mut state,
+                        &self.content_registry,
+                        routed,
+                    );
+                }
+
+                // HiL requests
+                Some(hil_request) = self.hil_rx.recv() => {
+                    super::app_hil::handle_hil_request(
+                        &mut state,
+                        &self.pending_hil_tx,
+                        hil_request,
+                    );
+                }
+
+                // Remote control requests (--listen socket)
+                Some(remote_request) = remote_rx.recv() => {
+                    let ctx = super::remote::RemoteContext {
+                        deps: self.input_deps(),
+                        terminal_size: headless_terminal_size(),
+                    };
+                    super::remote::handle_request(&mut state, &ctx, remote_request);
+                }
+
+                // Tick for flash expiry
+                _ = tick.tick() => {
+                    state.expire_flash(Duration::from_secs(5));
+                }
+
+                // Graceful shutdown — no keyboard, so these are the only
+                // out-of-band ways to stop a headless process.
+                _ = tokio::signal::ctrl_c() => {
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    break;
+                }
+            }
+        }
 
         Ok(())
     }

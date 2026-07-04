@@ -134,4 +134,31 @@ pub struct Cli {
     /// inject input over this Unix socket. See docs/reference/tui-remote-control.md.
     #[arg(long, value_name = "PATH")]
     pub listen: Option<PathBuf>,
+
+    /// Run the TUI event loop without a terminal (no raw mode / alternate
+    /// screen / keyboard input). State and rendering are still available
+    /// through the `--listen` socket — same state, same `screen.capture`,
+    /// just no TTY. Requires `--listen`, since without it the process would
+    /// be unoperable. See docs/reference/tui-remote-control.md.
+    #[arg(long, requires = "listen")]
+    pub headless: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headless_requires_listen() {
+        let err = Cli::try_parse_from(["copilot-quorum", "--headless"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn headless_with_listen_parses() {
+        let cli = Cli::try_parse_from(["copilot-quorum", "--headless", "--listen", "/tmp/q.sock"])
+            .unwrap();
+        assert!(cli.headless);
+        assert_eq!(cli.listen, Some(PathBuf::from("/tmp/q.sock")));
+    }
 }

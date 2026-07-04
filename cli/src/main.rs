@@ -336,8 +336,9 @@ async fn main() -> Result<()> {
     let quorum_config = QuorumConfig::default();
     let shared_config = Arc::new(std::sync::Mutex::new(quorum_config));
 
-    // Determine TUI mode before logging init
-    let is_tui = cli.question.is_none();
+    // Determine TUI mode before logging init. --headless always runs the TUI
+    // core (event loop + state), just without a terminal attached.
+    let is_tui = cli.question.is_none() || cli.headless;
 
     // Initialize logging
     let logging = init_logging(cli.verbose, cli.log_dir.as_deref(), cli.no_log_file, is_tui);
@@ -480,10 +481,19 @@ async fn main() -> Result<()> {
         // Fallback: `Osc52Clipboard` — emits an OSC 52 escape so the
         // terminal emulator performs the clipboard op. Required over
         // SSH where arboard cannot reach a display server.
-        let primary: Arc<dyn quorum_application::ClipboardPort> = Arc::new(ArboardClipboard::new());
-        let fallback: Arc<dyn quorum_application::ClipboardPort> = Arc::new(Osc52Clipboard::new());
-        let clipboard: Arc<dyn quorum_application::ClipboardPort> =
-            Arc::new(FallbackClipboard::new(primary, fallback));
+        //
+        // Headless has no terminal and no keyboard-driven yank, so skip both
+        // and degrade to `NoClipboard` rather than probing for a display
+        // server that isn't there (#303).
+        let clipboard: Arc<dyn quorum_application::ClipboardPort> = if cli.headless {
+            Arc::new(quorum_application::NoClipboard)
+        } else {
+            let primary: Arc<dyn quorum_application::ClipboardPort> =
+                Arc::new(ArboardClipboard::new());
+            let fallback: Arc<dyn quorum_application::ClipboardPort> =
+                Arc::new(Osc52Clipboard::new());
+            Arc::new(FallbackClipboard::new(primary, fallback))
+        };
 
         let mut tui_app = TuiApp::new_with_logger(
             gateway.clone(),
@@ -504,7 +514,11 @@ async fn main() -> Result<()> {
         if let Some(listen_path) = &cli.listen {
             tui_app = tui_app.with_listen(listen_path.clone());
         }
-        tui_app.run().await?;
+        if cli.headless {
+            tui_app.run_headless().await?;
+        } else {
+            tui_app.run().await?;
+        }
         return Ok(());
     }
 
