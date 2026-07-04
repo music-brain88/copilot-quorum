@@ -813,6 +813,7 @@ impl TuiApp {
                     let ctx = super::remote::RemoteContext {
                         deps: self.input_deps(),
                         terminal_size: headless_terminal_size(),
+                        shared_config: &self.shared_config,
                     };
                     super::remote::handle_request(&mut state, &ctx, remote_request);
                 }
