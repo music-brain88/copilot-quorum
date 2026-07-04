@@ -76,8 +76,8 @@ scripts/tui-rpc.py /tmp/quorum-dbg.sock screen.capture '{"width": 140, "height":
   | python3 -c "import json,sys; print('\n'.join(json.load(sys.stdin)['lines']))"
 scripts/tui-rpc.py /tmp/quorum-dbg.sock pane.read '{"last": 5}'            # 会話ログを構造化 JSON で
 
-# 4. Clean up (:q! で headless プロセスも終了する)
-scripts/tui-rpc.py /tmp/quorum-dbg.sock command.exec '{"command": "q!"}'
+# 4. Clean up (:qa! は常にアプリ終了。:q! はタブが複数あるとタブクローズになるので注意)
+scripts/tui-rpc.py /tmp/quorum-dbg.sock command.exec '{"command": "qa!"}'
 ```
 
 Tips:
