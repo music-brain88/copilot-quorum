@@ -9,7 +9,18 @@
 ## CLI Options / CLI オプション
 
 `copilot-quorum [OPTIONS] [QUESTION]` — QUESTION を与えるとワンショット実行、省略すると対話モード（TUI）で起動します。
-`copilot-quorum <COMMAND>` — サブコマンド（現在は `review` のみ、[後述](#review-subcommand--review-サブコマンド-300)）。グローバルフラグはサブコマンド名の**前**に置きます（例: `copilot-quorum -v review --pr 123`）。
+
+`copilot-quorum <SUBCOMMAND>` — サブコマンド（RFC Discussion #304 D4）。グローバルフラグは
+サブコマンド名の**前**に置きます（例: `copilot-quorum -v review --pr 123`）。clap の
+`args_conflicts_with_subcommands` は使っていません — この属性を付けると、サブコマンド名より
+前に他のトップレベルフラグ/値が1つでもあった場合に clap がサブコマンドとして認識しなくなり
+（例: `--log-dir X review --pr 123` が `review` を文字通りの QUESTION として実行してしまう）、
+`presentation/src/cli/commands.rs` の回帰テストで検証済みです。現状のサブコマンド:
+
+| Subcommand | Description |
+|------------|-------------|
+| `review` | PR/diff の多モデル Quorum レビューをヘッドレスで実行（下記参照、#300） |
+| `rpc` | Remote Control API のビルトイン JSON-RPC クライアント（下記参照、#302） |
 
 | Option | Short | Description |
 |--------|-------|-------------|
@@ -61,6 +72,33 @@ copilot-quorum review --pr 123 --output json              # quorum_result v1 JSO
 
 ---
 
+## `rpc` Subcommand / `rpc` サブコマンド (#302)
+
+`--listen`（または `--headless --listen`）で起動した TUI/ヘッドレスインスタンスの
+ソケットを、リポジトリ checkout も Python も要らないビルトインクライアントで操作します。
+ワイヤ形式は `scripts/tui-rpc.py`（プロトコル参照実装として引き続き存在）と完全互換
+（LSP スタイル `Content-Length` フレーミング + JSON-RPC 2.0）。
+
+```bash
+copilot-quorum rpc --socket PATH <method> [params-json]
+
+# 例
+copilot-quorum rpc --socket /tmp/quorum.sock rpc.discover
+copilot-quorum rpc --socket /tmp/quorum.sock state.get
+copilot-quorum rpc --socket /tmp/quorum.sock config.get '{"key": "agent.strategy"}'
+copilot-quorum rpc --socket /tmp/quorum.sock config.set '{"key": "agent.strategy", "value": "debate"}'
+copilot-quorum rpc --socket /tmp/quorum.sock command.exec '{"command": "qa!"}'
+```
+
+`params-json` を省略すると `{}` として送信されます。結果は整形 JSON で stdout に、
+エラー（JSON-RPC の `error` オブジェクト）は stderr に出力され、終了コードは
+成功時 `0` / エラー時 `1` です。呼べるメソッドの全量は `rpc.discover` を参照してください
+（[tui-remote-control.md](./tui-remote-control.md) にメソッド一覧あり）。
+
+定義ファイル: `presentation/src/cli/commands.rs`（`RpcArgs`）, `presentation/src/cli/rpc_client.rs`
+
+---
+
 ## REPL Commands / REPL コマンド
 
 対話モードで使用できるスラッシュコマンド一覧:
@@ -96,22 +134,41 @@ copilot-quorum review --pr 123 --output json              # quorum_result v1 JSO
 
 ## TUI Command Mode / TUI コマンドモード
 
-TUI の Command モード（`:`）で使えるコマンド（抜粋）:
+TUI の Command モード（`:`）で使えるコマンド全量。この一覧は
+`presentation/src/tui/command_registry.rs` が single source of truth — Help
+オーバーレイ（`?`）の "Commands" セクションと Remote Control API の
+`commands.list`（#302）はどちらもここから生成されるため、この表と実際の挙動が
+構造的に乖離しません（Lua `quorum.command.register` で追加したコマンドは
+`commands.list` にのみ現れます — 静的ドキュメントには原理的に載らないため）。
 
-| Command | Description |
-|---------|-------------|
-| `:agent <query>` | 新しい Agent タブを開いてタスク実行 |
-| `:ask <query>` | 新しい Ask（Q&A）タブを開く |
-| `:discuss <query>` | 新しい Discuss（Quorum Discussion）タブを開く |
-| `:tabnew [form]` | 新規タブ作成（form: agent / ask / discuss） |
-| `:tabs` | タブ一覧を表示 |
-| `:tabclose` | アクティブタブを閉じる |
-| `:q` / `:quit` | 複数タブ時はアクティブタブを閉じる（`:tabclose` 相当）。最後の 1 枚ではアプリ終了 |
-| `:qa` / `:qall` | 全タブを閉じてアプリ終了（Vim 準拠） |
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `:q` | `:quit` | 複数タブ時はアクティブタブを閉じる。最後の 1 枚ではアプリ終了 |
+| `:qa` | `:qall`, `:quitall`, `:exit` | 全タブを閉じてアプリ終了（Vim 準拠） |
+| `:help` | `:h`, `:?` | ヘルプオーバーレイを表示 |
+| `:solo` | | Solo モードに切り替え |
+| `:ens` | `:ensemble` | Ensemble モードに切り替え |
+| `:fast` | | Fast phase scope をトグル |
+| `:mode <solo\|ensemble>` | | 合意レベルを明示的に変更 |
+| `:scope <full\|fast\|plan-only>` | | フェーズスコープを明示的に変更 |
+| `:strategy <quorum\|debate>` | | オーケストレーション戦略を変更 |
+| `:agent <task>` | | 新しい Agent タブを開いてタスク実行 |
+| `:ask <question>` | | 新しい Ask（Q&A）タブを開く |
+| `:discuss <question>` | | 新しい Discuss（Quorum Discussion）タブを開く |
+| `:council <question>` | | アクティブタブ内で Quorum Discussion を実行（新規タブなし） |
+| `:tabnew [agent\|ask\|discuss]` | | 新規タブ作成（既定 agent） |
+| `:tabclose` | | アクティブタブを閉じる |
+| `:tabs` | | タブ一覧を表示 |
+| `:config [section]` | | 現在の設定を表示（セクション絞り込み可: `:config models`） |
+| `:clear` | | 会話履歴をクリア |
+| `:init[!]` | | プロジェクトコンテキストを初期化（`!` で強制再実行） |
+| `:verbose` | | Verbose モードの状態を表示 |
 
 モード操作やキーバインドの全体像は [How to Use the TUI](../how-to/use-the-tui.md) を参照してください。
 
-定義ファイル: `presentation/src/tui/app_tab_command.rs`, `presentation/src/tui/mode.rs`
+定義ファイル: `presentation/src/tui/command_registry.rs`（メタデータ）,
+`presentation/src/tui/app_tab_command.rs`（quit/tab 系のディスパッチ）,
+`application/src/use_cases/agent_controller.rs`（mode/config/interaction 系のディスパッチ）
 
 ---
 
@@ -120,6 +177,6 @@ TUI の Command モード（`:`）で使えるコマンド（抜粋）:
 - [Configuration Reference](./configuration.md) - init.lua による設定
 - [How to Use the TUI](../how-to/use-the-tui.md) - モーダル操作の使い方
 - [Orchestration Axes](../explanation/orchestration-axes.md) - `/solo` `/scope` `/strategy` が変更する 3 軸の意味
-- [TUI Remote Control API](./tui-remote-control.md) - `--headless --listen` と `interaction.spawn`（`review` form 含む）
+- [TUI Remote Control API](./tui-remote-control.md) - `--headless --listen`、`interaction.spawn`（`review` form 含む）、`rpc.discover` / `commands.list` / `config.*` / `keymaps.list`
 
-<!-- LLM Context: CLI フラグは presentation/src/cli/commands.rs で定義。--solo/--ensemble(排他), --no-quorum, -m/--model(複数可), --final-review, -w/--working-dir, -o/--output, -v(count), --show-votes, -q/--quiet, --log-dir, --no-log-file, --show-config, --listen(Remote Control API), --headless(--listen 必須、TTY なしでイベントループのみ起動 — #303)。--chat/--config/--moderator/--no-review フラグは存在しない(旧ドキュメントの残骸)。サブコマンド: review(#300, --pr|--diff|stdin, --focus, --output synthesis|json, exit 0/1/2)。グローバルフラグはサブコマンド名より前に置く必要がある(args_conflicts_with_subcommands は使っていない — 使うとサブコマンド名がグローバルフラグの後で認識されなくなる罠あり)。REPL: /solo /ens /fast /scope /strategy /council /init /config /clear /quit。TUI command mode: agent/ask/discuss <query>, tabnew, tabs, tabclose, q/quit(タブ数>1 で tabclose 相当・最後の1枚で終了), qa/qall(全体終了)。 -->
+<!-- LLM Context: CLI フラグは presentation/src/cli/commands.rs で定義。--solo/--ensemble(排他), --no-quorum, -m/--model(複数可), --final-review, -w/--working-dir, -o/--output, -v(count), --show-votes, -q/--quiet, --log-dir, --no-log-file, --show-config, --listen(Remote Control API), --headless(--listen 必須、TTY なしでイベントループのみ起動 — #303)。--chat/--config/--moderator/--no-review フラグは存在しない(旧ドキュメントの残骸)。サブコマンド(RFC #304 D4。args_conflicts_with_subcommands は使っていない — 使うとサブコマンド名より前に他のトップレベルフラグ/値があるとサブコマンドとして認識されなくなる罠があり、回帰テストで検証済み。グローバルフラグはサブコマンド名より前に置ける): `review`(#300, --pr|--diff|stdin, --focus, --output synthesis|json, exit 0/1/2), `rpc --socket PATH <method> [params-json]`(#302, Remote Control API のビルトイン JSON-RPC クライアント, presentation/src/cli/rpc_client.rs)。REPL: /solo /ens /fast /scope /strategy /council /init /config /clear /quit。TUI command mode(command_registry.rs が single source of truth、Help オーバーレイと commands.list RPC の両方がここから生成): q/quit, qa/qall/quitall/exit, help/h/?, solo, ens/ensemble, fast, mode, scope, strategy, agent/ask/discuss <query>, council, tabnew, tabclose, tabs, config, clear, init, verbose。 -->

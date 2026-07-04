@@ -11,7 +11,8 @@ pub mod progress;
 pub mod tui;
 
 // Re-export commonly used types
-pub use cli::commands::{Cli, CliOutputFormat, Command, ReviewArgs, ReviewOutputFormat};
+pub use cli::commands::{Cli, CliOutputFormat, Command, ReviewArgs, ReviewOutputFormat, RpcArgs};
+pub use cli::rpc_client::run_rpc;
 pub use config::{OutputConfig, ReplConfig};
 pub use output::console::ConsoleFormatter;
 pub use progress::reporter::{ProgressReporter, SimpleProgress};

@@ -29,7 +29,7 @@ use quorum_infrastructure::{
 use quorum_infrastructure::{ProviderAdapter, RoutingGateway};
 use quorum_presentation::{
     AgentProgressReporter, Cli, Command, InteractiveHumanIntervention, LayoutPreset, OutputConfig,
-    ReplConfig, TuiApp, TuiInputConfig, TuiLayoutConfig,
+    ReplConfig, TuiApp, TuiInputConfig, TuiLayoutConfig, run_rpc,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -321,6 +321,30 @@ fn create_scripting_engine(
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut cli = Cli::parse();
+
+    // `rpc` subcommand dispatch (#302, RFC #304 D4). Runs immediately, before
+    // any of the DI wiring below (Copilot CLI gateway, providers, etc.) and
+    // before the `review` dispatch further down (#300, step 7) — `rpc` is a
+    // standalone socket client with no need for an LLM gateway of its own.
+    //
+    // Matched exhaustively over every `Command` variant (borrowing, not
+    // `cli.command.take()`) rather than a single `if let Some(Command::Rpc(_))`
+    // check: an `if let` only tests the one variant it names, so a later
+    // variant added to `Command` would silently fall through here with no
+    // compiler warning. This `match` has no wildcard arm, so adding a new
+    // variant makes it non-exhaustive and fails to build until it's handled
+    // explicitly — caught in review of PR #307 (gpt-5.3-codex).
+    match &cli.command {
+        Some(Command::Rpc(args)) => {
+            let exit_code = run_rpc(args).await?;
+            std::process::exit(exit_code);
+        }
+        Some(Command::Review(_)) => {
+            // Handled later, once DI wiring (gateway, tool executor, etc.)
+            // is ready — see the `review` dispatch point below (#300, step 7).
+        }
+        None => {}
+    }
 
     // Handle --show-config: print Lua config paths
     if cli.show_config {
