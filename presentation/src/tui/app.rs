@@ -206,6 +206,12 @@ pub struct TuiApp {
 
     // -- Remote control socket path (--listen) --
     listen_path: Option<std::path::PathBuf>,
+
+    // -- Shared config, for the Remote Control API's config.* methods (#302) --
+    // The same `Arc<Mutex<QuorumConfig>>` handed to `AgentController` below —
+    // cloned before the move so `dispatch()` can reach `ConfigAccessorPort`
+    // without a round-trip through the controller task.
+    shared_config: Arc<Mutex<QuorumConfig>>,
 }
 
 impl TuiApp {
@@ -251,6 +257,11 @@ impl TuiApp {
         // Presenter (applies UiEvents and emits TuiEvents)
         let presenter = TuiPresenter::new(tui_event_tx);
 
+        // Cloned before the move into `AgentController` — the Remote Control
+        // API's config.* methods (#302) read/write through this handle
+        // instead of round-tripping through the controller task.
+        let shared_config = Arc::clone(&config);
+
         // Controller (runs in background task)
         let controller = AgentController::new(
             gateway,
@@ -285,6 +296,7 @@ impl TuiApp {
             tui_accessor: None,
             clipboard: Arc::new(NoClipboard),
             listen_path: None,
+            shared_config,
         }
     }
 
@@ -565,6 +577,7 @@ impl TuiApp {
                     let ctx = super::remote::RemoteContext {
                         deps: self.input_deps(),
                         terminal_size,
+                        shared_config: &self.shared_config,
                     };
                     super::remote::handle_request(&mut state, &ctx, remote_request);
                 }
@@ -681,6 +694,7 @@ impl TuiApp {
                     let ctx = super::remote::RemoteContext {
                         deps: self.input_deps(),
                         terminal_size: headless_terminal_size(),
+                        shared_config: &self.shared_config,
                     };
                     super::remote::handle_request(&mut state, &ctx, remote_request);
                 }
@@ -799,6 +813,7 @@ impl TuiApp {
                     let ctx = super::remote::RemoteContext {
                         deps: self.input_deps(),
                         terminal_size: headless_terminal_size(),
+                        shared_config: &self.shared_config,
                     };
                     super::remote::handle_request(&mut state, &ctx, remote_request);
                 }

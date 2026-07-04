@@ -107,7 +107,7 @@ fn help_lines() -> Vec<ratatui::text::Line<'static>> {
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
 
-    vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             "Keyboard Shortcuts",
             Style::default()
@@ -151,25 +151,24 @@ fn help_lines() -> Vec<ratatui::text::Line<'static>> {
         Line::from("  Esc        Return to Normal"),
         Line::from(""),
         Line::from("Commands (:command):"),
-        Line::from("  :q       Close tab (quit on last tab)"),
-        Line::from("  :qa      Quit app (all tabs)"),
-        Line::from("  :help    Show help"),
-        Line::from("  :solo    Switch to Solo mode"),
-        Line::from("  :ens     Switch to Ensemble mode"),
-        Line::from("  :fast    Toggle fast mode"),
-        Line::from("  :ask <question>   Ask (lightweight Q&A)"),
-        Line::from("  :discuss <question> Discuss (quorum discussion)"),
-        Line::from("  :config [section]  Show configuration (e.g. :config models)"),
-        Line::from("  :clear   Clear history"),
-        Line::from("  :tabnew [form]  New tab (agent/ask/discuss)"),
-        Line::from("  :tabclose       Close tab"),
-        Line::from("  :tabs           List tabs"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "j/k scroll · Press ? or Esc to close",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ]
+    ];
+
+    // Generated from `command_registry` (#302) — this and `commands.list`
+    // over the Remote Control API read the same table, so this list can't
+    // silently drift from what the API reports.
+    for cmd in super::command_registry::builtin_commands() {
+        lines.push(Line::from(format!(
+            "  {:<28} {}",
+            cmd.usage, cmd.description
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "j/k scroll · Press ? or Esc to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
 }
 
 /// Max vertical scroll offset for the Help overlay at the given terminal size.

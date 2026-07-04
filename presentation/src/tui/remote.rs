@@ -46,12 +46,29 @@
 //! custom preset). `keys.feed` cannot launch `$EDITOR` — the `I` binding
 //! is swallowed and reported as `editor_suppressed`.
 //!
+//! # Methods (Phase 3 — introspection & config, #302)
+//!
+//! | method            | params                    | effect |
+//! |--------------------|---------------------------|--------|
+//! | `rpc.discover`     | —                         | every method name + params schema + summary + `api_version` |
+//! | `commands.list`    | —                         | `:` commands (builtin + Lua `quorum.command.register`) |
+//! | `config.keys`      | —                         | all known config keys (description, mutability, valid values) |
+//! | `config.get`       | `{key}`                   | current value of a config key |
+//! | `config.set`       | `{key, value}`            | set a config key (same `ConfigAccessorPort` as Lua/`:config`) |
+//! | `keymaps.list`     | —                         | keybindings (builtin + Lua `quorum.keymap.set`) |
+//!
+//! These reuse the same registries the TUI itself reads from — a Lua
+//! command/keymap or a config change is reflected here without any extra
+//! wiring, and `rpc.discover` / `commands.list` / `config.*` share a single
+//! source of truth with `dispatch()` so the two cannot drift apart (#302).
+//!
 //! Security: the socket is created with `0600` permissions and no TCP
 //! listener is offered — same trust model as `nvim --listen`.
 
 use super::event::TuiCommand;
 use super::state::{DisplayMessage, MessageRole, TuiState};
 use super::tab::PaneKind;
+use quorum_application::{ConfigAccessorPort, ConfigValue, QuorumConfig};
 use quorum_domain::HumanDecision;
 use quorum_domain::interaction::InteractionForm;
 use serde_json::{Value, json};
@@ -62,6 +79,11 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
+
+/// Remote Control API version, returned by `rpc.discover`. Bump when a
+/// breaking change is made to an existing method's params/result shape
+/// (adding a new method is not breaking).
+pub(super) const RPC_API_VERSION: u32 = 1;
 
 /// A remote JSON-RPC request forwarded into the TUI main loop.
 ///
@@ -83,7 +105,7 @@ impl RemoteError {
     fn method_not_found(method: &str) -> Self {
         Self {
             code: -32601,
-            message: format!("Method not found: {method}"),
+            message: format!("Method not found: {method} (see rpc.discover for the full list)"),
         }
     }
 
@@ -318,6 +340,10 @@ async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(
 pub(super) struct RemoteContext<'a> {
     pub deps: super::app::InputDeps<'a>,
     pub terminal_size: ratatui::layout::Size,
+    /// Shared with `AgentController` — the same handle Lua's `quorum.config`
+    /// API and the TUI's `:config` command read/write, so `config.get` /
+    /// `config.set` behave identically across all three surfaces (#302).
+    pub shared_config: &'a Arc<Mutex<QuorumConfig>>,
 }
 
 /// Dispatch a remote request with full access to the TUI state.
@@ -335,27 +361,381 @@ pub(super) fn handle_request(
     }
 }
 
+/// A remote method's handler — normalized to one signature so `dispatch()`
+/// and `rpc.discover` can share a single table (#302). Methods that don't
+/// need `state` mutation or `ctx` simply ignore the unused parameter.
+type MethodHandler = fn(&mut TuiState, &RemoteContext<'_>, &Value) -> Result<Value, RemoteError>;
+
+/// Metadata for one remote method: name, one-line summary, a JSON Schema
+/// fragment for `params` (hand-written, not derived — good enough for
+/// discovery, not meant for strict validation), and its handler.
+pub(super) struct MethodSpec {
+    pub name: &'static str,
+    pub summary: &'static str,
+    pub params_schema: &'static str,
+    handler: MethodHandler,
+}
+
+const EMPTY_PARAMS_SCHEMA: &str = r#"{"type":"object","properties":{}}"#;
+
+/// Single source of truth for the RPC surface — `dispatch()` and
+/// `rpc.discover` both read this table, so a method can't be dispatchable
+/// without being discoverable (or vice versa).
+static METHODS: &[MethodSpec] = &[
+    MethodSpec {
+        name: "state.get",
+        summary: "Mode, models, tabs, pending HiL, flash, focus, input drafts, layout",
+        params_schema: EMPTY_PARAMS_SCHEMA,
+        handler: |state, _ctx, _params| Ok(state_snapshot(state)),
+    },
+    MethodSpec {
+        name: "panes.list",
+        summary: "All tabs/panes with metadata (incl. scroll state)",
+        params_schema: EMPTY_PARAMS_SCHEMA,
+        handler: |state, _ctx, _params| Ok(panes_list(state)),
+    },
+    MethodSpec {
+        name: "pane.read",
+        summary: "Conversation messages for a pane, structured (no screen scraping)",
+        params_schema: r#"{"type":"object","properties":{"tab":{"type":"integer"},"last":{"type":"integer"}}}"#,
+        handler: |state, _ctx, params| pane_read(state, params),
+    },
+    MethodSpec {
+        name: "input.send",
+        summary: "Submit a prompt to the active pane (same path as SubmitInput)",
+        params_schema: r#"{"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}"#,
+        handler: input_send,
+    },
+    MethodSpec {
+        name: "command.exec",
+        summary: "Run a `:command` (e.g. \"solo\", \"tabnew ask\", \"q\")",
+        params_schema: r#"{"type":"object","required":["command"],"properties":{"command":{"type":"string"}}}"#,
+        handler: command_exec,
+    },
+    MethodSpec {
+        name: "interaction.spawn",
+        summary: "Spawn an Agent/Ask/Discuss/Review interaction in a new tab",
+        params_schema: r#"{"type":"object","required":["form","query"],"properties":{"form":{"enum":["agent","ask","discuss","review"]},"query":{"type":"string"}}}"#,
+        handler: interaction_spawn,
+    },
+    MethodSpec {
+        name: "interaction.activate",
+        summary: "Focus the tab bound to an interaction id",
+        params_schema: r#"{"type":"object","required":["interaction_id"],"properties":{"interaction_id":{"type":"integer"}}}"#,
+        handler: interaction_activate,
+    },
+    MethodSpec {
+        name: "hil.respond",
+        summary: "Answer a pending Human-in-the-Loop modal",
+        params_schema: r#"{"type":"object","required":["decision"],"properties":{"decision":{"enum":["approve","reject"]}}}"#,
+        handler: hil_respond,
+    },
+    MethodSpec {
+        name: "screen.capture",
+        summary: "Off-screen render of the current screen → text lines (+style runs)",
+        params_schema: r#"{"type":"object","properties":{"width":{"type":"integer","minimum":10,"maximum":500},"height":{"type":"integer","minimum":5,"maximum":300},"styles":{"type":"boolean"}}}"#,
+        handler: screen_capture,
+    },
+    MethodSpec {
+        name: "layout.get",
+        summary: "Surface rects, preset, splits, routes, overlays at a size",
+        params_schema: r#"{"type":"object","properties":{"width":{"type":"integer"},"height":{"type":"integer"}}}"#,
+        handler: layout_get,
+    },
+    MethodSpec {
+        name: "layout.set",
+        summary: "Switch the layout preset live",
+        params_schema: r#"{"type":"object","required":["preset"],"properties":{"preset":{"type":"string"}}}"#,
+        handler: layout_set,
+    },
+    MethodSpec {
+        name: "route.set",
+        summary: "Re-route a content slot to a surface live",
+        params_schema: r#"{"type":"object","required":["content","surface"],"properties":{"content":{"type":"string"},"surface":{"type":"string"}}}"#,
+        handler: route_set,
+    },
+    MethodSpec {
+        name: "keys.feed",
+        summary: "Inject synthetic key events (same dispatch path as the keyboard)",
+        params_schema: r#"{"type":"object","required":["keys"],"properties":{"keys":{"type":"array","items":{"type":"string"}}}}"#,
+        handler: keys_feed,
+    },
+    MethodSpec {
+        name: "rpc.discover",
+        summary: "List every RPC method with its params schema, summary, and api_version",
+        params_schema: EMPTY_PARAMS_SCHEMA,
+        handler: |_state, _ctx, _params| Ok(rpc_discover()),
+    },
+    MethodSpec {
+        name: "commands.list",
+        summary: "List `:` commands (builtin + Lua quorum.command.register)",
+        params_schema: EMPTY_PARAMS_SCHEMA,
+        handler: |_state, ctx, _params| Ok(commands_list(ctx)),
+    },
+    MethodSpec {
+        name: "config.keys",
+        summary: "List all known config keys (description, mutability, valid values)",
+        params_schema: EMPTY_PARAMS_SCHEMA,
+        handler: |_state, _ctx, _params| Ok(config_keys()),
+    },
+    MethodSpec {
+        name: "config.get",
+        summary: "Get the current value of a config key",
+        params_schema: r#"{"type":"object","required":["key"],"properties":{"key":{"type":"string"}}}"#,
+        handler: config_get,
+    },
+    MethodSpec {
+        name: "config.set",
+        summary: "Set a config key (same ConfigAccessorPort as Lua and :config)",
+        params_schema: r#"{"type":"object","required":["key","value"],"properties":{"key":{"type":"string"},"value":{}}}"#,
+        handler: config_set,
+    },
+    MethodSpec {
+        name: "keymaps.list",
+        summary: "List keybindings (builtin + Lua quorum.keymap.set)",
+        params_schema: EMPTY_PARAMS_SCHEMA,
+        handler: |_state, ctx, _params| Ok(keymaps_list(ctx)),
+    },
+];
+
 fn dispatch(
     state: &mut TuiState,
     ctx: &RemoteContext<'_>,
     method: &str,
     params: &Value,
 ) -> Result<Value, RemoteError> {
-    match method {
-        "state.get" => Ok(state_snapshot(state)),
-        "panes.list" => Ok(panes_list(state)),
-        "pane.read" => pane_read(state, params),
-        "input.send" => input_send(state, ctx.deps.cmd_tx, params),
-        "command.exec" => command_exec(state, ctx.deps.cmd_tx, params),
-        "interaction.spawn" => interaction_spawn(ctx.deps.cmd_tx, params),
-        "interaction.activate" => interaction_activate(ctx.deps.cmd_tx, params),
-        "hil.respond" => hil_respond(state, ctx.deps.pending_hil_tx, params),
-        "screen.capture" => screen_capture(state, ctx, params),
-        "layout.get" => layout_get(state, ctx, params),
-        "layout.set" => layout_set(state, params),
-        "route.set" => route_set(state, params),
-        "keys.feed" => keys_feed(state, ctx, params),
-        other => Err(RemoteError::method_not_found(other)),
+    match METHODS.iter().find(|m| m.name == method) {
+        Some(spec) => (spec.handler)(state, ctx, params),
+        None => Err(RemoteError::method_not_found(method)),
+    }
+}
+
+/// `rpc.discover` — capability discovery (LSP `capabilities` / MCP
+/// `tools/list` / `nvim_get_api_info` precedent). Parses each method's
+/// hand-written schema string back into JSON so the response is real JSON,
+/// not an escaped string.
+fn rpc_discover() -> Value {
+    let methods: Vec<Value> = METHODS
+        .iter()
+        .map(|m| {
+            let schema: Value =
+                serde_json::from_str(m.params_schema).unwrap_or(Value::Object(Default::default()));
+            json!({
+                "method": m.name,
+                "summary": m.summary,
+                "params_schema": schema,
+            })
+        })
+        .collect();
+    json!({
+        "api_version": RPC_API_VERSION,
+        "methods": methods,
+    })
+}
+
+/// `commands.list` — builtin `:` commands (`command_registry`) plus
+/// Lua-registered ones (`quorum.command.register`, via
+/// `ScriptingEnginePort::registered_commands()`). Lua commands are
+/// discoverable here even though they can never appear in a static doc.
+fn commands_list(ctx: &RemoteContext<'_>) -> Value {
+    let builtin: Vec<Value> = super::command_registry::builtin_commands()
+        .iter()
+        .map(|c| {
+            json!({
+                "name": c.name,
+                "aliases": c.aliases,
+                "usage": c.usage,
+                "description": c.description,
+                "source": "builtin",
+            })
+        })
+        .collect();
+
+    let lua: Vec<Value> = ctx
+        .deps
+        .scripting_engine
+        .registered_commands()
+        .into_iter()
+        .map(|(name, description, usage, _callback_id)| {
+            json!({
+                "name": name,
+                "aliases": Vec::<String>::new(),
+                "usage": usage,
+                "description": description,
+                "source": "lua",
+            })
+        })
+        .collect();
+
+    json!({ "commands": builtin.into_iter().chain(lua).collect::<Vec<_>>() })
+}
+
+/// `keymaps.list` — builtin keybindings (`keymap_registry`) plus
+/// Lua-registered ones (`quorum.keymap.set`).
+fn keymaps_list(ctx: &RemoteContext<'_>) -> Value {
+    let builtin: Vec<Value> = super::keymap_registry::builtin_keymaps()
+        .iter()
+        .map(|k| {
+            json!({
+                "mode": k.mode,
+                "key": k.key,
+                "action": k.action,
+                "description": k.description,
+                "source": "builtin",
+            })
+        })
+        .collect();
+
+    let lua: Vec<Value> = ctx
+        .deps
+        .scripting_engine
+        .registered_keymaps()
+        .into_iter()
+        .map(|(mode, key, action)| {
+            let action_name = match action {
+                quorum_application::KeymapAction::Builtin(name) => name,
+                quorum_application::KeymapAction::LuaCallback(id) => format!("lua_callback:{id}"),
+            };
+            json!({
+                "mode": mode,
+                "key": key,
+                "action": action_name,
+                "description": Value::Null,
+                "source": "lua",
+            })
+        })
+        .collect();
+
+    json!({ "keymaps": builtin.into_iter().chain(lua).collect::<Vec<_>>() })
+}
+
+/// `config.keys` — the full `ConfigAccessorPort` key registry (same table
+/// Lua's `quorum.config.keys()` and `:config` read), enriched with the
+/// description/mutability/valid_values metadata `ConfigAccessorPort` itself
+/// doesn't carry.
+fn config_keys() -> Value {
+    let keys: Vec<Value> = quorum_domain::known_keys()
+        .iter()
+        .map(|k| {
+            json!({
+                "key": k.key,
+                "description": k.description,
+                "mutable": k.mutability == quorum_domain::Mutability::Mutable,
+                "valid_values": k.valid_values,
+            })
+        })
+        .collect();
+    json!({ "keys": keys })
+}
+
+/// `config.get` — reads through the same `Arc<Mutex<QuorumConfig>>` as
+/// Lua's `quorum.config.get()` and the TUI's `:config`.
+fn config_get(
+    _state: &mut TuiState,
+    ctx: &RemoteContext<'_>,
+    params: &Value,
+) -> Result<Value, RemoteError> {
+    let key = params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RemoteError::invalid_params("missing 'key' (string)"))?;
+
+    let config = ctx
+        .shared_config
+        .lock()
+        .map_err(|_| RemoteError::failed("config lock poisoned"))?;
+    match config.config_get(key) {
+        Ok(value) => Ok(json!({"key": key, "value": config_value_to_json(&value)})),
+        Err(e) => Err(RemoteError::invalid_params(format!(
+            "{e} (see config.keys for the full list)"
+        ))),
+    }
+}
+
+/// `config.set` — writes through the same `Arc<Mutex<QuorumConfig>>` as
+/// Lua's `quorum.config.set()` and the TUI's `:config`, so validation and
+/// side effects (e.g. mode-combination warnings) are identical across all
+/// three surfaces (#302).
+fn config_set(
+    _state: &mut TuiState,
+    ctx: &RemoteContext<'_>,
+    params: &Value,
+) -> Result<Value, RemoteError> {
+    let key = params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RemoteError::invalid_params("missing 'key' (string)"))?;
+    let raw_value = params
+        .get("value")
+        .ok_or_else(|| RemoteError::invalid_params("missing 'value'"))?;
+    let value = json_to_config_value(raw_value)?;
+
+    let mut config = ctx
+        .shared_config
+        .lock()
+        .map_err(|_| RemoteError::failed("config lock poisoned"))?;
+    match config.config_set(key, value) {
+        Ok(issues) => {
+            let warnings: Vec<Value> = issues
+                .iter()
+                .map(|issue| json!({"severity": format!("{:?}", issue.severity), "message": issue.message}))
+                .collect();
+            let new_value = config.config_get(key).ok();
+            Ok(json!({
+                "ok": true,
+                "key": key,
+                "value": new_value.as_ref().map(config_value_to_json),
+                "warnings": warnings,
+            }))
+        }
+        Err(e) => Err(RemoteError::invalid_params(format!(
+            "{e} (see config.keys for the full list)"
+        ))),
+    }
+}
+
+/// `ConfigValue` → JSON, mirroring `config_api::push_config_value` (Lua
+/// path) so the same value round-trips identically over RPC.
+fn config_value_to_json(value: &ConfigValue) -> Value {
+    match value {
+        ConfigValue::String(s) => Value::String(s.clone()),
+        ConfigValue::Integer(n) => Value::Number((*n).into()),
+        ConfigValue::Boolean(b) => Value::Bool(*b),
+        ConfigValue::StringList(list) => {
+            Value::Array(list.iter().map(|s| Value::String(s.clone())).collect())
+        }
+    }
+}
+
+/// JSON → `ConfigValue`, mirroring `config_api::lua_to_config_value` (Lua
+/// path): string/bool/integer map directly, an array of strings becomes a
+/// `StringList`, anything else is rejected up front instead of surfacing a
+/// confusing type error from deep inside `config_set`.
+fn json_to_config_value(value: &Value) -> Result<ConfigValue, RemoteError> {
+    match value {
+        Value::String(s) => Ok(ConfigValue::String(s.clone())),
+        Value::Bool(b) => Ok(ConfigValue::Boolean(*b)),
+        Value::Number(n) => n
+            .as_i64()
+            .map(ConfigValue::Integer)
+            .ok_or_else(|| RemoteError::invalid_params("'value' must be an integer")),
+        Value::Array(items) => {
+            if items.is_empty() {
+                return Err(RemoteError::invalid_params(
+                    "'value' must not be an empty list",
+                ));
+            }
+            let strings: Option<Vec<String>> = items
+                .iter()
+                .map(|v| v.as_str().map(str::to_string))
+                .collect();
+            strings
+                .map(ConfigValue::StringList)
+                .ok_or_else(|| RemoteError::invalid_params("'value' list elements must be strings"))
+        }
+        other => Err(RemoteError::invalid_params(format!(
+            "unsupported 'value' type: {other}"
+        ))),
     }
 }
 
@@ -433,7 +813,11 @@ fn routes_snapshot(state: &TuiState) -> Value {
 /// Unlike the Lua path (which silently treats any unknown name as a custom
 /// preset), unknown names are rejected unless a custom preset with that
 /// name was previously registered.
-fn layout_set(state: &mut TuiState, params: &Value) -> Result<Value, RemoteError> {
+fn layout_set(
+    state: &mut TuiState,
+    _ctx: &RemoteContext<'_>,
+    params: &Value,
+) -> Result<Value, RemoteError> {
     let name = params
         .get("preset")
         .and_then(|v| v.as_str())
@@ -459,7 +843,11 @@ fn layout_set(state: &mut TuiState, params: &Value) -> Result<Value, RemoteError
 
 /// Re-route a content slot to a surface live — mirrors the Lua path, but
 /// replaces (rather than appends) any existing override for the same slot.
-fn route_set(state: &mut TuiState, params: &Value) -> Result<Value, RemoteError> {
+fn route_set(
+    state: &mut TuiState,
+    _ctx: &RemoteContext<'_>,
+    params: &Value,
+) -> Result<Value, RemoteError> {
     let content_name = params
         .get("content")
         .and_then(|v| v.as_str())
@@ -519,7 +907,7 @@ fn capture_size(ctx: &RemoteContext<'_>, params: &Value) -> Result<(u16, u16), R
 
 /// Off-screen render of the current screen — what the user actually sees.
 fn screen_capture(
-    state: &TuiState,
+    state: &mut TuiState,
     ctx: &RemoteContext<'_>,
     params: &Value,
 ) -> Result<Value, RemoteError> {
@@ -552,7 +940,7 @@ fn screen_capture(
 
 /// Computed layout geometry (surface rects, routes, overlays) at a size.
 fn layout_get(
-    state: &TuiState,
+    state: &mut TuiState,
     ctx: &RemoteContext<'_>,
     params: &Value,
 ) -> Result<Value, RemoteError> {
@@ -692,9 +1080,10 @@ fn pane_read(state: &TuiState, params: &Value) -> Result<Value, RemoteError> {
 /// Submit text to the active pane — mirrors `KeyAction::SubmitInput`.
 fn input_send(
     state: &mut TuiState,
-    cmd_tx: &mpsc::UnboundedSender<TuiCommand>,
+    ctx: &RemoteContext<'_>,
     params: &Value,
 ) -> Result<Value, RemoteError> {
+    let cmd_tx = ctx.deps.cmd_tx;
     let text = params
         .get("text")
         .and_then(|v| v.as_str())
@@ -738,9 +1127,10 @@ fn input_send(
 /// Execute a `:command` — mirrors `KeyAction::SubmitCommand`.
 fn command_exec(
     state: &mut TuiState,
-    cmd_tx: &mpsc::UnboundedSender<TuiCommand>,
+    ctx: &RemoteContext<'_>,
     params: &Value,
 ) -> Result<Value, RemoteError> {
+    let cmd_tx = ctx.deps.cmd_tx;
     let cmd = params
         .get("command")
         .and_then(|v| v.as_str())
@@ -793,9 +1183,11 @@ fn parse_form(s: &str) -> Result<InteractionForm, RemoteError> {
 }
 
 fn interaction_spawn(
-    cmd_tx: &mpsc::UnboundedSender<TuiCommand>,
+    _state: &mut TuiState,
+    ctx: &RemoteContext<'_>,
     params: &Value,
 ) -> Result<Value, RemoteError> {
+    let cmd_tx = ctx.deps.cmd_tx;
     let form = parse_form(
         params
             .get("form")
@@ -819,9 +1211,11 @@ fn interaction_spawn(
 }
 
 fn interaction_activate(
-    cmd_tx: &mpsc::UnboundedSender<TuiCommand>,
+    _state: &mut TuiState,
+    ctx: &RemoteContext<'_>,
     params: &Value,
 ) -> Result<Value, RemoteError> {
+    let cmd_tx = ctx.deps.cmd_tx;
     let id = params
         .get("interaction_id")
         .and_then(|v| v.as_u64())
@@ -837,9 +1231,10 @@ fn interaction_activate(
 /// Answer a pending HiL modal — mirrors the `y`/`n` keys in `app_hil`.
 fn hil_respond(
     state: &mut TuiState,
-    pending_hil_tx: &Arc<Mutex<Option<oneshot::Sender<HumanDecision>>>>,
+    ctx: &RemoteContext<'_>,
     params: &Value,
 ) -> Result<Value, RemoteError> {
+    let pending_hil_tx = ctx.deps.pending_hil_tx;
     let decision = match params.get("decision").and_then(|v| v.as_str()) {
         Some("approve") => HumanDecision::Approve,
         Some("reject") => HumanDecision::Reject,
@@ -893,6 +1288,7 @@ mod tests {
         engine: Arc<dyn ScriptingEnginePort>,
         clipboard: Arc<dyn ClipboardPort>,
         registry: RefCell<ContentRegistry>,
+        shared_config: Arc<Mutex<QuorumConfig>>,
     }
 
     impl TestHarness {
@@ -906,6 +1302,7 @@ mod tests {
                 engine: Arc::new(NoScriptingEngine),
                 clipboard: Arc::new(NoClipboard),
                 registry: RefCell::new(build_default_registry()),
+                shared_config: Arc::new(Mutex::new(QuorumConfig::default())),
             }
         }
 
@@ -920,6 +1317,7 @@ mod tests {
                     content_registry: &self.registry,
                 },
                 terminal_size: ratatui::layout::Size::new(80, 24),
+                shared_config: &self.shared_config,
             }
         }
     }
@@ -1302,5 +1700,249 @@ mod tests {
         .unwrap();
         assert_eq!(result["quit"], true);
         assert!(state.should_quit);
+    }
+
+    // -- Phase 3: introspection & config (#302) --
+
+    #[test]
+    fn rpc_discover_lists_every_dispatchable_method() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        let result = dispatch(&mut state, &harness.ctx(), "rpc.discover", &json!({})).unwrap();
+
+        assert_eq!(result["api_version"], RPC_API_VERSION);
+        let methods = result["methods"].as_array().unwrap();
+        assert_eq!(methods.len(), METHODS.len());
+
+        let names: Vec<&str> = methods
+            .iter()
+            .map(|m| m["method"].as_str().unwrap())
+            .collect();
+        for expected in [
+            "state.get",
+            "config.get",
+            "config.set",
+            "keys.feed",
+            "rpc.discover",
+        ] {
+            assert!(names.contains(&expected), "missing method: {expected}");
+        }
+
+        // Every method's params_schema must parse as JSON (not just be an
+        // opaque string) and every dispatchable name must round-trip.
+        for method in methods {
+            assert!(method["params_schema"].is_object());
+            let name = method["method"].as_str().unwrap();
+            let dispatched = dispatch(&mut state, &harness.ctx(), name, &json!({}));
+            // Not all methods succeed with empty params (e.g. input.send
+            // requires 'text'), but none should be "method not found".
+            if let Err(e) = dispatched {
+                assert_ne!(
+                    e.code, -32601,
+                    "{name} listed by rpc.discover but not dispatchable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_method_hints_at_rpc_discover() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        let err = dispatch(&mut state, &harness.ctx(), "bogus.method", &json!({})).unwrap_err();
+        assert_eq!(err.code, -32601);
+        assert!(err.message.contains("rpc.discover"));
+    }
+
+    #[test]
+    fn commands_list_includes_builtins_and_lua_commands() {
+        struct FakeEngineWithCommands;
+        impl ScriptingEnginePort for FakeEngineWithCommands {
+            fn emit_event(
+                &self,
+                _event: quorum_domain::scripting::ScriptEventType,
+                _data: quorum_domain::scripting::ScriptEventData,
+            ) -> Result<quorum_application::EventOutcome, quorum_application::ScriptError>
+            {
+                Ok(quorum_application::EventOutcome::Continue)
+            }
+            fn load_script(
+                &self,
+                _path: &std::path::Path,
+            ) -> Result<(), quorum_application::ScriptError> {
+                Ok(())
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn registered_keymaps(
+                &self,
+            ) -> Vec<(String, String, quorum_application::KeymapAction)> {
+                Vec::new()
+            }
+            fn execute_callback(
+                &self,
+                _callback_id: u64,
+            ) -> Result<(), quorum_application::ScriptError> {
+                Ok(())
+            }
+            fn registered_commands(&self) -> Vec<(String, String, String, u64)> {
+                vec![(
+                    "hello".to_string(),
+                    "Say hello".to_string(),
+                    "/hello <name>".to_string(),
+                    1,
+                )]
+            }
+        }
+
+        let mut harness = TestHarness::new();
+        harness.engine = Arc::new(FakeEngineWithCommands);
+        let mut state = TuiState::new();
+
+        let result = dispatch(&mut state, &harness.ctx(), "commands.list", &json!({})).unwrap();
+        let commands = result["commands"].as_array().unwrap();
+
+        let builtin = commands
+            .iter()
+            .find(|c| c["name"] == "q")
+            .expect("builtin 'q' command missing");
+        assert_eq!(builtin["source"], "builtin");
+
+        let lua = commands
+            .iter()
+            .find(|c| c["name"] == "hello")
+            .expect("lua 'hello' command missing");
+        assert_eq!(lua["source"], "lua");
+        assert_eq!(lua["description"], "Say hello");
+    }
+
+    #[test]
+    fn keymaps_list_includes_builtins() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        let result = dispatch(&mut state, &harness.ctx(), "keymaps.list", &json!({})).unwrap();
+        let keymaps = result["keymaps"].as_array().unwrap();
+        assert!(!keymaps.is_empty());
+        let quit = keymaps
+            .iter()
+            .find(|k| k["mode"] == "global" && k["key"] == "Ctrl+c")
+            .expect("global Ctrl+c binding missing");
+        assert_eq!(quit["action"], "quit");
+        assert_eq!(quit["source"], "builtin");
+    }
+
+    #[test]
+    fn config_keys_lists_known_keys_with_metadata() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        let result = dispatch(&mut state, &harness.ctx(), "config.keys", &json!({})).unwrap();
+        let keys = result["keys"].as_array().unwrap();
+        assert_eq!(keys.len(), quorum_domain::known_keys().len());
+        let strategy = keys
+            .iter()
+            .find(|k| k["key"] == "agent.strategy")
+            .expect("agent.strategy missing from config.keys");
+        assert_eq!(strategy["mutable"], true);
+        assert!(
+            strategy["valid_values"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("debate"))
+        );
+    }
+
+    #[test]
+    fn config_get_returns_current_value() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        let result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "config.get",
+            &json!({"key": "agent.strategy"}),
+        )
+        .unwrap();
+        assert_eq!(result["value"], "quorum");
+    }
+
+    #[test]
+    fn config_get_unknown_key_hints_at_config_keys() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        let err = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "config.get",
+            &json!({"key": "nonexistent.key"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err.message.contains("config.keys"));
+    }
+
+    #[test]
+    fn config_set_then_get_round_trips() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+
+        let set_result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "config.set",
+            &json!({"key": "agent.strategy", "value": "debate"}),
+        )
+        .unwrap();
+        assert_eq!(set_result["ok"], true);
+        assert_eq!(set_result["value"], "debate");
+
+        let get_result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "config.get",
+            &json!({"key": "agent.strategy"}),
+        )
+        .unwrap();
+        assert_eq!(get_result["value"], "debate");
+    }
+
+    #[test]
+    fn config_set_string_list_round_trips() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+
+        dispatch(
+            &mut state,
+            &harness.ctx(),
+            "config.set",
+            &json!({"key": "models.review", "value": ["claude-opus-4.5", "gpt-5.3-codex"]}),
+        )
+        .unwrap();
+
+        let get_result = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "config.get",
+            &json!({"key": "models.review"}),
+        )
+        .unwrap();
+        assert_eq!(
+            get_result["value"],
+            json!(["claude-opus-4.5", "gpt-5.3-codex"])
+        );
+    }
+
+    #[test]
+    fn config_set_invalid_value_is_rejected() {
+        let harness = TestHarness::new();
+        let mut state = TuiState::new();
+        let err = dispatch(
+            &mut state,
+            &harness.ctx(),
+            "config.set",
+            &json!({"key": "agent.strategy", "value": "not-a-strategy"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, -32602);
     }
 }

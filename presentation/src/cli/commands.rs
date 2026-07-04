@@ -1,42 +1,16 @@
 //! CLI command definitions
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use quorum_domain::OutputFormat;
 use std::path::PathBuf;
 
-/// CLI-specific output format (newtype for clap ValueEnum)
-///
-/// This wrapper exists because Rust's orphan rules prevent implementing
-/// an external trait (ValueEnum) for an external type (domain::OutputFormat).
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum CliOutputFormat {
-    /// Full formatted output with all phases
-    Full,
-    /// Only the final synthesis
-    Synthesis,
-    /// JSON output
-    Json,
-}
-
-impl From<CliOutputFormat> for OutputFormat {
-    fn from(format: CliOutputFormat) -> Self {
-        match format {
-            CliOutputFormat::Full => OutputFormat::Full,
-            CliOutputFormat::Synthesis => OutputFormat::Synthesis,
-            CliOutputFormat::Json => OutputFormat::Json,
-        }
-    }
-}
-
-/// Subcommands (#300 / RFC Discussion #304 D4).
-///
-/// Note for reviewers: this is the same seam #302 (rpc subcommand) needs —
-/// expect a merge conflict here. Whoever merges second should rebase and add
-/// their variant alongside `Review`.
-#[derive(clap::Subcommand, Debug)]
+/// Subcommands (#300 `review` / #302 `rpc`, RFC Discussion #304 D4).
+#[derive(Subcommand, Debug)]
 pub enum Command {
     /// Headless multi-model Quorum review of a PR or diff (#300)
     Review(ReviewArgs),
+    /// Built-in JSON-RPC client for the Remote Control API socket (`--listen`) (#302)
+    Rpc(RpcArgs),
 }
 
 /// Output format for the `review` subcommand.
@@ -68,6 +42,46 @@ pub struct ReviewArgs {
     /// Output format
     #[arg(long, value_enum, default_value = "synthesis")]
     pub output: ReviewOutputFormat,
+}
+
+/// Arguments for `copilot-quorum rpc` — talks the same wire protocol as
+/// `scripts/tui-rpc.py` (LSP-style `Content-Length` framing + JSON-RPC 2.0)
+/// to a running `--listen` (or `--headless --listen`) instance.
+#[derive(Parser, Debug)]
+pub struct RpcArgs {
+    /// Unix socket path opened by a running `--listen` instance
+    #[arg(long, value_name = "PATH")]
+    pub socket: PathBuf,
+
+    /// RPC method name (run `rpc.discover` with no params for the full list)
+    pub method: String,
+
+    /// JSON params object (default: `{}`)
+    pub params: Option<String>,
+}
+
+/// CLI-specific output format (newtype for clap ValueEnum)
+///
+/// This wrapper exists because Rust's orphan rules prevent implementing
+/// an external trait (ValueEnum) for an external type (domain::OutputFormat).
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CliOutputFormat {
+    /// Full formatted output with all phases
+    Full,
+    /// Only the final synthesis
+    Synthesis,
+    /// JSON output
+    Json,
+}
+
+impl From<CliOutputFormat> for OutputFormat {
+    fn from(format: CliOutputFormat) -> Self {
+        match format {
+            CliOutputFormat::Full => OutputFormat::Full,
+            CliOutputFormat::Synthesis => OutputFormat::Synthesis,
+            CliOutputFormat::Json => OutputFormat::Json,
+        }
+    }
 }
 
 /// CLI arguments for copilot-quorum
@@ -105,10 +119,11 @@ Example:
   copilot-quorum --no-quorum "Show README" # Skip quorum review (faster)
   copilot-quorum -m claude-haiku-4.5 "Add tests"  # Use specific model
   copilot-quorum review --pr 123           # Headless multi-model PR review (#300)
+  copilot-quorum rpc --socket /tmp/q.sock state.get  # Remote Control API client (#302)
 "#)]
 pub struct Cli {
-    /// Subcommand (e.g. `review`). Global flags (`-v`, `--log-dir`, etc.) may
-    /// precede the subcommand name (`copilot-quorum -v review --pr 123`);
+    /// Subcommand (e.g. `review`, `rpc`). Global flags (`-v`, `--log-dir`, etc.)
+    /// may precede the subcommand name (`copilot-quorum -v review --pr 123`);
     /// subcommand-specific flags go after it. Deliberately *not* annotated
     /// with clap's `args_conflicts_with_subcommands` — that attribute makes
     /// clap stop recognizing the subcommand name entirely once any other
@@ -116,7 +131,8 @@ pub struct Cli {
     /// `copilot-quorum --log-dir X review --pr 123` would silently run
     /// `review` as the literal REPL/one-shot QUESTION text instead of
     /// dispatching to the subcommand (verified empirically — see
-    /// `global_flag_before_subcommand_still_dispatches` below).
+    /// `global_flag_before_subcommand_still_dispatches` /
+    /// `global_flag_before_rpc_subcommand_still_dispatches` below).
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -232,6 +248,8 @@ mod tests {
         assert!(cli.command.is_none());
     }
 
+    // -- review subcommand tests (#300) --
+
     #[test]
     fn review_pr_parses() {
         let cli = Cli::try_parse_from(["copilot-quorum", "review", "--pr", "123"]).unwrap();
@@ -326,6 +344,79 @@ mod tests {
             match cli.command {
                 Some(Command::Review(args)) => assert_eq!(args.pr, Some(123)),
                 other => panic!("argv {:?}: expected Command::Review, got {:?}", argv, other),
+            }
+        }
+    }
+
+    // -- rpc subcommand tests (#302) --
+
+    #[test]
+    fn rpc_subcommand_parses() {
+        let cli = Cli::try_parse_from([
+            "copilot-quorum",
+            "rpc",
+            "--socket",
+            "/tmp/q.sock",
+            "state.get",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Rpc(args)) => {
+                assert_eq!(args.socket, PathBuf::from("/tmp/q.sock"));
+                assert_eq!(args.method, "state.get");
+                assert_eq!(args.params, None);
+            }
+            other => panic!("expected Command::Rpc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rpc_subcommand_parses_params() {
+        let cli = Cli::try_parse_from([
+            "copilot-quorum",
+            "rpc",
+            "--socket",
+            "/tmp/q.sock",
+            "config.get",
+            r#"{"key": "agent.strategy"}"#,
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Rpc(args)) => {
+                assert_eq!(
+                    args.params,
+                    Some(r#"{"key": "agent.strategy"}"#.to_string())
+                );
+            }
+            other => panic!("expected Command::Rpc, got {other:?}"),
+        }
+    }
+
+    // Same regression `global_flag_before_subcommand_still_dispatches` guards
+    // for `review` (see that test's comment for the `args_conflicts_with_subcommands`
+    // history) — `rpc` needs its own coverage since it's a distinct `Command` variant.
+    #[test]
+    fn global_flag_before_rpc_subcommand_still_dispatches() {
+        for prefix in [
+            vec!["-v"],
+            vec!["--log-dir", "/tmp/x"],
+            vec!["--quiet"],
+            vec!["--no-log-file"],
+        ] {
+            let mut argv = vec!["copilot-quorum"];
+            argv.extend(prefix.iter().copied());
+            argv.extend(["rpc", "--socket", "/tmp/q.sock", "state.get"]);
+
+            let cli = Cli::try_parse_from(&argv)
+                .unwrap_or_else(|e| panic!("failed to parse {:?}: {}", argv, e));
+            assert_eq!(
+                cli.question, None,
+                "argv {:?} should have no question",
+                argv
+            );
+            match cli.command {
+                Some(Command::Rpc(args)) => assert_eq!(args.method, "state.get"),
+                other => panic!("argv {:?}: expected Command::Rpc, got {:?}", argv, other),
             }
         }
     }
