@@ -31,7 +31,7 @@
 //! ```
 
 use quorum_domain::{
-    AgentPhase, ErrorCategory, Model, Plan, ReviewRound, StreamContext, Task, Thought,
+    AgentPhase, ErrorCategory, Model, Plan, ReviewRound, StreamContext, Task, Thought, Vote,
 };
 
 /// Progress notifier for agent execution.
@@ -161,14 +161,11 @@ pub trait AgentProgressNotifier: Send + Sync {
     fn on_quorum_complete(&self, _phase: &str, _approved: bool, _feedback: Option<&str>) {}
 
     /// Called when quorum voting completes with detailed vote information
-    ///
-    /// # Arguments
-    /// * `votes` - Vec of (model_name, approved, reasoning) tuples
     fn on_quorum_complete_with_votes(
         &self,
         _phase: &str,
         _approved: bool,
-        _votes: &[(String, bool, String)],
+        _votes: &[Vote],
         _feedback: Option<&str>,
     ) {
     }

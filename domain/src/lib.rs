@@ -35,8 +35,8 @@ pub mod util;
 pub use agent::{
     agent_policy::{AgentPolicy, HilAction},
     entities::{
-        AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, ModelVote, Plan,
-        PlanCandidate, ReviewRound, Task, TaskStatus,
+        AgentPhase, AgentState, EnsemblePlanResult, HilMode, HumanDecision, Plan, PlanCandidate,
+        ReviewRound, Task, TaskStatus,
     },
     model_config::ModelConfig,
     tool_execution::{ToolExecution, ToolExecutionId, ToolExecutionState},
@@ -84,7 +84,8 @@ pub use tool::{
 
 // Re-export quorum types
 pub use quorum::{
-    ConsensusOutcome, ConsensusRound, QuorumRule, Vote, VoteResult, parse_final_review_response,
+    ConsensusOutcome, ConsensusRound, QUORUM_RESULT_API_VERSION, QuorumResultEnvelope, QuorumRule,
+    QuorumTarget, QuorumTopic, Vote, VoteResult, VoteVerdict, parse_final_review_response,
     parse_review_response, parse_vote_score,
 };
 

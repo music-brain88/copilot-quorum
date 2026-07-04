@@ -24,6 +24,7 @@ use super::value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought};
 use crate::context::ContextMode;
 use crate::core::model::Model;
 use crate::orchestration::session_mode::SessionMode;
+use crate::quorum::{Vote, VoteVerdict};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -390,37 +391,6 @@ impl Task {
     }
 }
 
-/// A single model's vote in a quorum review
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelVote {
-    /// Model identifier
-    pub model: String,
-    /// Whether this model approved
-    pub approved: bool,
-    /// Reasoning/feedback from this model
-    pub reasoning: String,
-}
-
-impl ModelVote {
-    pub fn new(model: impl Into<String>, approved: bool, reasoning: impl Into<String>) -> Self {
-        Self {
-            model: model.into(),
-            approved,
-            reasoning: reasoning.into(),
-        }
-    }
-
-    /// Create an approval vote
-    pub fn approve(model: impl Into<String>, reasoning: impl Into<String>) -> Self {
-        Self::new(model, true, reasoning)
-    }
-
-    /// Create a rejection vote
-    pub fn reject(model: impl Into<String>, reasoning: impl Into<String>) -> Self {
-        Self::new(model, false, reasoning)
-    }
-}
-
 /// A record of a single review round in quorum voting
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewRound {
@@ -429,13 +399,13 @@ pub struct ReviewRound {
     /// Whether this round resulted in approval
     pub approved: bool,
     /// Individual model votes
-    pub votes: Vec<ModelVote>,
+    pub votes: Vec<Vote>,
     /// Timestamp of this review
     pub timestamp: u64,
 }
 
 impl ReviewRound {
-    pub fn new(round: usize, approved: bool, votes: Vec<ModelVote>) -> Self {
+    pub fn new(round: usize, approved: bool, votes: Vec<Vote>) -> Self {
         Self {
             round,
             approved,
@@ -446,25 +416,29 @@ impl ReviewRound {
 
     /// Count of approving votes
     pub fn approve_count(&self) -> usize {
-        self.votes.iter().filter(|v| v.approved).count()
+        self.votes.iter().filter(|v| v.is_approve()).count()
     }
 
     /// Count of rejecting votes
     pub fn reject_count(&self) -> usize {
-        self.votes.iter().filter(|v| !v.approved).count()
+        self.votes.iter().filter(|v| v.is_reject()).count()
     }
 
-    /// Whether this was a unanimous decision
+    /// Whether the cast votes were unanimous
     pub fn is_unanimous(&self) -> bool {
-        let approve_count = self.approve_count();
-        approve_count == self.votes.len() || approve_count == 0
+        let cast = self.approve_count() + self.reject_count();
+        self.approve_count() == cast || self.approve_count() == 0
     }
 
-    /// Generate a visual vote summary (e.g., "[●●○]")
+    /// Generate a visual vote summary (e.g., "[●●○]"; `!` = abstain / error)
     pub fn vote_summary(&self) -> String {
         let mut summary = String::from("[");
         for vote in &self.votes {
-            summary.push(if vote.approved { '●' } else { '○' });
+            summary.push(match vote.verdict {
+                VoteVerdict::Approve => '●',
+                VoteVerdict::Reject => '○',
+                VoteVerdict::Abstain | VoteVerdict::ModelError => '!',
+            });
         }
         summary.push(']');
         summary

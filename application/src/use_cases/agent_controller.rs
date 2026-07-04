@@ -11,6 +11,9 @@ use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::conversation_logger::{
     ConversationEvent, ConversationLogger, NoConversationLogger,
 };
+use crate::ports::event_publisher::{
+    CompositeEventPublisher, ConversationLogEventPublisher, EventPublisher, ScriptEventPublisher,
+};
 use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::QuorumProgressAdapter;
 use crate::ports::tool_executor::ToolExecutorPort;
@@ -163,7 +166,25 @@ impl AgentController {
         self.conversation_logger = logger.clone();
         self.use_case = self.use_case.with_conversation_logger(logger.clone());
         self.ask_use_case.set_conversation_logger(logger);
+        self.rebuild_event_publisher();
         self
+    }
+
+    /// Rebuild the typed-event seam from the current logger + scripting engine.
+    ///
+    /// Subscribers: JSONL conversation log, Lua scripting engine
+    /// (the latter no-ops while the engine is unavailable).
+    fn rebuild_event_publisher(&mut self) {
+        let publisher = CompositeEventPublisher::new(vec![
+            Arc::new(ConversationLogEventPublisher::new(
+                self.conversation_logger.clone(),
+            )) as Arc<dyn EventPublisher>,
+            Arc::new(ScriptEventPublisher::new(self.scripting_engine.clone())),
+        ]);
+        self.use_case = self
+            .use_case
+            .clone()
+            .with_event_publisher(Arc::new(publisher));
     }
 
     /// Set moderator model for synthesis
@@ -246,6 +267,7 @@ impl AgentController {
         self.scripting_engine = engine.clone();
         // Propagate to RunAgentUseCase for ToolCallBefore events
         self.use_case = self.use_case.clone().with_scripting_engine(engine);
+        self.rebuild_event_publisher();
     }
 
     /// Get the scripting engine reference.

@@ -27,6 +27,7 @@ use crate::ports::context_loader::ContextLoaderPort;
 use crate::ports::conversation_logger::{
     ConversationEvent, ConversationLogger, NoConversationLogger,
 };
+use crate::ports::event_publisher::{ConversationLogEventPublisher, EventPublisher};
 use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, LlmSession};
 use crate::ports::reference_resolver::ReferenceResolverPort;
@@ -38,8 +39,7 @@ use crate::use_cases::gather_context::GatherContextUseCase;
 use crate::use_cases::shared::check_cancelled;
 use quorum_domain::core::string::truncate;
 use quorum_domain::{
-    AgentPhase, AgentPromptTemplate, AgentState, HumanDecision, ModelVote, ReviewRound,
-    StreamEvent, Thought,
+    AgentPhase, AgentPromptTemplate, AgentState, HumanDecision, ReviewRound, StreamEvent, Thought,
 };
 use review::QuorumActionReviewer;
 use std::path::Path;
@@ -58,6 +58,7 @@ pub struct RunAgentUseCase {
     pub(super) reference_resolver: Option<Arc<dyn ReferenceResolverPort>>,
     pub(super) conversation_logger: Arc<dyn ConversationLogger>,
     pub(super) scripting_engine: Option<Arc<dyn ScriptingEnginePort>>,
+    pub(super) event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl Clone for RunAgentUseCase {
@@ -72,6 +73,7 @@ impl Clone for RunAgentUseCase {
             reference_resolver: self.reference_resolver.clone(),
             conversation_logger: self.conversation_logger.clone(),
             scripting_engine: self.scripting_engine.clone(),
+            event_publisher: self.event_publisher.clone(),
         }
     }
 }
@@ -109,6 +111,7 @@ impl RunAgentUseCase {
             reference_resolver: None,
             conversation_logger: Arc::new(NoConversationLogger),
             scripting_engine: None,
+            event_publisher: None,
         }
     }
 
@@ -128,6 +131,7 @@ impl RunAgentUseCase {
             reference_resolver: None,
             conversation_logger: Arc::new(NoConversationLogger),
             scripting_engine: None,
+            event_publisher: None,
         }
     }
 
@@ -159,6 +163,24 @@ impl RunAgentUseCase {
     pub fn with_scripting_engine(mut self, engine: Arc<dyn ScriptingEnginePort>) -> Self {
         self.scripting_engine = Some(engine);
         self
+    }
+
+    /// Set the typed event publisher (the seam for `quorum_result` etc.).
+    pub fn with_event_publisher(mut self, publisher: Arc<dyn EventPublisher>) -> Self {
+        self.event_publisher = Some(publisher);
+        self
+    }
+
+    /// The effective event publisher.
+    ///
+    /// Falls back to logging through the conversation logger so that
+    /// JSONL events are never silently lost when DI doesn't inject one.
+    pub(super) fn event_publisher(&self) -> Arc<dyn EventPublisher> {
+        self.event_publisher.clone().unwrap_or_else(|| {
+            Arc::new(ConversationLogEventPublisher::new(
+                self.conversation_logger.clone(),
+            ))
+        })
     }
 
     /// Log `agent_complete` event to the conversation logger.
@@ -550,17 +572,12 @@ impl RunAgentUseCase {
 
             // Create review round for history
             let review_round = {
-                let votes: Vec<ModelVote> = plan_review
-                    .votes
-                    .iter()
-                    .map(|(model, approved, feedback)| ModelVote::new(model, *approved, feedback))
-                    .collect();
                 let round_num = state
                     .plan
                     .as_ref()
                     .map(|p| p.review_history.len() + 1)
                     .unwrap_or(1);
-                ReviewRound::new(round_num, plan_review.approved, votes)
+                ReviewRound::new(round_num, plan_review.passed, plan_review.votes.clone())
             };
 
             // Add review round to plan history
@@ -571,12 +588,12 @@ impl RunAgentUseCase {
             // Notify with detailed vote information
             progress.on_quorum_complete_with_votes(
                 "plan_review",
-                plan_review.approved,
+                plan_review.passed,
                 &plan_review.votes,
-                plan_review.feedback.as_deref(),
+                plan_review.aggregated_feedback.as_deref(),
             );
 
-            if plan_review.approved {
+            if plan_review.passed {
                 state.approve_plan();
                 state.add_thought(Thought::observation("Plan approved by quorum"));
                 break; // Exit loop and proceed to Phase 4
@@ -584,7 +601,7 @@ impl RunAgentUseCase {
 
             // Plan was rejected - check if we can retry
             let feedback = plan_review
-                .feedback
+                .aggregated_feedback
                 .unwrap_or_else(|| "No specific feedback".to_string());
             state.reject_plan(&feedback);
 
@@ -703,6 +720,7 @@ impl RunAgentUseCase {
             self.gateway.clone(),
             self.tool_executor.clone(),
             self.cancellation_token.clone(),
+            self.event_publisher(),
         );
         let mut execute_uc = ExecuteTaskUseCase::new(
             self.gateway.clone(),
@@ -751,15 +769,18 @@ impl RunAgentUseCase {
             // UI notification for final review result
             progress.on_quorum_complete_with_votes(
                 "final_review",
-                final_review.approved,
+                final_review.passed,
                 &final_review.votes,
-                final_review.feedback.as_deref(),
+                final_review.aggregated_feedback.as_deref(),
             );
 
-            if !final_review.approved {
+            if !final_review.passed {
                 state.add_thought(Thought::observation(format!(
                     "Final review raised concerns: {}",
-                    final_review.feedback.as_deref().unwrap_or("No details")
+                    final_review
+                        .aggregated_feedback
+                        .as_deref()
+                        .unwrap_or("No details")
                 )));
             } else {
                 state.add_thought(Thought::conclusion("Final review passed"));
@@ -1163,6 +1184,7 @@ mod tests {
         gateway: ScriptedGateway,
         tool_executor: MockToolExecutor,
         human_intervention: Option<Arc<dyn HumanInterventionPort>>,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     }
 
     impl FlowTestBuilder {
@@ -1232,6 +1254,7 @@ mod tests {
                 gateway,
                 tool_executor: MockToolExecutor::new(),
                 human_intervention: None,
+                event_publisher: None,
             }
         }
 
@@ -1328,6 +1351,7 @@ mod tests {
                 gateway,
                 tool_executor: MockToolExecutor::new(),
                 human_intervention: None,
+                event_publisher: None,
             }
         }
 
@@ -1372,6 +1396,11 @@ mod tests {
             self
         }
 
+        fn with_event_publisher(mut self, publisher: Arc<dyn EventPublisher>) -> Self {
+            self.event_publisher = Some(publisher);
+            self
+        }
+
         fn with_hil_mode(mut self, hil_mode: HilMode) -> Self {
             self.policy.hil_mode = hil_mode;
             self
@@ -1406,6 +1435,9 @@ mod tests {
 
             if let Some(intervention) = self.human_intervention {
                 use_case = use_case.with_human_intervention(intervention);
+            }
+            if let Some(publisher) = self.event_publisher {
+                use_case = use_case.with_event_publisher(publisher);
             }
 
             let input = RunAgentInput::new(
@@ -1480,6 +1512,104 @@ mod tests {
 
         // Full mode includes plan review
         assert!(progress.has_phase(&AgentPhase::PlanReview));
+    }
+
+    #[tokio::test]
+    async fn test_plan_review_publishes_quorum_result_event() {
+        use crate::ports::event_publisher::{AppEvent, RecordingEventPublisher};
+        use quorum_domain::quorum::QuorumTopic;
+
+        let publisher = Arc::new(RecordingEventPublisher::new());
+        let (result, _progress) = FlowTestBuilder::solo_full()
+            .with_event_publisher(publisher.clone())
+            .execute()
+            .await;
+        result.expect("should succeed");
+
+        let events = publisher.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        let AppEvent::QuorumResult(envelope) = &events[0];
+        assert_eq!(envelope.api_version, 1);
+        assert_eq!(envelope.topic, QuorumTopic::PlanReview);
+        assert!(envelope.approved);
+        assert_eq!(envelope.votes.len(), 1);
+        assert!(envelope.votes[0].is_approve());
+    }
+
+    #[tokio::test]
+    async fn test_action_review_publishes_quorum_result_event() {
+        use crate::ports::event_publisher::{AppEvent, RecordingEventPublisher};
+        use quorum_domain::Task;
+        use quorum_domain::quorum::{QuorumTopic, VoteVerdict};
+
+        // Two review models: one approves, one fails at the gateway.
+        // The failure must surface as a model_error vote without flipping the outcome.
+        let mut gateway = ScriptedGateway::new();
+        gateway.add_session(
+            &Model::ClaudeSonnet45.to_string(),
+            vec![ScriptedResponse::Text(approve_response())],
+        );
+        gateway.add_session(
+            &Model::ClaudeHaiku45.to_string(),
+            vec![ScriptedResponse::Error("gateway down".to_string())],
+        );
+
+        let publisher = Arc::new(RecordingEventPublisher::new());
+        let reviewer = super::review::QuorumActionReviewer::new(
+            Arc::new(gateway),
+            Arc::new(MockToolExecutor::new()),
+            None,
+            publisher.clone(),
+        );
+
+        let task = Task::new("task-1", "Run a risky command");
+        let mode = SessionMode {
+            consensus_level: ConsensusLevel::Solo,
+            phase_scope: PhaseScope::Full,
+            strategy: Default::default(),
+        };
+        let models = ModelConfig {
+            review: vec![Model::ClaudeSonnet45, Model::ClaudeHaiku45],
+            ..Default::default()
+        };
+        let state = quorum_domain::AgentState::new(
+            "agent-1",
+            "Test request",
+            mode,
+            models.clone(),
+            AgentPolicy::default(),
+            50,
+        );
+
+        use crate::ports::action_reviewer::{ActionReviewer, ReviewDecision};
+        let decision = reviewer
+            .review_action(
+                r#"{"name": "run_command", "arguments": {"command": "rm -rf target"}}"#,
+                &task,
+                &state,
+                &models,
+                &NoAgentProgress,
+            )
+            .await
+            .expect("review should succeed");
+        assert!(matches!(decision, ReviewDecision::Approved));
+
+        let events = publisher.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        let AppEvent::QuorumResult(envelope) = &events[0];
+        assert_eq!(envelope.topic, QuorumTopic::ActionReview);
+        assert!(envelope.approved);
+        let target = envelope.target.as_ref().expect("target present");
+        assert_eq!(target.task_id.as_deref(), Some("task-1"));
+        assert_eq!(target.tool.as_deref(), Some("run_command"));
+        // 1 approve + 1 model_error; the error is visible but not in the denominator
+        assert_eq!(envelope.votes.len(), 2);
+        assert!(
+            envelope
+                .votes
+                .iter()
+                .any(|v| v.verdict == VoteVerdict::ModelError)
+        );
     }
 
     #[tokio::test]

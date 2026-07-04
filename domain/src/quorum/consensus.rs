@@ -177,14 +177,6 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
-// ============================================================================
-// Backward Compatibility
-// ============================================================================
-
-/// Alias for backward compatibility with agent::entities::ReviewRound
-#[deprecated(since = "0.6.0", note = "Use ConsensusRound instead")]
-pub type ReviewRound = ConsensusRound;
-
 #[cfg(test)]
 mod tests {
     use super::*;

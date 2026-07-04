@@ -4,7 +4,7 @@ use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use quorum_application::{AgentProgressNotifier, ErrorCategory};
 use quorum_domain::core::string::truncate;
-use quorum_domain::{AgentPhase, Model, Task, Thought};
+use quorum_domain::{AgentPhase, Model, Task, Thought, Vote, VoteVerdict};
 use std::io::Write;
 use std::sync::Mutex;
 
@@ -338,18 +338,22 @@ impl AgentProgressNotifier for AgentProgressReporter {
         &self,
         phase: &str,
         approved: bool,
-        votes: &[(String, bool, String)],
+        votes: &[Vote],
         feedback: Option<&str>,
     ) {
         if let Some(pb) = self.quorum_bar.lock().unwrap().take() {
-            // Build vote summary like [●●○]
+            // Build vote summary like [●●○] (! = abstain / model error)
             let vote_summary: String = votes
                 .iter()
-                .map(|(_, approved, _)| if *approved { '●' } else { '○' })
+                .map(|v| match v.verdict {
+                    VoteVerdict::Approve => '●',
+                    VoteVerdict::Reject => '○',
+                    VoteVerdict::Abstain | VoteVerdict::ModelError => '!',
+                })
                 .collect();
-            let approve_count = votes.iter().filter(|(_, a, _)| *a).count();
-            let total = votes.len();
-            let unanimous = approve_count == total || approve_count == 0;
+            let approve_count = votes.iter().filter(|v| v.is_approve()).count();
+            let cast = votes.iter().filter(|v| v.is_cast()).count();
+            let unanimous = approve_count == cast || approve_count == 0;
 
             let status = if approved {
                 "APPROVED".green().bold()
@@ -365,23 +369,28 @@ impl AgentProgressNotifier for AgentProgressReporter {
 
             pb.finish_with_message(format!(
                 "{} {} [{}] {}/{} {}",
-                phase, status, vote_summary, approve_count, total, consensus
+                phase, status, vote_summary, approve_count, cast, consensus
             ));
         }
 
         // Show individual votes in verbose or show_votes mode
         if self.verbose || self.show_votes {
             println!();
-            for (model, approved, reasoning) in votes {
-                let vote_icon = if *approved {
-                    "✓".green()
-                } else {
-                    "✗".red()
+            for vote in votes {
+                let vote_icon = match vote.verdict {
+                    VoteVerdict::Approve => "✓".green(),
+                    VoteVerdict::Reject => "✗".red(),
+                    VoteVerdict::Abstain | VoteVerdict::ModelError => "!".yellow(),
                 };
-                println!("      {} {}", vote_icon, model);
+                let suffix = match vote.verdict {
+                    VoteVerdict::ModelError => " (error)".dimmed().to_string(),
+                    VoteVerdict::Abstain => " (abstain)".dimmed().to_string(),
+                    _ => String::new(),
+                };
+                println!("      {} {}{}", vote_icon, vote.model, suffix);
                 // Show reasoning snippet in show_votes mode
-                if self.show_votes && !reasoning.is_empty() {
-                    let snippet = truncate(reasoning, 80);
+                if self.show_votes && !vote.reasoning.is_empty() {
+                    let snippet = truncate(&vote.reasoning, 80);
                     println!("        {} {}", "└─".dimmed(), snippet.dimmed());
                 }
             }
@@ -664,15 +673,19 @@ impl AgentProgressNotifier for SimpleAgentProgress {
         &self,
         phase: &str,
         approved: bool,
-        votes: &[(String, bool, String)],
+        votes: &[Vote],
         feedback: Option<&str>,
     ) {
         let vote_summary: String = votes
             .iter()
-            .map(|(_, approved, _)| if *approved { '●' } else { '○' })
+            .map(|v| match v.verdict {
+                VoteVerdict::Approve => '●',
+                VoteVerdict::Reject => '○',
+                VoteVerdict::Abstain | VoteVerdict::ModelError => '!',
+            })
             .collect();
-        let approve_count = votes.iter().filter(|(_, a, _)| *a).count();
-        let total = votes.len();
+        let approve_count = votes.iter().filter(|v| v.is_approve()).count();
+        let total = votes.iter().filter(|v| v.is_cast()).count();
 
         if approved {
             println!(

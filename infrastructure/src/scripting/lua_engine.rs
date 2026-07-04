@@ -74,7 +74,7 @@ impl LuaScriptingEngine {
                     // Validate event name
                     if event_name.parse::<ScriptEventType>().is_err() {
                         return Err(LuaError::external(format!(
-                            "unknown event: '{}'. Valid events: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, PaneCreated, LayoutChanged, ToolCallBefore, ToolCallAfter, PhaseChanged, PlanCreated",
+                            "unknown event: '{}'. Valid events: ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, PaneCreated, LayoutChanged, ToolCallBefore, ToolCallAfter, PhaseChanged, PlanCreated, QuorumResult",
                             event_name
                         )));
                     }

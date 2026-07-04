@@ -141,7 +141,7 @@ impl InteractiveHumanIntervention {
 
                 // Show feedback from rejecting models
                 for vote in &round.votes {
-                    if !vote.approved {
+                    if vote.is_reject() {
                         let feedback = truncate(&vote.reasoning, 80);
                         println!("    └─ {}: {}", vote.model.dimmed(), feedback);
                     }

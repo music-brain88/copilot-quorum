@@ -180,6 +180,7 @@ Pending ──> Running ──> Completed
 | `application/src/config/quorum_config.rs` | `QuorumConfig`（4型コンテナ） |
 | `application/src/ports/agent_progress.rs` | `AgentProgressNotifier`（進捗通知ポート） |
 | `application/src/ports/ui_event.rs` | `UiEvent`（Application→Presentation 出力ポート） |
+| `application/src/ports/event_publisher.rs` | `EventPublisher`（typed イベントの継ぎ目） |
 | `infrastructure/src/reference/github.rs` | `GitHubReferenceResolver`（`gh` CLI 解決） |
 | `infrastructure/src/tools/` | `LocalToolExecutor` 実装 |
 
@@ -239,6 +240,22 @@ AgentController ──→ UiEvent ──→ TuiPresenter ──→ TuiState muta
 | Errors | `CommandError`, `UnknownCommand` |
 
 定義ファイル: `application/src/ports/ui_event.rs`
+
+### EventPublisher — typed イベントの継ぎ目
+
+合議結果（`quorum_result`）のような**外部消費される typed イベント**は、
+`EventPublisher` port（`application/src/ports/event_publisher.rs`）を通る単一の発行点を持ちます。
+
+```rust
+pub enum AppEvent { QuorumResult(QuorumResultEnvelope) }  // variant は今後増える
+pub trait EventPublisher: Send + Sync {
+    fn publish(&self, event: AppEvent);  // sync・fire-and-forget
+}
+```
+
+- 購読者: `ConversationLogEventPublisher`（JSONL）、`ScriptEventPublisher`（Lua `QuorumResult` イベント）。`CompositeEventPublisher` でファンアウト
+- これは意図的に「バス」ではなく**バスに後で差し替えられる継ぎ目**（RFC Discussion #304）。将来の Application / Interaction Event Bus は impl 差し替え + `AppEvent` variant 追加で導入され、呼び出し側は変わらない
+- エンベロープの JSON 契約は [Logging](logging.md) の `quorum_result` v1 を参照
 
 ### Progress Notification / 進捗通知
 

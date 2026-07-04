@@ -254,7 +254,7 @@ The agent system extends quorum to autonomous task execution with safety through
 User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-gated behind `scripting` (default ON).
 
 **Lua APIs**:
-- `quorum.on(event, callback)` — Event subscription (ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, ToolCallBefore, ToolCallAfter, PhaseChanged, PlanCreated)
+- `quorum.on(event, callback)` — Event subscription (ScriptLoading, ScriptLoaded, ConfigChanged, ModeChanged, SessionStarted, ToolCallBefore, ToolCallAfter, PhaseChanged, PlanCreated, QuorumResult)
 - `quorum.config.get(key)` / `quorum.config.set(key, value)` / `quorum.config.keys()` — Runtime config access via `ConfigAccessorPort` (20 keys, all read-write)
 - `quorum.config["key"]` — Metatable proxy (`__index`/`__newindex`)
 - `quorum.keymap.set(mode, key, action)` — Custom keybindings (mode: normal/insert/command, action: string or Lua callback)
@@ -270,6 +270,7 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 - `ToolCallAfter` — tool_name, success, duration_ms, output_preview/error
 - `PhaseChanged` — phase name as string
 - `PlanCreated` — objective, task_count
+- `QuorumResult` — topic, approved, approve_count, reject_count, votes_json（`EventPublisher` 継ぎ目経由。progress bridge ではない）
 - `CompositeProgressNotifier<'a>` — borrowed refs, delegates to TUI + ScriptProgressBridge
 - `ScriptProgressBridge` — maps AgentProgressNotifier → ScriptingEnginePort::emit_event()
 - ToolCallBefore: Vim BufWritePre timing + BufWriteCmd cancel = hybrid design
@@ -283,10 +284,11 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 - `context_budget.*` — max_entry_bytes, max_total_bytes, recent_full_count
 
 **Key Components**:
-- `domain/scripting/`: ScriptEventType (11 events), ScriptEventData, ScriptValue
+- `domain/scripting/`: ScriptEventType (12 events), ScriptEventData, ScriptValue
 - `application/ports/scripting_engine.rs`: ScriptingEnginePort trait, NoScriptingEngine, EventOutcome, KeymapAction
 - `application/ports/composite_progress.rs`: CompositeProgressNotifier<'a> (borrowed delegate pattern)
 - `application/ports/script_progress_bridge.rs`: ScriptProgressBridge (progress → scripting events)
+- `application/ports/event_publisher.rs`: EventPublisher（typed イベントの継ぎ目 — `AppEvent::QuorumResult` を JSONL + Lua にファンアウト。将来の Application/Interaction Event Bus はこの port の impl 差し替えで導入）
 - `infrastructure/scripting/`: LuaScriptingEngine (mlua), EventBus, ConfigAPI, KeymapAPI, CommandAPI, Sandbox
 - `presentation/tui/mode.rs`: KeyAction::LuaCallback, CustomKeymap, `parse_key_descriptor()`
 - `cli/main.rs`: DI wiring with `Arc<Mutex<QuorumConfig>>` shared between AgentController and LuaScriptingEngine

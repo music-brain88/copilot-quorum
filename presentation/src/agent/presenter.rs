@@ -385,12 +385,17 @@ impl ReplPresenter {
                         |s| s.red()
                     };
 
-                    // Build vote details like [claude: ✓, gpt: ✗, gemini: ✓]
+                    // Build vote details like [claude: ✓, gpt: ✗, gemini: !]
                     let vote_details: Vec<String> = round
                         .votes
                         .iter()
                         .map(|v| {
-                            let icon = if v.approved { "✓" } else { "✗" };
+                            let icon = match v.verdict {
+                                quorum_domain::VoteVerdict::Approve => "✓",
+                                quorum_domain::VoteVerdict::Reject => "✗",
+                                quorum_domain::VoteVerdict::Abstain
+                                | quorum_domain::VoteVerdict::ModelError => "!",
+                            };
                             format!("{}: {}", truncate_model_name(&v.model), icon)
                         })
                         .collect();
