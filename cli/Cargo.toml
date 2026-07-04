@@ -36,6 +36,9 @@ tracing-appender = { workspace = true }
 # DateTime
 chrono = { workspace = true }
 
+# JSON output (review --output json)
+serde_json = { workspace = true }
+
 # Platform directories
 dirs = "6.0"
 

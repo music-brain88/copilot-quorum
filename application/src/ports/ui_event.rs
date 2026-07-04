@@ -5,8 +5,8 @@
 //! (e.g., ReplPresenter for CLI, TuiPresenter for TUI in Phase 2).
 
 use quorum_domain::{
-    AgentState, ConsensusLevel, InteractionForm, InteractionId, Model, OutputFormat, PhaseScope,
-    Thought,
+    AgentState, ConsensusLevel, InteractionForm, InteractionId, InteractionResult, Model,
+    OutputFormat, PhaseScope, Thought,
 };
 
 /// Events emitted by AgentController for presentation layer to render
@@ -76,6 +76,10 @@ pub enum UiEvent {
     AskResult(AskResultEvent),
     /// Ask interaction failed
     AskError { error: String },
+
+    // === Review Interaction (#300) ===
+    /// Review interaction failed (no quorum reached, gateway error, etc.)
+    ReviewError { error: String },
 
     // === Interaction Lifecycle ===
     /// Interaction spawned (root or child)
@@ -199,4 +203,8 @@ pub struct InteractionCompletedEvent {
     pub form: InteractionForm,
     pub parent_id: Option<InteractionId>,
     pub result_text: String,
+    /// The structured result, for consumers that need more than the
+    /// notification text (e.g. headless callers awaiting a specific
+    /// interaction via `TuiApp::run_headless_until`, #300).
+    pub result: Option<InteractionResult>,
 }

@@ -28,6 +28,7 @@ use crate::use_cases::init_context::{
 use crate::use_cases::run_agent::RunAgentUseCase;
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
+use crate::use_cases::run_review::{RunReviewInput, RunReviewUseCase};
 use quorum_domain::ContextMode;
 use quorum_domain::interaction::{
     InteractionForm, InteractionId, InteractionResult, InteractionTree,
@@ -79,6 +80,7 @@ pub struct AgentController {
     gateway: Arc<dyn LlmGateway>,
     use_case: RunAgentUseCase,
     ask_use_case: RunAskUseCase,
+    review_use_case: RunReviewUseCase,
     context_loader: Arc<dyn ContextLoaderPort>,
     config: Arc<Mutex<QuorumConfig>>,
     /// Moderator model for synthesis (if explicitly configured)
@@ -120,6 +122,7 @@ impl AgentController {
         let ask_use_case =
             RunAskUseCase::new(gateway.clone(), tool_executor.clone(), tool_schema.clone())
                 .with_conversation_logger(conversation_logger.clone());
+        let review_use_case = RunReviewUseCase::new(gateway.clone());
 
         let mut interaction_tree = InteractionTree::default();
         // Agent form is the default root interaction
@@ -136,6 +139,7 @@ impl AgentController {
             )
             .with_human_intervention(human_intervention),
             ask_use_case,
+            review_use_case,
             context_loader,
             config,
             moderator: None,
@@ -175,16 +179,17 @@ impl AgentController {
     /// Subscribers: JSONL conversation log, Lua scripting engine
     /// (the latter no-ops while the engine is unavailable).
     fn rebuild_event_publisher(&mut self) {
-        let publisher = CompositeEventPublisher::new(vec![
+        let publisher: Arc<dyn EventPublisher> = Arc::new(CompositeEventPublisher::new(vec![
             Arc::new(ConversationLogEventPublisher::new(
                 self.conversation_logger.clone(),
             )) as Arc<dyn EventPublisher>,
             Arc::new(ScriptEventPublisher::new(self.scripting_engine.clone())),
-        ]);
+        ]));
         self.use_case = self
             .use_case
             .clone()
-            .with_event_publisher(Arc::new(publisher));
+            .with_event_publisher(publisher.clone());
+        self.review_use_case = self.review_use_case.clone().with_event_publisher(publisher);
     }
 
     /// Set moderator model for synthesis
@@ -875,12 +880,56 @@ impl AgentController {
         Ok((child_id, clean_query, full_query))
     }
 
+    /// Prepare a root-level spawn (no parent, `context_mode` = `Fresh`) —
+    /// used by headless entry points (e.g. #300's `review` subcommand) that
+    /// start a brand new interaction rather than nesting under whichever
+    /// interaction happens to be active. Unlike [`Self::prepare_spawn`],
+    /// creating a root always succeeds (no depth limit to hit), and there is
+    /// no conversation-history context to build — the caller supplies
+    /// everything the models need via `material`.
+    ///
+    /// `label` is a short human-readable string used for the tab title,
+    /// conversation echo, and history entries; `material` is the full prompt
+    /// material sent to the models (e.g. diff + PR context for Review).
+    pub fn prepare_root_spawn(
+        &mut self,
+        form: InteractionForm,
+        label: impl Into<String>,
+        material: impl Into<String>,
+    ) -> (InteractionId, String, String) {
+        let label = label.into();
+        let material = material.into();
+        let id = self.interaction_tree.create_root(form);
+
+        let _ = self
+            .tx
+            .send(UiEvent::InteractionSpawned(InteractionSpawnedEvent {
+                id,
+                form,
+                parent_id: None,
+                query: label.clone(),
+            }));
+
+        self.conversation_logger.log(ConversationEvent::new(
+            "interaction_spawned",
+            serde_json::json!({
+                "id": id.0,
+                "form": form.as_str(),
+                "parent_id": None::<usize>,
+                "context_mode": format!("{:?}", form.default_context_mode()),
+            }),
+        ));
+
+        (id, label, material)
+    }
+
     /// Build a context object for executing a spawn in a background task
     pub fn build_spawn_context(&self) -> SpawnContext {
         SpawnContext {
             gateway: self.gateway.clone(),
             agent_use_case: self.use_case.clone(),
             ask_use_case: self.ask_use_case.clone(),
+            review_use_case: self.review_use_case.clone(),
             config: self.config().clone(),
             tx: self.tx.clone(),
             verbose: self.verbose,
@@ -930,6 +979,7 @@ impl AgentController {
                     form: completion.form,
                     parent_id,
                     result_text: result.to_parent_notification(&completion.query),
+                    result: Some(result.clone()),
                 }));
         }
     }
@@ -1086,6 +1136,7 @@ pub struct SpawnContext {
     pub(crate) gateway: Arc<dyn LlmGateway>,
     pub(crate) agent_use_case: RunAgentUseCase,
     pub(crate) ask_use_case: RunAskUseCase,
+    pub(crate) review_use_case: RunReviewUseCase,
     pub(crate) config: QuorumConfig,
     pub(crate) tx: mpsc::UnboundedSender<UiEvent>,
     pub(crate) verbose: bool,
@@ -1133,6 +1184,7 @@ impl SpawnContext {
             InteractionForm::Ask => self.execute_ask(&full_query, progress).await,
             InteractionForm::Discuss => self.execute_discuss(&full_query, progress).await,
             InteractionForm::Agent => self.execute_agent(&clean_query, progress).await,
+            InteractionForm::Review => self.execute_review(&full_query, progress).await,
         };
 
         TaskCompletion {
@@ -1241,6 +1293,32 @@ impl SpawnContext {
                     error: e.to_string(),
                     cancelled,
                 }));
+                None
+            }
+        }
+    }
+
+    /// Execute a Review interaction (#300). `material` is the full review
+    /// material built by the caller (diff + optional PR/focus context, see
+    /// `ReviewPromptTemplate::build_material`) — Review has no conversation
+    /// history to fold in, so unlike Ask/Discuss it is passed through as-is.
+    async fn execute_review(
+        &self,
+        material: &str,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Option<InteractionResult> {
+        let input = RunReviewInput::new(material, self.config.models().clone());
+
+        match self.review_use_case.execute(input, progress).await {
+            Ok(output) => Some(InteractionResult::ReviewResult {
+                approved: output.approved,
+                votes: output.votes,
+                synthesis: output.synthesis,
+            }),
+            Err(e) => {
+                let _ = self.tx.send(UiEvent::ReviewError {
+                    error: e.to_string(),
+                });
                 None
             }
         }
@@ -2027,6 +2105,37 @@ mod tests {
             }
             other => panic!("Expected InteractionSpawned, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_prepare_root_spawn_has_no_parent() {
+        // Regression coverage for #300: headless review spawns a genuine root
+        // interaction (not a child of the default Agent root), so its
+        // InteractionCompleted later routes to its own tab (presenter.rs).
+        let (mut controller, mut rx) = create_test_controller();
+        // Drain the InteractionSpawned emitted for the default root at construction time.
+        // (AgentController::new creates one root Agent interaction; nothing sends it here
+        // since send_welcome isn't called, so the channel should be empty at this point.)
+
+        let (id, label, material) =
+            controller.prepare_root_spawn(InteractionForm::Review, "Review PR #123", "diff text");
+
+        assert_eq!(label, "Review PR #123");
+        assert_eq!(material, "diff text");
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            UiEvent::InteractionSpawned(spawned) => {
+                assert_eq!(spawned.id, id);
+                assert_eq!(spawned.form, InteractionForm::Review);
+                assert_eq!(spawned.query, "Review PR #123");
+                assert_eq!(spawned.parent_id, None);
+            }
+            other => panic!("Expected InteractionSpawned, got {:?}", other),
+        }
+        // The root created at construction time is id 0; this new root must
+        // be distinct from it.
+        assert_ne!(id, InteractionId(0));
     }
 
     #[test]

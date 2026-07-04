@@ -11,7 +11,7 @@ pub mod progress;
 pub mod tui;
 
 // Re-export commonly used types
-pub use cli::commands::{Cli, CliOutputFormat};
+pub use cli::commands::{Cli, CliOutputFormat, Command, ReviewArgs, ReviewOutputFormat};
 pub use config::{OutputConfig, ReplConfig};
 pub use output::console::ConsoleFormatter;
 pub use progress::reporter::{ProgressReporter, SimpleProgress};
@@ -23,6 +23,7 @@ pub use agent::progress::{AgentProgressReporter, SimpleAgentProgress};
 pub use agent::thought::{ThoughtStream, format_thoughts, summarize_thoughts};
 
 // TUI exports
+pub use tui::InteractionOutcome;
 pub use tui::LayoutPreset;
 pub use tui::TuiApp;
 pub use tui::TuiHumanIntervention;

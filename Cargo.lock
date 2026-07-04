@@ -777,6 +777,7 @@ dependencies = [
  "quorum-domain",
  "quorum-infrastructure",
  "quorum-presentation",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

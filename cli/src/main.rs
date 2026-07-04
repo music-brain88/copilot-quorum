@@ -7,6 +7,8 @@
 //! Boot sequence:
 //!   Rust defaults → QuorumConfig → Lua engine → init.lua → CLI overrides → DI wiring
 
+mod review;
+
 use anyhow::Result;
 use clap::Parser;
 use quorum_application::LlmGateway;
@@ -26,7 +28,7 @@ use quorum_infrastructure::{
 };
 use quorum_infrastructure::{ProviderAdapter, RoutingGateway};
 use quorum_presentation::{
-    AgentProgressReporter, Cli, InteractiveHumanIntervention, LayoutPreset, OutputConfig,
+    AgentProgressReporter, Cli, Command, InteractiveHumanIntervention, LayoutPreset, OutputConfig,
     ReplConfig, TuiApp, TuiInputConfig, TuiLayoutConfig,
 };
 use std::path::{Path, PathBuf};
@@ -450,7 +452,35 @@ async fn main() -> Result<()> {
         config.execution_mut().working_dir = Some(dir.clone());
     }
 
-    // 7. Branch: TUI or single-request mode
+    // 7. Branch: subcommand, TUI, or single-request mode.
+    //
+    // The subcommand check always exits the process, before the `is_tui`
+    // branch below gets a chance to run — `cli.question` is `None` when a
+    // subcommand is used, which would otherwise satisfy `is_tui`'s condition
+    // (`cli.question.is_none() || cli.headless`) and launch the interactive
+    // TUI instead of running the review (#300; see the is_tui-branch
+    // regression this worktree's CLAUDE.md warns about).
+    if let Some(Command::Review(args)) = cli.command.take() {
+        let exit_code = review::run(
+            args,
+            gateway,
+            tool_executor,
+            tool_schema,
+            context_loader,
+            shared_config,
+            conversation_logger,
+            scripting_engine,
+        )
+        .await;
+        match exit_code {
+            Ok(code) => std::process::exit(code),
+            Err(e) => {
+                eprintln!("error: {:#}", e);
+                std::process::exit(2);
+            }
+        }
+    }
+
     if is_tui {
         let (_output_config, _repl_config) = {
             let config = shared_config.lock().unwrap();

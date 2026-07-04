@@ -80,6 +80,10 @@ impl TuiPresenter {
                 state.push_message(DisplayMessage::system(format!("Ask error: {}", error)));
                 self.emit(TuiEvent::AgentError(error.clone()));
             }
+            UiEvent::ReviewError { error } => {
+                state.push_message(DisplayMessage::system(format!("Review error: {}", error)));
+                self.emit(TuiEvent::AgentError(error.clone()));
+            }
             UiEvent::InteractionSpawned(event) => {
                 // Fix A: Try to bind the interaction_id to an existing placeholder tab
                 // (created immediately by handle_tab_command). If no placeholder exists
@@ -524,6 +528,7 @@ mod tests {
                 form: InteractionForm::Ask,
                 parent_id: Some(InteractionId(1)),
                 result_text: "[Ask] done".into(),
+                result: None,
             }),
         );
 
@@ -557,6 +562,7 @@ mod tests {
                 form: InteractionForm::Agent,
                 parent_id: None,
                 result_text: "done".into(),
+                result: None,
             }),
         );
 

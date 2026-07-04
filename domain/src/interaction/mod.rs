@@ -2,13 +2,14 @@
 //!
 //! An **Interaction** is a single unit of dialogue between the user and the
 //! system. Unlike the legacy model where "agent mode" was the primary path and
-//! other modes were bolted on, all three forms are treated as equal peers:
+//! other modes were bolted on, all four forms are treated as equal peers:
 //!
 //! | Form | Description | Context Default |
 //! |------|-------------|-----------------|
 //! | [`Agent`](InteractionForm::Agent) | Autonomous task execution with planning | `Full` |
 //! | [`Ask`](InteractionForm::Ask) | Single question → answer (read-only tools) | `Projected` |
 //! | [`Discuss`](InteractionForm::Discuss) | Multi-model discussion / council | `Full` |
+//! | [`Review`](InteractionForm::Review) | Multi-model quorum review of a diff/PR | `Fresh` |
 //!
 //! # Nesting
 //!
@@ -33,6 +34,8 @@
 
 use crate::context::ContextMode;
 use crate::core::string::truncate;
+use crate::orchestration::value_objects::SynthesisResult;
+use crate::quorum::Vote;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -65,6 +68,12 @@ pub enum InteractionForm {
     ///
     /// Uses: `SessionMode` (consensus + strategy)
     Discuss,
+    /// Multi-model quorum review of a diff/PR — read-only, no tool use, no HiL.
+    ///
+    /// Uses: `ModelConfig` (`review` + `moderator`) directly; no planning or
+    /// tool-use loop, so it needs neither `AgentPolicy` nor `ExecutionParams`.
+    /// See RFC Discussion #304 D2.
+    Review,
 }
 
 impl InteractionForm {
@@ -73,11 +82,14 @@ impl InteractionForm {
     /// - `Agent` → `Full` (needs full project awareness for planning)
     /// - `Ask` → `Projected` (focused question, focused context)
     /// - `Discuss` → `Full` (council needs full picture)
+    /// - `Review` → `Fresh` (self-contained: the diff/PR material carries
+    ///   everything the reviewers need; no conversation history)
     pub fn default_context_mode(&self) -> ContextMode {
         match self {
             InteractionForm::Agent => ContextMode::Full,
             InteractionForm::Ask => ContextMode::Projected,
             InteractionForm::Discuss => ContextMode::Full,
+            InteractionForm::Review => ContextMode::Fresh,
         }
     }
 
@@ -115,6 +127,7 @@ impl InteractionForm {
             InteractionForm::Agent => "agent",
             InteractionForm::Ask => "ask",
             InteractionForm::Discuss => "discuss",
+            InteractionForm::Review => "review",
         }
     }
 }
@@ -127,6 +140,7 @@ impl std::str::FromStr for InteractionForm {
             "agent" => Ok(InteractionForm::Agent),
             "ask" => Ok(InteractionForm::Ask),
             "discuss" | "council" => Ok(InteractionForm::Discuss),
+            "review" => Ok(InteractionForm::Review),
             _ => Err(format!("Invalid InteractionForm: {}", s)),
         }
     }
@@ -361,6 +375,15 @@ pub enum InteractionResult {
         /// Whether the agent completed successfully.
         success: bool,
     },
+    /// Result from a Review interaction — quorum vote + synthesized review.
+    ReviewResult {
+        /// Whether the quorum approved (majority of cast votes).
+        approved: bool,
+        /// All individual votes (including abstain / model_error).
+        votes: Vec<Vote>,
+        /// The moderator's synthesized review.
+        synthesis: SynthesisResult,
+    },
 }
 
 impl InteractionResult {
@@ -386,6 +409,14 @@ impl InteractionResult {
             InteractionResult::AgentResult { summary, success } => {
                 let status = if *success { "completed" } else { "failed" };
                 format!("[Agent Result ({})]: {}", status, summary)
+            }
+            InteractionResult::ReviewResult {
+                approved,
+                synthesis,
+                ..
+            } => {
+                let status = if *approved { "approved" } else { "rejected" };
+                format!("[Review Result ({})]: {}", status, synthesis.conclusion)
             }
         }
     }
@@ -415,6 +446,17 @@ impl InteractionResult {
                 let status = if *success { "completed" } else { "failed" };
                 format!("[Agent ({})] \"{}\" → {}", status, query_summary, summary)
             }
+            InteractionResult::ReviewResult {
+                approved,
+                synthesis,
+                ..
+            } => {
+                let status = if *approved { "approved" } else { "rejected" };
+                format!(
+                    "[Review ({})] \"{}\" → {}",
+                    status, query_summary, synthesis.conclusion
+                )
+            }
         }
     }
 }
@@ -432,6 +474,7 @@ mod tests {
         assert_eq!(InteractionForm::Agent.as_str(), "agent");
         assert_eq!(InteractionForm::Ask.as_str(), "ask");
         assert_eq!(InteractionForm::Discuss.as_str(), "discuss");
+        assert_eq!(InteractionForm::Review.as_str(), "review");
     }
 
     #[test]
@@ -439,6 +482,7 @@ mod tests {
         assert_eq!(format!("{}", InteractionForm::Agent), "agent");
         assert_eq!(format!("{}", InteractionForm::Ask), "ask");
         assert_eq!(format!("{}", InteractionForm::Discuss), "discuss");
+        assert_eq!(format!("{}", InteractionForm::Review), "review");
     }
 
     #[test]
@@ -454,6 +498,10 @@ mod tests {
         assert_eq!(
             "discuss".parse::<InteractionForm>().unwrap(),
             InteractionForm::Discuss
+        );
+        assert_eq!(
+            "review".parse::<InteractionForm>().unwrap(),
+            InteractionForm::Review
         );
         // "council" alias
         assert_eq!(
@@ -483,6 +531,10 @@ mod tests {
             InteractionForm::Discuss.default_context_mode(),
             ContextMode::Full
         );
+        assert_eq!(
+            InteractionForm::Review.default_context_mode(),
+            ContextMode::Fresh
+        );
     }
 
     #[test]
@@ -491,6 +543,7 @@ mod tests {
         assert!(InteractionForm::Agent.uses_session_mode());
         assert!(InteractionForm::Ask.uses_session_mode());
         assert!(InteractionForm::Discuss.uses_session_mode());
+        assert!(InteractionForm::Review.uses_session_mode());
     }
 
     #[test]
@@ -498,6 +551,7 @@ mod tests {
         assert!(InteractionForm::Agent.uses_agent_policy());
         assert!(!InteractionForm::Ask.uses_agent_policy());
         assert!(!InteractionForm::Discuss.uses_agent_policy());
+        assert!(!InteractionForm::Review.uses_agent_policy());
     }
 
     #[test]
@@ -505,6 +559,7 @@ mod tests {
         assert!(InteractionForm::Agent.uses_execution_params());
         assert!(InteractionForm::Ask.uses_execution_params());
         assert!(!InteractionForm::Discuss.uses_execution_params());
+        assert!(!InteractionForm::Review.uses_execution_params());
     }
 
     #[test]
@@ -513,6 +568,7 @@ mod tests {
             InteractionForm::Agent,
             InteractionForm::Ask,
             InteractionForm::Discuss,
+            InteractionForm::Review,
         ] {
             let json = serde_json::to_string(&form).unwrap();
             let deserialized: InteractionForm = serde_json::from_str(&json).unwrap();
@@ -771,6 +827,32 @@ mod tests {
         assert_eq!(
             failure.to_context_injection(),
             "[Agent Result (failed)]: Build failed."
+        );
+    }
+
+    #[test]
+    fn test_review_result_to_context_injection() {
+        let result = InteractionResult::ReviewResult {
+            approved: true,
+            votes: vec![Vote::approve("claude-opus-4.5", "Looks safe")],
+            synthesis: SynthesisResult::new("claude-opus-4.5", "Overall the change is sound."),
+        };
+        assert_eq!(
+            result.to_context_injection(),
+            "[Review Result (approved)]: Overall the change is sound."
+        );
+    }
+
+    #[test]
+    fn test_review_result_to_parent_notification() {
+        let result = InteractionResult::ReviewResult {
+            approved: false,
+            votes: vec![Vote::reject("gpt-5.3-codex", "Missing tests")],
+            synthesis: SynthesisResult::new("claude-opus-4.5", "Needs more test coverage."),
+        };
+        assert_eq!(
+            result.to_parent_notification("Review PR #123"),
+            "[Review (rejected)] \"Review PR #123\" → Needs more test coverage."
         );
     }
 }

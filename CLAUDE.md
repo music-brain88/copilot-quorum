@@ -314,6 +314,7 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 | Document | Description |
 |----------|-------------|
 | [run-a-quorum-discussion.md](docs/how-to/run-a-quorum-discussion.md) | Quorum Discussion の実行 |
+| [review-a-pr.md](docs/how-to/review-a-pr.md) | `review` サブコマンドで PR/diff をヘッドレスレビュー（CI ゲート、#300） |
 | [use-ensemble-mode.md](docs/how-to/use-ensemble-mode.md) | Ensemble モードへの切り替え |
 | [run-agent-tasks.md](docs/how-to/run-agent-tasks.md) | エージェント実行と HiL 操作 |
 | [use-the-tui.md](docs/how-to/use-the-tui.md) | Modal TUI の使い方 |
@@ -328,7 +329,7 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 | Document | Description |
 |----------|-------------|
 | [architecture.md](docs/reference/architecture.md) | レイヤー構造・データフロー・プロトコル |
-| [cli.md](docs/reference/cli.md) | CLI フラグ・REPL/TUI コマンド |
+| [cli.md](docs/reference/cli.md) | CLI フラグ・REPL/TUI コマンド・`review` サブコマンド（headless 多モデル PR/diff レビュー、#300） |
 | [configuration.md](docs/reference/configuration.md) | 全設定キーと Lua API |
 | [agent-system.md](docs/reference/agent-system.md) | Agent の型・ポート・モジュール構成 |
 | [tool-system.md](docs/reference/tool-system.md) | ツール・プロバイダー・trait |

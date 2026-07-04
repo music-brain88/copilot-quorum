@@ -28,6 +28,48 @@ impl From<CliOutputFormat> for OutputFormat {
     }
 }
 
+/// Subcommands (#300 / RFC Discussion #304 D4).
+///
+/// Note for reviewers: this is the same seam #302 (rpc subcommand) needs —
+/// expect a merge conflict here. Whoever merges second should rebase and add
+/// their variant alongside `Review`.
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    /// Headless multi-model Quorum review of a PR or diff (#300)
+    Review(ReviewArgs),
+}
+
+/// Output format for the `review` subcommand.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum ReviewOutputFormat {
+    /// The moderator's synthesized review, as Markdown (default)
+    #[default]
+    Synthesis,
+    /// Structured `quorum_result` JSON (votes + synthesis + target)
+    Json,
+}
+
+/// Arguments for `copilot-quorum review`.
+#[derive(clap::Args, Debug)]
+pub struct ReviewArgs {
+    /// PR number to review (diff + title fetched via `gh pr diff`/`gh pr view`)
+    #[arg(long, value_name = "NUMBER", conflicts_with = "diff")]
+    pub pr: Option<u64>,
+
+    /// Path to a diff/patch file to review (omit both --pr and --diff to read
+    /// the diff from stdin, e.g. `git diff main...feature | copilot-quorum review`)
+    #[arg(long, value_name = "PATH")]
+    pub diff: Option<PathBuf>,
+
+    /// Review focus / instruction for the models (e.g. "concurrency safety")
+    #[arg(long, value_name = "TEXT")]
+    pub focus: Option<String>,
+
+    /// Output format
+    #[arg(long, value_enum, default_value = "synthesis")]
+    pub output: ReviewOutputFormat,
+}
+
 /// CLI arguments for copilot-quorum
 #[derive(Parser, Debug)]
 #[command(name = "copilot-quorum")]
@@ -62,8 +104,22 @@ Example:
   copilot-quorum --ensemble "Design the auth system"  # Multi-model discussion
   copilot-quorum --no-quorum "Show README" # Skip quorum review (faster)
   copilot-quorum -m claude-haiku-4.5 "Add tests"  # Use specific model
+  copilot-quorum review --pr 123           # Headless multi-model PR review (#300)
 "#)]
 pub struct Cli {
+    /// Subcommand (e.g. `review`). Global flags (`-v`, `--log-dir`, etc.) may
+    /// precede the subcommand name (`copilot-quorum -v review --pr 123`);
+    /// subcommand-specific flags go after it. Deliberately *not* annotated
+    /// with clap's `args_conflicts_with_subcommands` — that attribute makes
+    /// clap stop recognizing the subcommand name entirely once any other
+    /// top-level flag/value is already present on the command line, so
+    /// `copilot-quorum --log-dir X review --pr 123` would silently run
+    /// `review` as the literal REPL/one-shot QUESTION text instead of
+    /// dispatching to the subcommand (verified empirically — see
+    /// `global_flag_before_subcommand_still_dispatches` below).
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// The task/question to process (if not provided, starts Agent REPL)
     pub question: Option<String>,
 
@@ -160,5 +216,117 @@ mod tests {
             .unwrap();
         assert!(cli.headless);
         assert_eq!(cli.listen, Some(PathBuf::from("/tmp/q.sock")));
+    }
+
+    #[test]
+    fn plain_question_has_no_subcommand() {
+        let cli = Cli::try_parse_from(["copilot-quorum", "Fix the bug"]).unwrap();
+        assert_eq!(cli.question, Some("Fix the bug".to_string()));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn no_args_starts_repl() {
+        let cli = Cli::try_parse_from(["copilot-quorum"]).unwrap();
+        assert_eq!(cli.question, None);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn review_pr_parses() {
+        let cli = Cli::try_parse_from(["copilot-quorum", "review", "--pr", "123"]).unwrap();
+        assert_eq!(cli.question, None);
+        match cli.command {
+            Some(Command::Review(args)) => {
+                assert_eq!(args.pr, Some(123));
+                assert_eq!(args.diff, None);
+                assert_eq!(args.focus, None);
+                assert!(matches!(args.output, ReviewOutputFormat::Synthesis));
+            }
+            other => panic!("Expected Command::Review, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn review_diff_and_focus_and_json_output_parse() {
+        let cli = Cli::try_parse_from([
+            "copilot-quorum",
+            "review",
+            "--diff",
+            "changes.patch",
+            "--focus",
+            "concurrency safety",
+            "--output",
+            "json",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Review(args)) => {
+                assert_eq!(args.diff, Some(PathBuf::from("changes.patch")));
+                assert_eq!(args.focus.as_deref(), Some("concurrency safety"));
+                assert!(matches!(args.output, ReviewOutputFormat::Json));
+            }
+            other => panic!("Expected Command::Review, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn review_bare_defaults_to_stdin_and_synthesis_output() {
+        let cli = Cli::try_parse_from(["copilot-quorum", "review"]).unwrap();
+        match cli.command {
+            Some(Command::Review(args)) => {
+                assert_eq!(args.pr, None);
+                assert_eq!(args.diff, None);
+                assert!(matches!(args.output, ReviewOutputFormat::Synthesis));
+            }
+            other => panic!("Expected Command::Review, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn review_pr_and_diff_conflict() {
+        let err = Cli::try_parse_from([
+            "copilot-quorum",
+            "review",
+            "--pr",
+            "123",
+            "--diff",
+            "changes.patch",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    // Regression test: an earlier version of this struct had
+    // `#[command(args_conflicts_with_subcommands = true)]`, which made clap
+    // stop recognizing `review` as a subcommand once ANY other top-level
+    // flag/value preceded it on the command line — `--log-dir X review --pr
+    // 123` silently ran `review` as the literal one-shot QUESTION text
+    // instead of dispatching to the subcommand (caught via manual testing,
+    // not by the parse-only tests above, since the parse itself "succeeded").
+    #[test]
+    fn global_flag_before_subcommand_still_dispatches() {
+        for prefix in [
+            vec!["-v"],
+            vec!["--log-dir", "/tmp/x"],
+            vec!["--quiet"],
+            vec!["--no-log-file"],
+        ] {
+            let mut argv = vec!["copilot-quorum"];
+            argv.extend(prefix.iter().copied());
+            argv.extend(["review", "--pr", "123"]);
+
+            let cli = Cli::try_parse_from(&argv)
+                .unwrap_or_else(|e| panic!("failed to parse {:?}: {}", argv, e));
+            assert_eq!(
+                cli.question, None,
+                "argv {:?} should have no question",
+                argv
+            );
+            match cli.command {
+                Some(Command::Review(args)) => assert_eq!(args.pr, Some(123)),
+                other => panic!("argv {:?}: expected Command::Review, got {:?}", argv, other),
+            }
+        }
     }
 }
