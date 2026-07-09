@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+このプロジェクトの生存戦略（Claude Code + herdr との共存方針）と現在地は [docs/vision/organ-strategy.md](docs/vision/organ-strategy.md) を参照。
+
 ## Core Concepts
 
 ### Quorum
