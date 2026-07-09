@@ -93,6 +93,7 @@ GitHub Discussions で決着した設計判断の ADR: [design-decisions/](./exp
 | Document | Description |
 |----------|-------------|
 | [Vision Overview](./vision/README.md) | 現在地・ロードマップ・ステータス一覧 |
+| [Organ Strategy](./vision/organ-strategy.md) | 臓器戦略 — Claude Code + herdr と共存する生存戦略と3トラックの現在地 |
 | [Unified Architecture](./vision/unified-architecture.md) | 4 つの RFC の統合整理 |
 | [Knowledge Architecture](./vision/knowledge-architecture.md) | 知識駆動型アーキテクチャ構想 |
 | [Workflow Layer](./vision/workflow-layer.md) | DAG ベース並列タスク実行構想 |
