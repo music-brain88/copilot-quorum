@@ -6,6 +6,12 @@
 
 ---
 
+## Survival Strategy / 生存戦略
+
+機能ロードマップとは別に、copilot-quorum が Claude Code + herdr という強力なライバルスタックの隣でどう生き残るかを整理したのが [Organ Strategy（臓器戦略）](organ-strategy.md) です。nix/mise の配役、Claude Code が構造的に持てない層、3 層スタック、3 トラックの現在地をまとめています。
+
+---
+
 ## Where We Are / 現在地
 
 copilot-quorum v0.12 は **Copilot CLI 上で動く多モデル合議ツール** として、
@@ -124,6 +130,7 @@ v0.12 ─── Content/Route/Surface + Tab/Pane ─────── ✅ Done
 | Document | Description |
 |----------|-------------|
 | [**unified-architecture.md**](unified-architecture.md) | **統合アーキテクチャビジョン — 4つの RFC を統合整理** |
+| [organ-strategy.md](organ-strategy.md) | 臓器戦略 — Claude Code + herdr と共存するための生存戦略 |
 | [knowledge-architecture.md](knowledge-architecture.md) | Knowledge-Driven Architecture — 3 層構想 |
 | [workflow-layer.md](workflow-layer.md) | Workflow Layer — DAG ベース並列タスク実行 |
 | [extension-platform.md](extension-platform.md) | Extension Platform — スクリプティング + プラグイン |
