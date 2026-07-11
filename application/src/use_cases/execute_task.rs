@@ -733,7 +733,7 @@ impl ExecuteTaskUseCase {
                     }
 
                     if !is_error {
-                        all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
+                        all_outputs.push(format!("[{}]: {}", call.tool_name, output));
                     }
 
                     if let Some(native_id) = call.native_id.clone() {
@@ -928,7 +928,7 @@ impl ExecuteTaskUseCase {
                 all_executions.push(exec);
 
                 if !is_error {
-                    all_outputs.push(format!("[{}]: {}", call.tool_name, &output));
+                    all_outputs.push(format!("[{}]: {}", call.tool_name, output));
                 }
 
                 if let Some(native_id) = call.native_id.clone() {
