@@ -1,6 +1,6 @@
 //! Quorum orchestration domain
 //!
-//! This module contains the core orchestration logic for running
+//! This module contains the core orchestration data model for running
 //! multi-model discussions. Configuration is expressed through three
 //! orthogonal axes:
 //!
@@ -10,8 +10,11 @@
 //!
 //! These axes are independent and can be freely combined.
 //!
-//! [`strategy::StrategyExecutor`] is the trait that concrete strategy
-//! implementations use to execute a discussion flow against LLM models.
+//! Executing a strategy (querying models, running rounds, reporting progress) is an
+//! application-layer concern — see `StrategyExecutor` and its implementations
+//! (`QuorumStrategyExecutor`, `DebateStrategyExecutor`) in
+//! `application/src/use_cases/run_quorum/`. It depends on the `LlmGateway`/
+//! `ProgressNotifier` ports, which domain must not depend on.
 
 pub mod entities;
 pub mod mode;

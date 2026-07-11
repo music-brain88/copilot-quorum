@@ -16,7 +16,7 @@
 | `domain/src/quorum/rule.rs` | `QuorumRule` 合意ルール定義 |
 | `domain/src/quorum/consensus.rs` | `ConsensusRound`, `ConsensusOutcome` 定義 |
 | `domain/src/orchestration/` | `Phase`, `QuorumRun`, `QuorumResult`, `OrchestrationStrategy` |
-| `application/src/use_cases/run_quorum.rs` | `RunQuorumUseCase` ユースケース |
+| `application/src/use_cases/run_quorum/` | `RunQuorumUseCase`（ディスパッチ）+ `StrategyExecutor` 実装群 |
 | `domain/src/prompt/template.rs` | 各フェーズのプロンプトテンプレート |
 
 ### Data Flow / データフロー
@@ -46,32 +46,36 @@ RunQuorumUseCase
 ### StrategyExecutor
 
 Quorum Discussion の実行フローはプラグイン可能な戦略パターンで実装されています。
-`StrategyExecutor` trait を実装することで、新しい議論戦略を追加できます。
+`StrategyExecutor` trait を実装することで、新しい議論戦略を追加できます。実行には
+`LlmGateway`/`ProgressNotifier` という I/O ポートへの依存が必須なため、trait 自体は
+domain ではなく application 層（`application/src/use_cases/run_quorum/`）にあります。
+`OrchestrationStrategy` enum（domain, 2 バリアント）は `RunQuorumUseCase` が
+exhaustive match でディスパッチします — `dyn StrategyExecutor` によるトレイト
+オブジェクトディスパッチではありません（#314）。
 
 ```rust
-/// Trait for executing orchestration strategies (domain/src/orchestration/strategy.rs)
+/// Trait for executing orchestration strategies
+/// (application/src/use_cases/run_quorum/strategy_executor.rs)
 #[async_trait]
 pub trait StrategyExecutor: Send + Sync {
     fn name(&self) -> &'static str;
     fn phases(&self) -> Vec<Phase>;
-    async fn execute<G: LlmGateway>(
+    async fn execute(
         &self,
-        question: &Question,
-        models: &[Model],
-        moderator: &Model,
-        gateway: &G,
-        notifier: &dyn ProgressNotifier,
-    ) -> Result<QuorumResult, DomainError>;
+        input: &RunQuorumInput,
+        gateway: Arc<dyn LlmGateway>,
+        progress: &dyn ProgressNotifier,
+    ) -> Result<QuorumResult, RunQuorumError>;
 }
 ```
 
 | Strategy | Phases | Description |
 |----------|--------|-------------|
-| `ThreePhaseStrategy` | Initial → Review → Synthesis | 標準の 3 フェーズ議論（デフォルト） |
-| `FastStrategy` | Initial → Synthesis | レビューをスキップした高速モード |
-| `DebateStrategy` | モデル間の議論 | インターモデル討論 |
+| `QuorumStrategyExecutor` | Initial → Review → Synthesis | 対等な議論（デフォルト）。旧 `RunQuorumUseCase` 本体を抽出したもの |
+| `DebateStrategyExecutor` | Initial（立場割り当て+オープニング）→ Review（攻撃/防衛ラウンド×`max_rounds`、モデレーター早期決着判定）→ Synthesis | 敵対的討議。提案側/批判側の固定ロール + 任意の第三者乱入（`allow_interjection`） |
 
-定義ファイル: `domain/src/orchestration/strategy.rs`
+定義ファイル: `application/src/use_cases/run_quorum/`
+（`strategy_executor.rs`, `quorum_strategy.rs`, `debate_strategy.rs`）
 
 ---
 

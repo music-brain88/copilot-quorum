@@ -11,6 +11,7 @@
 //! | [`parse_review_response`] | Plan/action review | APPROVE / REJECT |
 //! | [`parse_final_review_response`] | Final outcome review | SUCCESS / FAILURE |
 //! | [`parse_vote_score`] | Ensemble plan voting | Numeric score 1-10 |
+//! | [`parse_debate_verdict`] | Debate moderator checkpoint | VERDICT: SETTLED / CONTINUE |
 
 /// Parse a review response to extract approval status and feedback.
 ///
@@ -152,6 +153,55 @@ pub fn parse_vote_score(response: &str) -> f64 {
 
     // Default to middle score if parsing fails
     5.0
+}
+
+/// Parse a Debate moderator's round checkpoint response.
+///
+/// The moderator is instructed to open its response with a `VERDICT: SETTLED`
+/// or `VERDICT: CONTINUE` line, followed by the conclusion (if settled) or
+/// guidance for the next round (if not). This extracts that verdict and
+/// strips the verdict line from the returned body.
+///
+/// Conservative: if the first line doesn't clearly declare `VERDICT: SETTLED`
+/// (e.g. the model ignored the format), this returns `settled = false` so the
+/// debate keeps going rather than cutting off on a misread response — the
+/// caller's `max_rounds` cap is what ultimately bounds the debate.
+///
+/// # Returns
+///
+/// `(settled, body)` — `body` has the leading verdict line removed when present.
+///
+/// # Examples
+///
+/// ```
+/// use quorum_domain::quorum::parsing::parse_debate_verdict;
+///
+/// let (settled, body) = parse_debate_verdict("VERDICT: SETTLED\n\nThe proponent's design wins.");
+/// assert!(settled);
+/// assert_eq!(body, "The proponent's design wins.");
+///
+/// let (settled, body) = parse_debate_verdict("VERDICT: CONTINUE\n\nStill unresolved: caching.");
+/// assert!(!settled);
+/// assert_eq!(body, "Still unresolved: caching.");
+/// ```
+pub fn parse_debate_verdict(response: &str) -> (bool, String) {
+    let mut lines = response.lines();
+    let first_line = lines.next().unwrap_or("");
+    let first_upper = first_line.to_uppercase();
+
+    if !first_upper.contains("VERDICT") {
+        return (false, response.trim().to_string());
+    }
+
+    let settled = first_upper.contains("SETTLED") && !first_upper.contains("CONTINUE");
+    let body = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+    let body = if body.is_empty() {
+        response.trim().to_string()
+    } else {
+        body
+    };
+
+    (settled, body)
 }
 
 #[cfg(test)]
@@ -327,5 +377,44 @@ Here is my evaluation:
     fn test_final_review_failure() {
         let (success, _) = parse_final_review_response("FAILURE — major issues found");
         assert!(!success);
+    }
+
+    // ==================== parse_debate_verdict Tests ====================
+
+    #[test]
+    fn test_debate_verdict_settled() {
+        let (settled, body) =
+            parse_debate_verdict("VERDICT: SETTLED\n\nThe proponent's design wins.");
+        assert!(settled);
+        assert_eq!(body, "The proponent's design wins.");
+    }
+
+    #[test]
+    fn test_debate_verdict_continue() {
+        let (settled, body) =
+            parse_debate_verdict("VERDICT: CONTINUE\n\nStill unresolved: caching strategy.");
+        assert!(!settled);
+        assert_eq!(body, "Still unresolved: caching strategy.");
+    }
+
+    #[test]
+    fn test_debate_verdict_case_insensitive() {
+        let (settled, _) = parse_debate_verdict("verdict: settled\n\nDone.");
+        assert!(settled);
+    }
+
+    #[test]
+    fn test_debate_verdict_missing_format_defaults_to_continue() {
+        // Model ignored the VERDICT format entirely — conservative default: keep debating.
+        let (settled, body) = parse_debate_verdict("I think the proponent has a stronger case.");
+        assert!(!settled);
+        assert_eq!(body, "I think the proponent has a stronger case.");
+    }
+
+    #[test]
+    fn test_debate_verdict_settled_with_no_body_falls_back_to_full_response() {
+        let (settled, body) = parse_debate_verdict("VERDICT: SETTLED");
+        assert!(settled);
+        assert_eq!(body, "VERDICT: SETTLED");
     }
 }

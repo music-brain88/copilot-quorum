@@ -46,7 +46,7 @@ copilot-quorum/
 │   ├── core/                  #   共通概念 (Model, Question, Error)
 │   ├── quorum/                #   [Quorum] 合意形成 (Vote, QuorumRule, ConsensusRound)
 │   ├── session/               #   [セッション] エンティティ + リポジトリtrait
-│   ├── orchestration/         #   [オーケストレーション] フェーズ、結果、戦略trait
+│   ├── orchestration/         #   [オーケストレーション] フェーズ、結果、戦略enum（実行traitはapplication層）
 │   ├── agent/                 #   [エージェント] 自律実行の状態管理
 │   ├── tool/                  #   [ツール] ツール定義、呼び出し、リスクレベル
 │   ├── interaction/           #   [インタラクション] 対話形式、ネスト管理
@@ -59,7 +59,7 @@ copilot-quorum/
 │   ├── ports/                 #   ポート定義（11トレイト）
 │   ├── use_cases/             #   ユースケース実装
 │   │   ├── run_agent/         #     エージェント実行（5ファイル分割）
-│   │   ├── run_quorum.rs      #     合議実行
+│   │   ├── run_quorum/        #     合議実行（StrategyExecutor: Quorum/Debate）
 │   │   ├── run_ask.rs         #     Ask インタラクション実行
 │   │   ├── gather_context.rs  #     コンテキスト収集
 │   │   ├── execute_task.rs    #     タスク実行
@@ -122,11 +122,15 @@ infrastructure/
     └── client.rs   # Ollama API クライアント
 
 新しいオーケストレーション戦略追加:
-domain/src/orchestration/
-├── strategy.rs     # OrchestrationStrategy enum + StrategyExecutor trait（既存）
+domain/src/orchestration/          # データモデル（enum に新バリアント追加）
+├── strategy.rs     # OrchestrationStrategy enum（既存）
 ├── mode.rs         # ConsensusLevel enum（既存）
 ├── scope.rs        # PhaseScope enum（既存）
 └── session_mode.rs # SessionMode（既存）
+application/src/use_cases/run_quorum/  # 実行ロジック（LlmGateway/ProgressNotifier に依存するため application 層）
+├── strategy_executor.rs  # StrategyExecutor trait（既存）
+├── quorum_strategy.rs    # QuorumStrategyExecutor（既存）
+└── debate_strategy.rs    # DebateStrategyExecutor（既存。新戦略はここに実装を追加）
 
 新しいプレゼンテーション追加（例: HTTP API）:
 presentation/

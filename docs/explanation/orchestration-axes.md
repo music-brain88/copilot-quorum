@@ -28,9 +28,14 @@
 - **拡張容易性** — 新しい PhaseScope や Strategy を追加しても他の軸に影響しない
 - **設定の明確性** — 各軸が「何を制御するか」が一目瞭然
 
-`OrchestrationStrategy` はバリアントごとに設定を保持する **enum** です。
-一方、`StrategyExecutor` は戦略の実行ロジックを定義する **trait** です。
-enum が「何を使うか」を、trait が「どう実行するか」を担います。
+`OrchestrationStrategy` はバリアントごとに設定を保持する **enum** で、domain 層の
+純粋なデータモデルです。一方、`StrategyExecutor` は戦略の実行ロジックを定義する
+**trait** で、application 層に置かれています（LLM 呼び出し・進捗通知という I/O
+ポート依存を domain に持ち込めないため）。enum が「何を使うか」を、trait が
+「どう実行するか」を担います。実装は `QuorumStrategyExecutor` と
+`DebateStrategyExecutor`（`application/src/use_cases/run_quorum/`）の 2 つで、
+`RunQuorumUseCase` が `OrchestrationStrategy` の exhaustive match でディスパッチ
+します（#314）。
 
 ---
 
@@ -66,7 +71,8 @@ enum が「何を使うか」を、trait が「どう実行するか」を担い
 | **Quorum** (default) | `/strategy quorum` | 対等な議論 → レビュー → 統合 |
 | **Debate** | `/strategy debate` | 対立的議論 → 合意形成 |
 
-定義ファイル: `domain/src/orchestration/strategy.rs`（`OrchestrationStrategy` enum）
+定義ファイル: `domain/src/orchestration/strategy.rs`（`OrchestrationStrategy` enum）、
+`application/src/use_cases/run_quorum/`（`StrategyExecutor` trait と実装）
 
 ---
 
@@ -78,13 +84,11 @@ enum が「何を使うか」を、trait が「どう実行するか」を担い
 | ConsensusLevel | PhaseScope | Strategy | Severity | Code | 理由 |
 |---|---|---|---|---|---|
 | Solo | * | Debate | **Error** | `SoloWithDebate` | ソロでは議論不可能（1モデルで対立的議論は成立しない） |
-| Ensemble | * | Debate | Warning | `DebateNotImplemented` | StrategyExecutor が未実装 |
 | Ensemble | Fast | * | Warning | `EnsembleWithFast` | レビュースキップにより Ensemble の価値が減少 |
 
 - Solo + Debate は **Error**（実行不可）として即座に `bail!` します
-- Ensemble + Debate は Warning のみ（将来の実装に備えて設定自体は受け付ける）
+- Ensemble + Debate は無条件で有効です（`DebateStrategyExecutor` 実装済み、#314）
 - Ensemble + Fast は Warning（動作はするが、マルチモデル合議のメリットが薄れる）
-- Solo + Debate の場合は `DebateNotImplemented` Warning は省略されます（Error が優先）
 
 定義ファイル: `domain/src/agent/validation.rs`（`Severity`, `ConfigIssueCode`, `ConfigIssue`）、
 `domain/src/orchestration/session_mode.rs`
@@ -106,4 +110,4 @@ enum が「何を使うか」を、trait が「どう実行するか」を担い
 - [Configuration Reference](../reference/configuration.md) - `agent.*` キー
 - [CLI Reference](../reference/cli.md) - モード切り替えコマンド
 
-<!-- LLM Context: オーケストレーションは 3 直交軸: ConsensusLevel (Solo/Ensemble) × PhaseScope (Full/Fast/PlanOnly) × OrchestrationStrategy (Quorum/Debate)。SessionMode (domain/src/orchestration/session_mode.rs) に集約、runtime-mutable。組み合わせバリデーション SessionMode::validate_combination(): Solo+Debate=Error(SoloWithDebate), Ensemble+Debate=Warning(DebateNotImplemented), Ensemble+Fast=Warning(EnsembleWithFast)。旧 5 モード enum (Agent/Quorum/Fast/Debate/Plan) は Discussion #38 で概念混在と判明し再設計 (commits 4ca46d7, 53cd28a)。 -->
+<!-- LLM Context: オーケストレーションは 3 直交軸: ConsensusLevel (Solo/Ensemble) × PhaseScope (Full/Fast/PlanOnly) × OrchestrationStrategy (Quorum/Debate)。SessionMode (domain/src/orchestration/session_mode.rs) に集約、runtime-mutable。組み合わせバリデーション SessionMode::validate_combination(): Solo+Debate=Error(SoloWithDebate), Ensemble+Fast=Warning(EnsembleWithFast)。StrategyExecutor trait と QuorumStrategyExecutor/DebateStrategyExecutor 実装は application/src/use_cases/run_quorum/ にあり、RunQuorumUseCase が OrchestrationStrategy の exhaustive match でディスパッチする(#314、旧 DebateNotImplemented Warning は撤去済み)。旧 5 モード enum (Agent/Quorum/Fast/Debate/Plan) は Discussion #38 で概念混在と判明し再設計 (commits 4ca46d7, 53cd28a)。 -->

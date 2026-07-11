@@ -58,11 +58,11 @@ pub use orchestration::{
     mode::{ConsensusLevel, PlanningApproach},
     scope::PhaseScope,
     session_mode::SessionMode,
-    strategy::{DebateConfig, DebateIntensity, OrchestrationStrategy, StrategyExecutor},
+    strategy::{DebateConfig, DebateIntensity, OrchestrationStrategy},
     stream_context::StreamContext,
     value_objects::{ModelResponse, PeerReview, QuorumResult, SynthesisResult},
 };
-pub use prompt::{AgentPromptTemplate, PromptTemplate, ReviewPromptTemplate};
+pub use prompt::{AgentPromptTemplate, DebatePromptTemplate, PromptTemplate, ReviewPromptTemplate};
 pub use providers::{
     AnthropicProviderConfig, BedrockProviderConfig, OpenAiProviderConfig, ProviderConfig,
 };

@@ -38,7 +38,16 @@ pub enum OrchestrationStrategy {
 }
 ```
 
-**Step 2**: `StrategyExecutor` trait を実装する実行者を追加。
+**Step 2**: `application/src/use_cases/run_quorum/` に `StrategyExecutor` trait
+（`strategy_executor.rs`）を実装する executor を追加（例: `new_strategy.rs`）。
+`QuorumStrategyExecutor`/`DebateStrategyExecutor` が参考実装。executor は domain の
+`LlmGateway` ではなく application の `Arc<dyn LlmGateway>` ポートを使う（domain は
+I/O ポートに依存できないため、trait 自体も application 層にある）。
+
+**Step 3**: `run_quorum/mod.rs` の `RunQuorumUseCase::execute_with_progress` にある
+`OrchestrationStrategy` の exhaustive match に新しいバリアントの腕を追加。
+`if let`/`matches!` チェーンではなく match の網羅性チェックに乗せることで、
+バリアント追加の対応漏れをコンパイルエラーで検知できる。
 
 ## Adding New Tools / 新しいツールの追加
 

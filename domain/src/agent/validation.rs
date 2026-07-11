@@ -31,8 +31,6 @@ pub enum Severity {
 pub enum ConfigIssueCode {
     /// Solo + Debate: a single model cannot debate with itself.
     SoloWithDebate,
-    /// Debate strategy has no StrategyExecutor implementation yet.
-    DebateNotImplemented,
     /// Ensemble + Fast: review phases are skipped, reducing Ensemble's value.
     EnsembleWithFast,
     /// An enum field has an unrecognized value (typo or unsupported).
@@ -140,33 +138,29 @@ mod tests {
         assert_eq!(issues[0].code, ConfigIssueCode::EnsembleWithFast);
     }
 
+    // ==================== Ensemble + Debate (valid — StrategyExecutor implemented) ====================
+
     #[test]
-    fn ensemble_full_debate_warns() {
+    fn ensemble_full_debate_is_valid() {
         let issues =
             make_mode(ConsensusLevel::Ensemble, PhaseScope::Full, debate()).validate_combination();
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].severity, Severity::Warning);
-        assert_eq!(issues[0].code, ConfigIssueCode::DebateNotImplemented);
+        assert!(issues.is_empty());
     }
 
     #[test]
-    fn ensemble_plan_only_debate_warns() {
+    fn ensemble_plan_only_debate_is_valid() {
         let issues = make_mode(ConsensusLevel::Ensemble, PhaseScope::PlanOnly, debate())
             .validate_combination();
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].code, ConfigIssueCode::DebateNotImplemented);
+        assert!(issues.is_empty());
     }
 
     #[test]
-    fn ensemble_fast_debate_warns_both() {
+    fn ensemble_fast_debate_warns_ensemble_with_fast_only() {
         let issues =
             make_mode(ConsensusLevel::Ensemble, PhaseScope::Fast, debate()).validate_combination();
-        assert_eq!(issues.len(), 2);
-        let codes: Vec<_> = issues.iter().map(|i| i.code.clone()).collect();
-        assert!(codes.contains(&ConfigIssueCode::DebateNotImplemented));
-        assert!(codes.contains(&ConfigIssueCode::EnsembleWithFast));
-        // Both are warnings
-        assert!(issues.iter().all(|i| i.severity == Severity::Warning));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].severity, Severity::Warning);
+        assert_eq!(issues[0].code, ConfigIssueCode::EnsembleWithFast);
     }
 
     // ==================== Error combinations (Solo + Debate) ====================
