@@ -101,24 +101,14 @@ impl SessionMode {
         let mut issues = Vec::new();
         let is_debate = matches!(self.strategy, OrchestrationStrategy::Debate(_));
 
-        if is_debate {
-            if self.consensus_level == ConsensusLevel::Solo {
-                issues.push(ConfigIssue {
-                    severity: Severity::Error,
-                    code: ConfigIssueCode::SoloWithDebate,
-                    message: "Solo mode with Debate strategy is invalid: \
-                              a single model cannot debate with itself"
-                        .to_string(),
-                });
-            } else {
-                issues.push(ConfigIssue {
-                    severity: Severity::Warning,
-                    code: ConfigIssueCode::DebateNotImplemented,
-                    message: "Debate strategy is not yet implemented \
-                              (no StrategyExecutor available)"
-                        .to_string(),
-                });
-            }
+        if is_debate && self.consensus_level == ConsensusLevel::Solo {
+            issues.push(ConfigIssue {
+                severity: Severity::Error,
+                code: ConfigIssueCode::SoloWithDebate,
+                message: "Solo mode with Debate strategy is invalid: \
+                          a single model cannot debate with itself"
+                    .to_string(),
+            });
         }
 
         if self.consensus_level == ConsensusLevel::Ensemble && self.phase_scope == PhaseScope::Fast

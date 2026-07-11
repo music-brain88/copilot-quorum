@@ -1,130 +1,36 @@
-//! Run Quorum use case
+//! `QuorumStrategyExecutor` — the standard Quorum discussion flow.
 //!
-//! Orchestrates the full Quorum discussion flow.
+//! Initial Query → Peer Review (optional) → Synthesis. Extracted from what used to be
+//! `RunQuorumUseCase`'s body verbatim (#314); behavior is unchanged, only `gateway`
+//! moved from a struct field to a per-call parameter (see [`StrategyExecutor`]).
 
+use super::strategy_executor::StrategyExecutor;
+use super::types::{RunQuorumError, RunQuorumInput};
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, StreamObserver};
-use crate::ports::progress::{NoProgress, ProgressNotifier};
+use crate::ports::progress::ProgressNotifier;
+use async_trait::async_trait;
 use quorum_domain::{
-    Model, ModelConfig, ModelResponse, PeerReview, Phase, PromptTemplate, Question, QuorumResult,
-    StreamContext, SynthesisResult,
+    Model, ModelResponse, PeerReview, Phase, PromptTemplate, QuorumResult, StreamContext,
+    SynthesisResult,
 };
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
-/// Errors that can occur during Quorum execution
-#[derive(Error, Debug)]
-pub enum RunQuorumError {
-    #[error("No models configured")]
-    NoModels,
+/// Equal-peer discussion: all models answer independently, review each other
+/// anonymously, and a moderator synthesizes the final answer.
+pub struct QuorumStrategyExecutor;
 
-    #[error("All models failed to respond")]
-    AllModelsFailed,
-
-    #[error("Synthesis failed: {0}")]
-    SynthesisFailed(String),
-
-    #[error("Gateway error: {0}")]
-    GatewayError(#[from] GatewayError),
-}
-
-/// Input for the RunQuorum use case
-#[derive(Debug, Clone)]
-pub struct RunQuorumInput {
-    /// The question to ask
-    pub question: Question,
-    /// Model configuration (`participants` join the discussion, `moderator` synthesizes)
-    pub models: ModelConfig,
-    /// Whether to include peer review phase
-    pub enable_review: bool,
-}
-
-impl RunQuorumInput {
-    pub fn new(question: impl Into<Question>, models: ModelConfig) -> Self {
-        Self {
-            question: question.into(),
-            models,
-            enable_review: true,
-        }
-    }
-
-    pub fn without_review(mut self) -> Self {
-        self.enable_review = false;
-        self
-    }
-}
-
-/// Use case for running a Quorum discussion
-pub struct RunQuorumUseCase {
-    gateway: Arc<dyn LlmGateway>,
-}
-
-impl RunQuorumUseCase {
-    pub fn new(gateway: Arc<dyn LlmGateway>) -> Self {
-        Self { gateway }
-    }
-
-    /// Execute the use case with default (no-op) progress
-    pub async fn execute(&self, input: RunQuorumInput) -> Result<QuorumResult, RunQuorumError> {
-        self.execute_with_progress(input, &NoProgress).await
-    }
-
-    /// Execute the use case with progress callbacks
-    pub async fn execute_with_progress(
-        &self,
-        input: RunQuorumInput,
-        progress: &dyn ProgressNotifier,
-    ) -> Result<QuorumResult, RunQuorumError> {
-        if input.models.participants.is_empty() {
-            return Err(RunQuorumError::NoModels);
-        }
-
-        info!(
-            "Starting Quorum with {} models",
-            input.models.participants.len()
-        );
-
-        // Phase 1: Initial Query
-        let responses = self.phase_initial(&input, progress).await?;
-
-        // Check if we have any successful responses
-        let successful_responses: Vec<_> = responses.iter().filter(|r| r.success).collect();
-        if successful_responses.is_empty() {
-            return Err(RunQuorumError::AllModelsFailed);
-        }
-
-        // Phase 2: Peer Review (optional)
-        let reviews = if input.enable_review && successful_responses.len() > 1 {
-            self.phase_review(&input, &responses, progress).await?
-        } else {
-            debug!("Skipping peer review phase");
-            vec![]
-        };
-
-        // Phase 3: Synthesis
-        let synthesis = self
-            .phase_synthesis(&input, &responses, &reviews, progress)
-            .await?;
-
-        Ok(QuorumResult::new(
-            input.question.content(),
-            input
-                .models
-                .participants
-                .iter()
-                .map(|m| m.to_string())
-                .collect(),
-            responses,
-            reviews,
-            synthesis,
-        ))
+impl QuorumStrategyExecutor {
+    pub fn new() -> Self {
+        Self
     }
 
     /// Phase 1: Query all models in parallel with real-time streaming
     async fn phase_initial(
         &self,
+        gateway: &Arc<dyn LlmGateway>,
         input: &RunQuorumInput,
         progress: &dyn ProgressNotifier,
     ) -> Result<Vec<ModelResponse>, RunQuorumError> {
@@ -135,7 +41,7 @@ impl RunQuorumUseCase {
         let mut join_set = JoinSet::new();
 
         for model in &input.models.participants {
-            let gateway = Arc::clone(&self.gateway);
+            let gateway = Arc::clone(gateway);
             let model = model.clone();
             let question = input.question.content().to_string();
 
@@ -196,6 +102,7 @@ impl RunQuorumUseCase {
     /// Phase 2: Each model reviews others' responses with streaming
     async fn phase_review(
         &self,
+        gateway: &Arc<dyn LlmGateway>,
         input: &RunQuorumInput,
         responses: &[ModelResponse],
         progress: &dyn ProgressNotifier,
@@ -231,7 +138,7 @@ impl RunQuorumUseCase {
                 continue;
             }
 
-            let gateway = Arc::clone(&self.gateway);
+            let gateway = Arc::clone(gateway);
             let model: Model = response.model.parse().unwrap();
             let question = input.question.content().to_string();
 
@@ -303,6 +210,7 @@ impl RunQuorumUseCase {
     /// Phase 3: Synthesize all responses and reviews with streaming
     async fn phase_synthesis(
         &self,
+        gateway: &Arc<dyn LlmGateway>,
         input: &RunQuorumInput,
         responses: &[ModelResponse],
         reviews: &[PeerReview],
@@ -334,7 +242,7 @@ impl RunQuorumUseCase {
         });
 
         let synthesis_future = Self::synthesize_streaming(
-            self.gateway.as_ref(),
+            gateway.as_ref(),
             &moderator,
             input.question.content(),
             &successful_responses,
@@ -415,5 +323,142 @@ impl RunQuorumUseCase {
 
         let prompt = PromptTemplate::synthesis_prompt(question, responses, reviews);
         session.send(&prompt).await
+    }
+}
+
+impl Default for QuorumStrategyExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl StrategyExecutor for QuorumStrategyExecutor {
+    fn name(&self) -> &'static str {
+        "quorum"
+    }
+
+    fn phases(&self) -> Vec<Phase> {
+        vec![Phase::Initial, Phase::Review, Phase::Synthesis]
+    }
+
+    async fn execute(
+        &self,
+        input: &RunQuorumInput,
+        gateway: Arc<dyn LlmGateway>,
+        progress: &dyn ProgressNotifier,
+    ) -> Result<QuorumResult, RunQuorumError> {
+        // Phase 1: Initial Query
+        let responses = self.phase_initial(&gateway, input, progress).await?;
+
+        // Check if we have any successful responses
+        let successful_responses: Vec<_> = responses.iter().filter(|r| r.success).collect();
+        if successful_responses.is_empty() {
+            return Err(RunQuorumError::AllModelsFailed);
+        }
+
+        // Phase 2: Peer Review (optional)
+        let reviews = if input.enable_review && successful_responses.len() > 1 {
+            self.phase_review(&gateway, input, &responses, progress)
+                .await?
+        } else {
+            debug!("Skipping peer review phase");
+            vec![]
+        };
+
+        // Phase 3: Synthesis
+        let synthesis = self
+            .phase_synthesis(&gateway, input, &responses, &reviews, progress)
+            .await?;
+
+        Ok(QuorumResult::new(
+            input.question.content(),
+            input
+                .models
+                .participants
+                .iter()
+                .map(|m| m.to_string())
+                .collect(),
+            responses,
+            reviews,
+            synthesis,
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::progress::NoProgress;
+    use crate::use_cases::run_quorum::test_support::ScriptedGateway;
+    use quorum_domain::ModelConfig;
+
+    fn input(models: ModelConfig) -> RunQuorumInput {
+        RunQuorumInput::new("What is the best caching strategy?", models)
+    }
+
+    #[tokio::test]
+    async fn quorum_flow_runs_initial_review_and_synthesis() {
+        let models = ModelConfig::default()
+            .with_participants(vec![Model::ClaudeSonnet45, Model::Gpt53Codex])
+            .with_moderator(Model::ClaudeSonnet45);
+
+        let gateway = ScriptedGateway::new();
+        gateway.respond(Model::ClaudeSonnet45, "Use a write-through cache.");
+        gateway.respond(Model::Gpt53Codex, "Use a write-behind cache.");
+        gateway.respond(Model::ClaudeSonnet45, "The other response has merit too.");
+        gateway.respond(Model::Gpt53Codex, "Write-through is safer.");
+        gateway.respond(Model::ClaudeSonnet45, "Final synthesis: use write-through.");
+
+        let result = QuorumStrategyExecutor::new()
+            .execute(&input(models), Arc::new(gateway), &NoProgress)
+            .await
+            .unwrap();
+
+        assert_eq!(result.responses.len(), 2);
+        assert_eq!(result.reviews.len(), 2);
+        assert_eq!(
+            result.synthesis.conclusion,
+            "Final synthesis: use write-through."
+        );
+    }
+
+    #[tokio::test]
+    async fn quorum_flow_skips_review_when_disabled() {
+        let models = ModelConfig::default()
+            .with_participants(vec![Model::ClaudeSonnet45, Model::Gpt53Codex])
+            .with_moderator(Model::ClaudeSonnet45);
+
+        let gateway = ScriptedGateway::new();
+        gateway.respond(Model::ClaudeSonnet45, "Use a write-through cache.");
+        gateway.respond(Model::Gpt53Codex, "Use a write-behind cache.");
+        gateway.respond(Model::ClaudeSonnet45, "Final synthesis: use write-through.");
+
+        let result = QuorumStrategyExecutor::new()
+            .execute(
+                &input(models).without_review(),
+                Arc::new(gateway),
+                &NoProgress,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.responses.len(), 2);
+        assert!(result.reviews.is_empty());
+    }
+
+    #[tokio::test]
+    async fn quorum_flow_fails_when_all_models_fail() {
+        let models = ModelConfig::default().with_participants(vec![Model::ClaudeSonnet45]);
+
+        // No scripted response — the single participant's call fails.
+        let gateway = ScriptedGateway::new();
+
+        let err = QuorumStrategyExecutor::new()
+            .execute(&input(models), Arc::new(gateway), &NoProgress)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, RunQuorumError::AllModelsFailed));
     }
 }

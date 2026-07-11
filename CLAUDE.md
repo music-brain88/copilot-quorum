@@ -189,7 +189,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 - `LlmSession` (application/ports) - Active session with an LLM
 - `ProgressNotifier` (application/ports) - Progress callback interface
 - `ToolExecutorPort` (application/ports) - Tool execution interface
-- `StrategyExecutor` (domain/orchestration) - Orchestration strategy execution interface
+- `StrategyExecutor` (application/use_cases/run_quorum) - Orchestration strategy execution interface (`QuorumStrategyExecutor`, `DebateStrategyExecutor`)
 - `ToolValidator` (domain/tool) - Tool call validation logic
 - `ScriptingEnginePort` (application/ports) - Lua scripting engine interface
 
@@ -199,7 +199,7 @@ infrastructure/ --> application/   # Adapters --> Use cases + ports
 domain/src/
 ├── core/           # Model, Question, Error
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
-├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, SessionMode, StrategyExecutor, Phase, QuorumRun, QuorumResult (オーケストレーション)
+├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, SessionMode, Phase, QuorumRun, QuorumResult (オーケストレーション。StrategyExecutor は application 層)
 ├── agent/          # AgentState, Plan, Task, ModelConfig, AgentPolicy (エージェント)
 ├── tool/           # ToolDefinition, ToolCall, ToolSpec, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
@@ -212,7 +212,7 @@ domain/src/
 ### Adding New Features
 
 - New LLM provider: Add to `infrastructure/` implementing `LlmGateway`
-- New orchestration strategy: Add to `domain/orchestration/`
+- New orchestration strategy: Add variant to `domain/orchestration/strategy.rs`'s `OrchestrationStrategy`, then implement `StrategyExecutor` in `application/use_cases/run_quorum/` and add it to `RunQuorumUseCase`'s exhaustive match
 - New output format: Add to `presentation/output/`
 - New model: Add variant to `domain/src/core/model.rs` Model enum
 - New tool: Add to `infrastructure/tools/`, register in `default_tool_spec()`

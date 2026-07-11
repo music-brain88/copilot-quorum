@@ -316,9 +316,12 @@ impl QuorumConfig {
     /// Build a [`RunQuorumInput`] for an ad-hoc quorum discussion.
     ///
     /// Uses `participants` models for discussion and `moderator` for synthesis.
+    /// Carries `mode.strategy` along so `RunQuorumUseCase` can dispatch between
+    /// Quorum and Debate.
     pub fn to_quorum_input(&self, question: impl Into<String>) -> RunQuorumInput {
         let question_str: String = question.into();
         RunQuorumInput::new(question_str, self.models.clone())
+            .with_strategy(self.mode.strategy.clone())
     }
 }
 

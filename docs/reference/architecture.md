@@ -182,7 +182,11 @@ Quorum（合意形成）に関する型を定義します。
 | `PeerReview` | Value Object | ピアレビュー結果 |
 | `SynthesisResult` | Value Object | 最終統合結果 |
 | `QuorumResult` | Value Object | 全フェーズの結果 |
-| `StrategyExecutor` | Trait | オーケストレーション戦略の実行インターフェース |
+
+`OrchestrationStrategy` を*実行する* `StrategyExecutor` トレイトは domain ではなく
+application 層にあります（LLM 呼び出し・進捗通知という I/O ポート依存を domain に
+持ち込めないため）。[Application Layer](#application-layer--アプリケーション層) の
+`run_quorum/` を参照。
 
 ### Interaction Module
 
@@ -338,7 +342,7 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 | Type | Module | Description |
 |------|--------|-------------|
 | `RunAgentUseCase` | `run_agent/` | エージェント自律実行（Phase 1-5 全体オーケストレーション） |
-| `RunQuorumUseCase` | `run_quorum` | Quorum（合議）実行 |
+| `RunQuorumUseCase` | `run_quorum/` | Quorum Discussion のディスパッチ（`OrchestrationStrategy` の exhaustive match） |
 | `RunAskUseCase` | `run_ask` | Ask インタラクション（読み取り専用ツールでの Q&A） |
 | `GatherContextUseCase` | `gather_context` | Phase 1: コンテキスト収集（3段階フォールバック） |
 | `ExecuteTaskUseCase` | `execute_task` | Phase 4: タスク実行（動的モデル選択 + アクションレビュー） |
@@ -356,6 +360,27 @@ Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, 
 | `planning.rs` | Solo/Ensemble 計画生成ロジック |
 | `review.rs` | Quorum プランレビュー + アクションレビュー |
 | `hil.rs` | 人間介入ハンドリング（execution confirmation 含む） |
+
+#### run_quorum/ ファイル分割（#314）
+
+`RunQuorumUseCase` は `input.strategy`（`OrchestrationStrategy`）の exhaustive match で
+`StrategyExecutor` 実装へディスパッチするだけの薄い層です。実際の議論フローは戦略ごとの
+executor に分割されています：
+
+| File | Description |
+|------|-------------|
+| `mod.rs` | `RunQuorumUseCase`（ディスパッチのみ） |
+| `types.rs` | `RunQuorumInput`, `RunQuorumError` |
+| `strategy_executor.rs` | `StrategyExecutor` trait（`execute(&self, input, gateway: Arc<dyn LlmGateway>, progress)`） |
+| `quorum_strategy.rs` | `QuorumStrategyExecutor` — Initial → Review → Synthesis（旧 `RunQuorumUseCase` 本体を抽出） |
+| `debate_strategy.rs` | `DebateStrategyExecutor` — 立場割り当て → 攻撃/防衛ラウンド → モデレーター裁定 |
+| `test_support.rs` | テスト専用の `ScriptedGateway`（モデルごとに応答をキューする `LlmGateway` モック） |
+
+`StrategyExecutor` が application 層にある理由: 実行には `LlmGateway`/`ProgressNotifier`
+という I/O ポートへの依存が必須で、domain はそれらに依存できない。ディスパッチが
+`OrchestrationStrategy` の enum バリアント数（2つ）で決まる以上、`dyn StrategyExecutor`
+によるトレイトオブジェクトディスパッチは不要 — exhaustive match の方が将来の variant
+追加をコンパイル時に検知できる。
 
 ### Config / 設定
 
