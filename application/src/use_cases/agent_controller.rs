@@ -1127,7 +1127,7 @@ pub fn build_partial_context_prefix(state: &AgentState) -> String {
                 out.push_str(&format!(
                     "- [{}] {}",
                     task.status.as_str(),
-                    truncate_str(&task.description, PARTIAL_CONTEXT_TASK_DESC_MAX_LEN)
+                    truncate_with_ellipsis(&task.description, PARTIAL_CONTEXT_TASK_DESC_MAX_LEN)
                 ));
                 if let Some(result) = &task.result {
                     let preview = if result.success {
@@ -1135,7 +1135,8 @@ pub fn build_partial_context_prefix(state: &AgentState) -> String {
                     } else {
                         result.error.as_deref().unwrap_or("")
                     };
-                    let preview = truncate_str(preview, PARTIAL_CONTEXT_TASK_RESULT_MAX_LEN);
+                    let preview =
+                        truncate_with_ellipsis(preview, PARTIAL_CONTEXT_TASK_RESULT_MAX_LEN);
                     if !preview.is_empty() {
                         out.push_str(&format!(" — {}", preview));
                     }
@@ -1156,12 +1157,25 @@ pub fn build_partial_context_prefix(state: &AgentState) -> String {
         {
             out.push_str(&format!(
                 "- {}\n",
-                truncate_str(&thought.content, PARTIAL_CONTEXT_THOUGHT_MAX_LEN)
+                truncate_with_ellipsis(&thought.content, PARTIAL_CONTEXT_THOUGHT_MAX_LEN)
             ));
         }
     }
 
     out.trim_end().to_string()
+}
+
+/// Truncates `s` to `max_bytes` (UTF-8 boundary safe, via [`truncate_str`]),
+/// appending an ellipsis when truncation actually removed content so a model
+/// reading [`build_partial_context_prefix`]'s output can tell the text was
+/// cut off rather than mistaking it for the full value.
+fn truncate_with_ellipsis(s: &str, max_bytes: usize) -> String {
+    let truncated = truncate_str(s, max_bytes);
+    if truncated.len() < s.len() {
+        format!("{truncated}…")
+    } else {
+        truncated.to_string()
+    }
 }
 
 /// Format quorum output based on output format
@@ -2519,5 +2533,42 @@ mod tests {
 
         assert_eq!(completion.query, "clean user request");
         assert!(!completion.query.contains("Previous Agent Partial Results"));
+    }
+
+    // === truncate_with_ellipsis / build_partial_context_prefix tests ===
+
+    #[test]
+    fn truncate_with_ellipsis_marks_truncated_text() {
+        assert_eq!(truncate_with_ellipsis("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_leaves_short_text_unchanged() {
+        assert_eq!(truncate_with_ellipsis("hi", 10), "hi");
+        assert_eq!(truncate_with_ellipsis("", 10), "");
+    }
+
+    #[test]
+    fn build_partial_context_prefix_marks_truncated_task_description() {
+        let mut state = AgentState::new(
+            "agent-test",
+            "Refactor",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            50,
+        );
+        state.set_phase(AgentPhase::Executing);
+
+        let mut plan = Plan::new("Refactor", "Split into smaller functions");
+        let long_desc = "x".repeat(PARTIAL_CONTEXT_TASK_DESC_MAX_LEN + 20);
+        plan.add_task(Task::new("t1", &long_desc));
+        state.plan = Some(plan);
+
+        let prefix = build_partial_context_prefix(&state);
+        assert!(
+            prefix.contains('…'),
+            "expected an ellipsis marker for truncated task description: {prefix}"
+        );
     }
 }
