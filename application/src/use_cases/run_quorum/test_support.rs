@@ -15,6 +15,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub(super) struct ScriptedGateway {
     responses: Arc<Mutex<HashMap<Model, VecDeque<String>>>>,
+    /// Every prompt passed to `send()`, in call order, regardless of model —
+    /// lets tests assert on the exact content a caller constructed.
+    sent: Arc<Mutex<Vec<(Model, String)>>>,
 }
 
 impl ScriptedGateway {
@@ -31,11 +34,23 @@ impl ScriptedGateway {
             .or_default()
             .push_back(text.into());
     }
+
+    /// All prompts sent to `model` via `send()`, in call order.
+    pub(super) fn sent_prompts(&self, model: Model) -> Vec<String> {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, _)| *m == model)
+            .map(|(_, prompt)| prompt.clone())
+            .collect()
+    }
 }
 
 struct ScriptedSession {
     model: Model,
     responses: Arc<Mutex<HashMap<Model, VecDeque<String>>>>,
+    sent: Arc<Mutex<Vec<(Model, String)>>>,
 }
 
 #[async_trait]
@@ -44,7 +59,11 @@ impl LlmSession for ScriptedSession {
         &self.model
     }
 
-    async fn send(&self, _content: &str) -> Result<String, GatewayError> {
+    async fn send(&self, content: &str) -> Result<String, GatewayError> {
+        self.sent
+            .lock()
+            .unwrap()
+            .push((self.model.clone(), content.to_string()));
         self.responses
             .lock()
             .unwrap()
@@ -62,6 +81,7 @@ impl LlmGateway for ScriptedGateway {
         Ok(Box::new(ScriptedSession {
             model: model.clone(),
             responses: Arc::clone(&self.responses),
+            sent: Arc::clone(&self.sent),
         }))
     }
 

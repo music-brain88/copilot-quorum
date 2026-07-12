@@ -45,10 +45,14 @@
 //! | `/edit` | `edit`, `e` | Edit plan (not yet implemented) |
 //!
 //! The same handler also implements `request_debate_escalation` for the
-//! Debate strategy's round-limit escalation: it shows the question, the
-//! remaining unresolved objections (claim/evidence/severity), and a
-//! transcript summary, then accepts `/approve` (force a decision) or
-//! `/reject` (abort the debate).
+//! Debate strategy's settle-checkpoint escalation (triggered whenever the
+//! moderator tries to settle with unresolved critical/major objections —
+//! not only at the round limit): it shows the question, the remaining
+//! unresolved objections (claim/evidence/severity), and a transcript
+//! summary, then accepts `/approve` (force a decision) or `/reject`. What
+//! `/reject` does depends on whether a next round exists: it declines the
+//! early settle and continues the debate in a non-final round, or aborts
+//! the debate entirely at the final round.
 
 use async_trait::async_trait;
 use colored::Colorize;
@@ -174,6 +178,7 @@ impl InteractiveHumanIntervention {
         question: &str,
         unresolved: &[Objection],
         transcript_summary: &str,
+        can_continue: bool,
     ) {
         println!();
         println!(
@@ -191,10 +196,17 @@ impl InteractiveHumanIntervention {
         );
         println!();
 
-        println!(
-            "The debate reached its round limit with {} unresolved objection(s).",
-            unresolved.len()
-        );
+        if can_continue {
+            println!(
+                "The moderator wants to settle early with {} unresolved objection(s) still open.",
+                unresolved.len()
+            );
+        } else {
+            println!(
+                "The debate reached its round limit with {} unresolved objection(s).",
+                unresolved.len()
+            );
+        }
         println!();
 
         // Show original question
@@ -238,7 +250,14 @@ impl InteractiveHumanIntervention {
             "  {}  - Force a decision, proceeding despite unresolved objections",
             "/approve".green()
         );
-        println!("  {}   - Abort the debate", "/reject".red());
+        if can_continue {
+            println!(
+                "  {}   - Decline the early settle, continue the debate to the next round",
+                "/reject".red()
+            );
+        } else {
+            println!("  {}   - Abort the debate", "/reject".red());
+        }
         println!();
     }
 
@@ -385,8 +404,14 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
         question: &str,
         unresolved: &[quorum_domain::quorum::Objection],
         transcript_summary: &str,
+        can_continue: bool,
     ) -> Result<HumanDecision, HumanInterventionError> {
-        self.display_debate_escalation_prompt(question, unresolved, transcript_summary);
+        self.display_debate_escalation_prompt(
+            question,
+            unresolved,
+            transcript_summary,
+            can_continue,
+        );
 
         loop {
             let input = self.read_command()?;
@@ -402,7 +427,11 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
                 }
                 "/reject" | "reject" | "r" | "q" => {
                     println!();
-                    println!("{}", "✗ Debate aborted by human".red());
+                    if can_continue {
+                        println!("{}", "✗ Early settle declined — debate continues".red());
+                    } else {
+                        println!("{}", "✗ Debate aborted by human".red());
+                    }
                     return Ok(HumanDecision::Reject);
                 }
                 "" => continue,

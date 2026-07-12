@@ -225,13 +225,18 @@ pub enum HilKind {
         request: String,
         plan: Plan,
     },
-    /// Debate strategy round-limit escalation — unresolved objections remain
-    /// after the moderator ran out of checkpoint rounds (see
-    /// `HumanInterventionPort::request_debate_escalation`).
+    /// Debate strategy settle-checkpoint escalation — the moderator tried to
+    /// settle while critical/major objections remain unresolved (see
+    /// `HumanInterventionPort::request_debate_escalation`). Fires at every
+    /// such checkpoint, not only the final round.
     DebateEscalation {
         question: String,
         unresolved: Vec<Objection>,
         transcript_summary: String,
+        /// `true` when this is a non-final round: rejecting declines the
+        /// early settle and continues the debate. `false` at the final
+        /// round: rejecting aborts the debate entirely.
+        can_continue: bool,
     },
 }
 

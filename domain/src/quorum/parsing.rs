@@ -19,6 +19,27 @@
 
 use super::objection::ObjectionSeverity;
 
+/// Check whether `line` (after trimming leading whitespace) starts with
+/// `label`, case-insensitively, and return the trimmed rest if so.
+///
+/// Compares as byte slices (`[u8]::eq_ignore_ascii_case`) rather than
+/// slicing `&str` by byte length: `label` is always ASCII, but `line` may
+/// not be (e.g. CJK text before a label appears, or in the label's value).
+/// Slicing a `&str` at an arbitrary byte offset panics if that offset falls
+/// inside a multi-byte character; comparing raw bytes via `.get(..n)` never
+/// panics, and a successful case-insensitive match against an all-ASCII
+/// label guarantees every matched byte is itself ASCII — so the following
+/// `&trimmed[label.len()..]` slice always lands on a valid char boundary.
+fn label_rest<'a>(line: &'a str, label: &str) -> Option<&'a str> {
+    let trimmed = line.trim_start();
+    let prefix = trimmed.as_bytes().get(..label.len())?;
+    if prefix.eq_ignore_ascii_case(label.as_bytes()) {
+        Some(trimmed[label.len()..].trim_start())
+    } else {
+        None
+    }
+}
+
 /// Parse a review response to extract approval status and feedback.
 ///
 /// Checks for explicit APPROVE/REJECT keywords in the response text.
@@ -272,15 +293,6 @@ pub fn parse_opponent_rebuttals(text: &str) -> Vec<(String, String, ObjectionSev
         }
     }
 
-    fn label_rest<'a>(line: &'a str, label: &str) -> Option<&'a str> {
-        let trimmed = line.trim_start();
-        if trimmed.len() >= label.len() && trimmed[..label.len()].eq_ignore_ascii_case(label) {
-            Some(trimmed[label.len()..].trim_start())
-        } else {
-            None
-        }
-    }
-
     let mut results = Vec::new();
     let mut claim: Option<String> = None;
     let mut evidence: Option<String> = None;
@@ -398,15 +410,6 @@ pub fn parse_moderator_rulings(text: &str) -> Vec<(String, bool, String)> {
         Reason,
     }
 
-    fn label_rest<'a>(line: &'a str, label: &str) -> Option<&'a str> {
-        let trimmed = line.trim_start();
-        if trimmed.len() >= label.len() && trimmed[..label.len()].eq_ignore_ascii_case(label) {
-            Some(trimmed[label.len()..].trim_start())
-        } else {
-            None
-        }
-    }
-
     fn ruling_accepted(value: &str) -> bool {
         let upper = value.to_uppercase();
         upper.contains("ACCEPTED") && !upper.contains("REJECTED")
@@ -483,10 +486,13 @@ pub fn parse_moderator_rulings(text: &str) -> Vec<(String, bool, String)> {
 /// `DIVERGENT: YES` or `DIVERGENT: NO` line, followed by either the shared
 /// premise (if not divergent) or a note on what diverges (if divergent).
 ///
-/// Conservative: if the first line doesn't clearly declare `DIVERGENT: YES`,
-/// this returns `divergent = false` — an ambiguous or malformed response is
-/// treated as "no divergence detected" rather than triggering a possibly
-/// unwarranted decomposition.
+/// Conservative: if the first line doesn't clearly declare `DIVERGENT: NO`,
+/// this returns `divergent = true` — the caller only takes action (running
+/// the extra contrarian-brief LLM call, and folding the raw response text
+/// into the prompt as a "shared premise") when it reads `divergent = false`.
+/// An ambiguous or malformed response should not silently trigger that
+/// extra work just because the moderator ignored the format; "no action"
+/// is the safe default here, not "divergence detected".
 ///
 /// # Returns
 ///
@@ -516,7 +522,7 @@ pub fn parse_divergence_check(text: &str) -> (bool, String) {
     let first_upper = first_line.to_uppercase();
 
     if !first_upper.contains("DIVERGENT") {
-        return (false, text.trim().to_string());
+        return (true, text.trim().to_string());
     }
 
     let divergent = first_upper.contains("YES") && !first_upper.contains("NO");
@@ -563,9 +569,8 @@ pub fn parse_decomposition_request(text: &str) -> Option<String> {
     const NEAR_TOP_LINES: usize = 5;
 
     for line in text.lines().take(NEAR_TOP_LINES) {
-        let trimmed = line.trim_start();
-        if trimmed.len() >= LABEL.len() && trimmed[..LABEL.len()].eq_ignore_ascii_case(LABEL) {
-            let target = trimmed[LABEL.len()..].trim().to_string();
+        if let Some(rest) = label_rest(line, LABEL) {
+            let target = rest.trim().to_string();
             if !target.is_empty() {
                 return Some(target);
             }
@@ -862,6 +867,33 @@ SEVERITY: CRITICAL";
         assert_eq!(rebuttals[0].2, ObjectionSeverity::Minor);
     }
 
+    #[test]
+    fn test_opponent_rebuttals_multibyte_line_before_label_does_not_panic() {
+        // Regression: a non-ASCII line preceding a label used to panic when
+        // slicing `trimmed[..label.len()]` landed mid-character (e.g. inside
+        // 'こ') instead of returning "no match" for the byte comparison.
+        let text =
+            "→ この主張は誤りです\nCLAIM: キャッシュは無効\nEVIDENCE: 根拠あり\nSEVERITY: MAJOR";
+        let rebuttals = parse_opponent_rebuttals(text);
+        assert_eq!(rebuttals.len(), 1);
+        assert_eq!(rebuttals[0].0, "キャッシュは無効");
+        assert_eq!(rebuttals[0].1, "根拠あり");
+        assert_eq!(rebuttals[0].2, ObjectionSeverity::Major);
+    }
+
+    #[test]
+    fn test_opponent_rebuttals_emoji_line_before_label_does_not_panic() {
+        // Same class of bug, exercised with a 4-byte emoji character instead
+        // of a 3-byte CJK one.
+        let text =
+            "🎉 disagree\nCLAIM: 🎉 emoji claim\nEVIDENCE: 🎉 emoji evidence\nSEVERITY: CRITICAL";
+        let rebuttals = parse_opponent_rebuttals(text);
+        assert_eq!(rebuttals.len(), 1);
+        assert_eq!(rebuttals[0].0, "🎉 emoji claim");
+        assert_eq!(rebuttals[0].1, "🎉 emoji evidence");
+        assert_eq!(rebuttals[0].2, ObjectionSeverity::Critical);
+    }
+
     // ==================== parse_moderator_rulings Tests ====================
 
     #[test]
@@ -938,6 +970,17 @@ REASON: second";
         assert_eq!(rulings[1].0, "R1-10");
     }
 
+    #[test]
+    fn test_moderator_rulings_multibyte_line_before_label_does_not_panic() {
+        // Regression: see test_opponent_rebuttals_multibyte_line_before_label_does_not_panic.
+        let text = "→ 裁定は以下の通り\nREBUTTAL_ID: R1-1\nRULING: ACCEPTED\nREASON: 妥当";
+        let rulings = parse_moderator_rulings(text);
+        assert_eq!(rulings.len(), 1);
+        assert_eq!(rulings[0].0, "R1-1");
+        assert!(rulings[0].1);
+        assert_eq!(rulings[0].2, "妥当");
+    }
+
     // ==================== parse_divergence_check Tests ====================
 
     #[test]
@@ -964,9 +1007,11 @@ REASON: second";
     }
 
     #[test]
-    fn test_divergence_check_missing_format_defaults_to_not_divergent() {
+    fn test_divergence_check_missing_format_defaults_to_divergent() {
+        // Fail-secure: an unparseable response must not silently trigger the
+        // contrarian-brief detour (see doc comment on parse_divergence_check).
         let (divergent, note) = parse_divergence_check("The two sides seem to agree overall.");
-        assert!(!divergent);
+        assert!(divergent);
         assert_eq!(note, "The two sides seem to agree overall.");
     }
 
@@ -1020,5 +1065,15 @@ REASON: second";
     #[test]
     fn test_decomposition_request_empty_target_returns_none() {
         assert_eq!(parse_decomposition_request("DECOMPOSE_REQUEST:   "), None);
+    }
+
+    #[test]
+    fn test_decomposition_request_multibyte_line_before_label_does_not_panic() {
+        // Regression: see test_opponent_rebuttals_multibyte_line_before_label_does_not_panic.
+        let text = "a主張の分解を要求します\nDECOMPOSE_REQUEST: この複合主張";
+        assert_eq!(
+            parse_decomposition_request(text),
+            Some("この複合主張".to_string())
+        );
     }
 }

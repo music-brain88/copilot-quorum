@@ -256,45 +256,11 @@ Finally, exactly one of:
   rebuttal — that the next round should focus on>"#
     }
 
-    /// Per-round checkpoint prompt for the moderator.
-    ///
-    /// When `is_final_round` is `true`, the moderator is instructed to settle
-    /// regardless of remaining disagreement — `max_rounds` is a hard cap.
-    pub fn moderator_checkpoint_prompt(
-        question: &str,
-        transcript: &str,
-        round: usize,
-        max_rounds: usize,
-        is_final_round: bool,
-    ) -> String {
-        let final_notice = if is_final_round {
-            "\nThis is the final allowed round. You MUST respond with VERDICT: SETTLED \
-             and produce your rulings and the best conclusion possible from the debate \
-             so far, even if disagreement remains."
-        } else {
-            ""
-        };
-        format!(
-            r#"Question under debate:
-
-{}
-
-Debate so far (round {} of {}):
-
-{}
-
-Has the debate settled? Rule on each rebuttal raised so far, per your instructions.{}"#,
-            question, round, max_rounds, transcript, final_notice
-        )
-    }
-
     /// Per-round checkpoint prompt for the moderator, with the still-open
     /// objections (from an [`ObjectionLedger`](crate::quorum::ObjectionLedger))
     /// explicitly enumerated by ID and claim.
     ///
-    /// This is the `ObjectionLedger`-aware counterpart to
-    /// [`moderator_checkpoint_prompt`](Self::moderator_checkpoint_prompt):
-    /// instead of asking the moderator to re-derive rebuttal identity from
+    /// Instead of asking the moderator to re-derive rebuttal identity from
     /// prose, it hands over the exact `REBUTTAL_ID`s the moderator must rule
     /// on and echo back, so [`parse_moderator_rulings`](crate::quorum::parsing::parse_moderator_rulings)
     /// can match rulings to ledger entries by exact ID.
@@ -460,20 +426,6 @@ mod tests {
             "--- Proponent ---\nUse REST for simplicity.",
         );
         assert!(prompt.contains("Use REST for simplicity."));
-    }
-
-    #[test]
-    fn test_moderator_checkpoint_final_round_forces_settle() {
-        let prompt =
-            DebatePromptTemplate::moderator_checkpoint_prompt("Q", "transcript", 3, 3, true);
-        assert!(prompt.contains("MUST respond with VERDICT: SETTLED"));
-    }
-
-    #[test]
-    fn test_moderator_checkpoint_non_final_round_allows_continue() {
-        let prompt =
-            DebatePromptTemplate::moderator_checkpoint_prompt("Q", "transcript", 1, 3, false);
-        assert!(!prompt.contains("MUST respond with VERDICT: SETTLED"));
     }
 
     #[test]

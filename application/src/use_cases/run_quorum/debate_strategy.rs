@@ -27,6 +27,7 @@ use quorum_domain::quorum::parsing::{
     parse_debate_verdict, parse_decomposition_request, parse_divergence_check,
     parse_moderator_rulings, parse_opponent_rebuttals,
 };
+use quorum_domain::util::truncate_head_tail;
 use quorum_domain::{
     DebateConfig, DebateIntensity, DebatePromptTemplate, HilMode, HumanDecision, Model,
     ModelResponse, Objection, ObjectionLedger, ObjectionStatus, OrchestrationStrategy, PeerReview,
@@ -35,6 +36,14 @@ use quorum_domain::{
 };
 use std::sync::Arc;
 use tracing::{info, warn};
+
+/// Byte budget for the transcript summary handed to
+/// `HumanInterventionPort::request_debate_escalation` — the port docs call
+/// this a "condensed summary", and both the CLI and TUI render it inline
+/// (a single modal line in the TUI), so the full `render_transcript` output
+/// (unbounded, grows every round) would blow past what either surface can
+/// reasonably display.
+const TRANSCRIPT_SUMMARY_MAX_BYTES: usize = 2000;
 
 /// Adversarial discussion: fixed proponent/opponent roles attack and defend a
 /// position across rounds, with an optional third-party interjector, until a
@@ -193,6 +202,12 @@ impl DebateStrategyExecutor {
     /// final round) is reached while critical/major objections are still
     /// unresolved.
     ///
+    /// `can_continue` is `true` for a non-final round (a `Reject` decision
+    /// declines the premature settle and the debate continues) and `false`
+    /// at the final round (a `Reject` decision aborts the debate, since
+    /// there is no next round to continue to) — see the caller's match on
+    /// the returned `HumanDecision`.
+    ///
     /// This mirrors `RunAgentUseCase::handle_human_intervention`
     /// (`run_agent/hil.rs`) so the three `HilMode` branches behave
     /// consistently across use cases:
@@ -200,12 +215,14 @@ impl DebateStrategyExecutor {
     /// - `AutoApprove` — force the settlement through, loudly logged.
     /// - `Interactive` — defer to `HumanInterventionPort::request_debate_escalation`
     ///   if one is configured, otherwise fall back to `AutoReject`'s behavior.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_debate_escalation(
         hil_mode: HilMode,
         human_intervention: Option<&Arc<dyn HumanInterventionPort>>,
         question: &str,
         unresolved: &[Objection],
         transcript_summary: &str,
+        can_continue: bool,
     ) -> Result<HumanDecision, RunQuorumError> {
         match hil_mode {
             HilMode::AutoReject => {
@@ -225,7 +242,12 @@ impl DebateStrategyExecutor {
             HilMode::Interactive => {
                 if let Some(intervention) = human_intervention {
                     intervention
-                        .request_debate_escalation(question, unresolved, transcript_summary)
+                        .request_debate_escalation(
+                            question,
+                            unresolved,
+                            transcript_summary,
+                            can_continue,
+                        )
                         .await
                         .map_err(|e| match e {
                             HumanInterventionError::Cancelled => RunQuorumError::Cancelled,
@@ -400,6 +422,13 @@ impl StrategyExecutor for DebateStrategyExecutor {
             for (claim, evidence, severity) in parse_opponent_rebuttals(&attack_text) {
                 ledger.add(round, claim, evidence, severity);
             }
+            // Captured before `attack_text` is moved into `transcript` below —
+            // used by the divergence check further down. Reading it back out
+            // of `transcript` by index would be wrong when round 1's opponent
+            // requested a decomposition: `query_opponent_attack_with_decomposition`
+            // pushes an intermediate "Proponent (round 1 decomposition)" entry,
+            // shifting the opponent's actual attack to a later index.
+            let first_round_attack_text = (round == 1).then(|| attack_text.clone());
             transcript.push((format!("Opponent (round {} attack)", round), attack_text));
 
             // Anti-mode-collapse divergence check (#316): only once, right after
@@ -415,7 +444,8 @@ impl StrategyExecutor for DebateStrategyExecutor {
             // if one exists, otherwise the opponent doubles up).
             if round == 1 && !contrarian_brief_used {
                 let opening_text = transcript[0].1.clone();
-                let first_attack_text = transcript[1].1.clone();
+                let first_attack_text = first_round_attack_text
+                    .expect("first_round_attack_text is always Some when round == 1");
                 let divergence_prompt = DebatePromptTemplate::divergence_check_prompt(
                     question,
                     &opening_text,
@@ -594,7 +624,11 @@ impl StrategyExecutor for DebateStrategyExecutor {
                     human_intervention.as_ref(),
                     question,
                     &unresolved,
-                    &Self::render_transcript(&transcript),
+                    &truncate_head_tail(
+                        &Self::render_transcript(&transcript),
+                        TRANSCRIPT_SUMMARY_MAX_BYTES,
+                    ),
+                    !is_final_round,
                 )
                 .await?;
 
@@ -620,11 +654,24 @@ impl StrategyExecutor for DebateStrategyExecutor {
                         break;
                     }
                     HumanDecision::Reject | HumanDecision::Edit(_) => {
-                        return Err(RunQuorumError::DebateEscalationRejected(format!(
-                            "{} unresolved critical/major objection(s) at round {}",
-                            unresolved.len(),
-                            round
-                        )));
+                        if is_final_round {
+                            return Err(RunQuorumError::DebateEscalationRejected(format!(
+                                "{} unresolved critical/major objection(s) at round {}",
+                                unresolved.len(),
+                                round
+                            )));
+                        }
+                        // Non-final round: the natural response to a
+                        // premature settle attempt is to decline it and keep
+                        // debating, not to kill the whole run — fall through
+                        // to the same transcript note a normal
+                        // VERDICT: CONTINUE round would get, and proceed to
+                        // round + 1.
+                        info!(
+                            "Debate escalation declined at round {} — continuing rather than settling ({} unresolved critical/major objection(s))",
+                            round,
+                            unresolved.len()
+                        );
                     }
                 }
             }
@@ -647,7 +694,11 @@ impl StrategyExecutor for DebateStrategyExecutor {
         // Refuted (critic's objection rejected) reads as the moderator
         // "approving" the proponent's claim; Conceded reads as a rejection
         // of it; anything never ruled on abstains rather than silently
-        // counting either way.
+        // counting either way. The ruling itself (refuted/conceded/
+        // unresolved) is spelled out in `reasoning` alongside the verdict —
+        // without it, e.g. `verdict=Approve` next to `reasoning` quoting the
+        // *attacking* claim reads backwards (as if the attack were being
+        // approved, not rejected).
         let mut votes: Vec<Vote> = ledger
             .all()
             .iter()
@@ -658,15 +709,15 @@ impl StrategyExecutor for DebateStrategyExecutor {
                     .ruling_reason
                     .as_deref()
                     .unwrap_or("no ruling recorded");
-                let verdict = match objection.status {
-                    ObjectionStatus::Refuted => VoteVerdict::Approve,
-                    ObjectionStatus::Conceded => VoteVerdict::Reject,
-                    ObjectionStatus::Unresolved => VoteVerdict::Abstain,
+                let (verdict, ruling_label) = match objection.status {
+                    ObjectionStatus::Refuted => (VoteVerdict::Approve, "refuted"),
+                    ObjectionStatus::Conceded => (VoteVerdict::Reject, "conceded"),
+                    ObjectionStatus::Unresolved => (VoteVerdict::Abstain, "unresolved"),
                 };
                 Vote::new(
                     moderator.to_string(),
                     verdict,
-                    format!("[{id}] {claim}: {reason}"),
+                    format!("[{id}][{ruling_label}] {claim}: {reason}"),
                 )
             })
             .collect();
@@ -725,10 +776,14 @@ mod tests {
     use std::sync::Mutex;
 
     /// Mock `HumanInterventionPort` that returns a pre-configured
-    /// (`request_debate_escalation`-only) outcome and counts invocations.
+    /// (`request_debate_escalation`-only) outcome and records each
+    /// invocation's `can_continue` flag and `transcript_summary` length (in
+    /// call order) alongside the count.
     struct MockEscalationHandler {
         outcome: Result<HumanDecision, HumanInterventionError>,
         calls: Mutex<usize>,
+        can_continue_calls: Mutex<Vec<bool>>,
+        transcript_summary_lens: Mutex<Vec<usize>>,
     }
 
     impl MockEscalationHandler {
@@ -736,6 +791,8 @@ mod tests {
             Self {
                 outcome,
                 calls: Mutex::new(0),
+                can_continue_calls: Mutex::new(Vec::new()),
+                transcript_summary_lens: Mutex::new(Vec::new()),
             }
         }
     }
@@ -755,9 +812,15 @@ mod tests {
             &self,
             _question: &str,
             _unresolved: &[Objection],
-            _transcript_summary: &str,
+            transcript_summary: &str,
+            can_continue: bool,
         ) -> Result<HumanDecision, HumanInterventionError> {
             *self.calls.lock().unwrap() += 1;
+            self.can_continue_calls.lock().unwrap().push(can_continue);
+            self.transcript_summary_lens
+                .lock()
+                .unwrap()
+                .push(transcript_summary.len());
             self.outcome.clone()
         }
     }
@@ -809,7 +872,6 @@ mod tests {
 
     /// Builds a single `REBUTTAL_ID`/`RULING`/`REASON` block for use inside
     /// [`verdict_response`]'s `rulings` slice.
-    #[allow(dead_code)] // no target test in this file currently needs a ruling block
     fn ruling_block(id: &str, accepted: bool, reason: &str) -> String {
         format!(
             "REBUTTAL_ID: {}\nRULING: {}\nREASON: {}",
@@ -1120,6 +1182,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn debate_divergence_check_compares_opening_against_opponent_attack_after_decomposition()
+    {
+        // Regression: when round 1's opponent attack triggers a decomposition
+        // detour, `query_opponent_attack_with_decomposition` pushes an
+        // intermediate "Proponent (round 1 decomposition)" entry into the
+        // transcript before the opponent's actual (post-decomposition) attack
+        // is pushed. The divergence check must compare the proponent's
+        // opening against that actual attack — not against the proponent's
+        // own decomposition response that now sits at transcript[1].
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let input = base_input(OrchestrationStrategy::Debate(config));
+
+        let gateway = ScriptedGateway::new();
+        gateway.respond(
+            Model::Gpt53Codex,
+            "Opening: caching and retry policy should share one config knob.",
+        );
+        gateway.respond(
+            Model::Gemini31Pro,
+            "DECOMPOSE_REQUEST: caching and retry policy should share one config knob",
+        );
+        gateway.respond(
+            Model::Gpt53Codex,
+            "Sub-claim 1: caching should be a single knob.\nSub-claim 2: retry policy should be a single knob.",
+        );
+        gateway.respond(
+            Model::Gemini31Pro,
+            "CLAIM: retry policy as a single knob\nEVIDENCE: it hides per-endpoint backoff needs\nSEVERITY: MINOR",
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "DIVERGENT: YES\n\nThey disagree on whether one knob suffices.",
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "VERDICT: SETTLED\n\nSplit the knobs.",
+        );
+
+        let gateway = Arc::new(gateway);
+        DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::clone(&gateway) as Arc<dyn LlmGateway>,
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let moderator_prompts = gateway.sent_prompts(Model::ClaudeSonnet45);
+        let divergence_prompt = moderator_prompts
+            .first()
+            .expect("moderator should have been queried for the divergence check first");
+        assert!(
+            divergence_prompt.contains("CLAIM: retry policy as a single knob"),
+            "divergence check must see the opponent's actual (post-decomposition) attack: {}",
+            divergence_prompt
+        );
+        assert!(
+            !divergence_prompt.contains("Sub-claim 1: caching should be a single knob"),
+            "divergence check must not see the proponent's own decomposition response: {}",
+            divergence_prompt
+        );
+    }
+
+    #[tokio::test]
     async fn debate_second_decomposition_request_in_same_round_is_ignored() {
         // The opponent tries to request decomposition twice in the same
         // round (after already getting one). The second request must be
@@ -1247,6 +1376,9 @@ mod tests {
     /// Builds a common fixture: opponent raises one CRITICAL rebuttal and the
     /// moderator declares `SETTLED` in round 1 without ruling on it — i.e. the
     /// moderator tries to settle early while a critical objection is still open.
+    ///
+    /// Paired with `debate_config(_, 1)` this makes round 1 the *final*
+    /// round, so the escalation this triggers has `can_continue = false`.
     fn escalation_gateway() -> ScriptedGateway {
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
@@ -1266,9 +1398,37 @@ mod tests {
         gateway
     }
 
+    /// Same round-1 premature-settle setup as [`escalation_gateway`], but
+    /// paired with `debate_config(_, 2)` so round 1 is *not* final —
+    /// `can_continue = true`. Scripts a round 2 that resolves the R1-1
+    /// objection and settles cleanly, so tests can assert the debate
+    /// actually continues (rather than aborting) after the escalation is
+    /// declined in round 1.
+    fn escalation_continues_gateway() -> ScriptedGateway {
+        let gateway = escalation_gateway();
+        gateway.respond(
+            Model::Gpt53Codex,
+            "Defense round 2: adds a cache warmer to mitigate the TTL gap.",
+        );
+        gateway.respond(Model::Gemini31Pro, "No further rebuttal.");
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            verdict_response(
+                true,
+                &[ruling_block(
+                    "R1-1",
+                    false,
+                    "cache warmer mitigates the TTL gap",
+                )],
+                "Write-through wins with a cache warmer.",
+            ),
+        );
+        gateway
+    }
+
     #[tokio::test]
-    async fn debate_early_settle_with_unresolved_critical_objection_is_auto_rejected() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+    async fn debate_early_settle_reject_at_final_round_aborts() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
         // RunQuorumInput::new() defaults to HilMode::AutoReject.
         let input = base_input(OrchestrationStrategy::Debate(config));
 
@@ -1284,6 +1444,82 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, RunQuorumError::DebateEscalationRejected(_)));
+    }
+
+    #[tokio::test]
+    async fn debate_early_settle_reject_at_non_final_round_continues_debate() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        // RunQuorumInput::new() defaults to HilMode::AutoReject — but at a
+        // non-final round that now means "decline the early settle and keep
+        // debating", not "abort".
+        let input = base_input(OrchestrationStrategy::Debate(config));
+
+        let result = DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(escalation_continues_gateway()),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result
+                .synthesis
+                .conclusion
+                .contains("Write-through wins with a cache warmer."),
+            "unexpected conclusion: {}",
+            result.synthesis.conclusion
+        );
+    }
+
+    #[tokio::test]
+    async fn debate_escalation_transcript_summary_is_truncated_to_budget() {
+        // Regression: debate_strategy.rs used to pass the full, unbounded
+        // render_transcript() output as `transcript_summary` — a single TUI
+        // modal line, or CLI dump, of the entire debate. It must be
+        // head+tail truncated to TRANSCRIPT_SUMMARY_MAX_BYTES instead.
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let input =
+            base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
+        let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Approve)));
+
+        let gateway = ScriptedGateway::new();
+        gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
+        // A very long EVIDENCE line pushes the rendered transcript well past
+        // the budget by the time escalation fires.
+        let long_evidence = "x".repeat(TRANSCRIPT_SUMMARY_MAX_BYTES * 2);
+        gateway.respond(
+            Model::Gemini31Pro,
+            format!(
+                "CLAIM: write-through never expires\nEVIDENCE: {}\nSEVERITY: CRITICAL",
+                long_evidence
+            ),
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "DIVERGENT: YES\n\nThey disagree on TTL handling.",
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "VERDICT: SETTLED\n\nWrite-through wins.",
+        );
+
+        DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(gateway),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                Some(handler.clone() as Arc<dyn HumanInterventionPort>),
+            )
+            .await
+            .unwrap();
+
+        let lens = handler.transcript_summary_lens.lock().unwrap();
+        assert_eq!(*lens, vec![TRANSCRIPT_SUMMARY_MAX_BYTES]);
     }
 
     #[tokio::test]
@@ -1325,7 +1561,7 @@ mod tests {
         assert!(payload.approved);
         assert_eq!(payload.votes.len(), 2);
         assert_eq!(payload.votes[0].verdict, VoteVerdict::Abstain);
-        assert!(payload.votes[0].reasoning.starts_with("[R1-1]"));
+        assert!(payload.votes[0].reasoning.starts_with("[R1-1][unresolved]"));
         assert!(
             payload.votes[0]
                 .reasoning
@@ -1358,8 +1594,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debate_interactive_escalation_reject_aborts_execute() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+    async fn debate_interactive_escalation_reject_at_final_round_aborts_execute() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
         let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Reject)));
@@ -1376,12 +1612,49 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(*handler.calls.lock().unwrap(), 1);
+        assert_eq!(
+            handler.can_continue_calls.lock().unwrap().as_slice(),
+            &[false]
+        );
         assert!(matches!(err, RunQuorumError::DebateEscalationRejected(_)));
     }
 
     #[tokio::test]
-    async fn debate_interactive_without_handler_falls_back_to_reject() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+    async fn debate_interactive_escalation_reject_at_non_final_round_continues_debate() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let input =
+            base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
+        let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Reject)));
+
+        let result = DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(escalation_continues_gateway()),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                Some(handler.clone() as Arc<dyn HumanInterventionPort>),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(*handler.calls.lock().unwrap(), 1);
+        assert_eq!(
+            handler.can_continue_calls.lock().unwrap().as_slice(),
+            &[true]
+        );
+        assert!(
+            result
+                .synthesis
+                .conclusion
+                .contains("Write-through wins with a cache warmer."),
+            "unexpected conclusion: {}",
+            result.synthesis.conclusion
+        );
+    }
+
+    #[tokio::test]
+    async fn debate_interactive_without_handler_falls_back_to_reject_at_final_round() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
 
@@ -1397,6 +1670,34 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, RunQuorumError::DebateEscalationRejected(_)));
+    }
+
+    #[tokio::test]
+    async fn debate_interactive_without_handler_falls_back_to_reject_at_non_final_round_continues()
+    {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let input =
+            base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
+
+        let result = DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(escalation_continues_gateway()),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result
+                .synthesis
+                .conclusion
+                .contains("Write-through wins with a cache warmer."),
+            "unexpected conclusion: {}",
+            result.synthesis.conclusion
+        );
     }
 
     #[tokio::test]

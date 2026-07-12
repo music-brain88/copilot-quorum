@@ -83,6 +83,7 @@ impl HumanInterventionPort for TuiHumanIntervention {
         question: &str,
         unresolved: &[Objection],
         transcript_summary: &str,
+        can_continue: bool,
     ) -> Result<HumanDecision, HumanInterventionError> {
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -91,6 +92,7 @@ impl HumanInterventionPort for TuiHumanIntervention {
                 question: question.to_string(),
                 unresolved: unresolved.to_vec(),
                 transcript_summary: transcript_summary.to_string(),
+                can_continue,
             },
             response_tx,
         };

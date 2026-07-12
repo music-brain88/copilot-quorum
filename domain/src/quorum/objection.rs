@@ -114,17 +114,28 @@ impl ObjectionLedger {
     /// Apply the moderator's ruling to an objection by ID.
     ///
     /// `ruling: true` means the objection was conceded (upheld);
-    /// `ruling: false` means it was refuted (rejected). No-op if the ID
-    /// is not found.
-    pub fn apply_ruling(&mut self, id: &str, ruling: bool, reason: impl Into<String>) {
-        if let Some(objection) = self.objections.iter_mut().find(|o| o.id == id) {
-            objection.status = if ruling {
-                ObjectionStatus::Conceded
-            } else {
-                ObjectionStatus::Refuted
-            };
-            objection.ruling_reason = Some(reason.into());
+    /// `ruling: false` means it was refuted (rejected).
+    ///
+    /// Only applies when the objection is still `Unresolved` — a later
+    /// round's moderator re-ruling on the same `REBUTTAL_ID` does not
+    /// silently overwrite an already-`Conceded`/`Refuted` verdict from an
+    /// earlier round. Returns `true` if the ruling was applied, `false` if
+    /// the ID was not found or the objection was already resolved (the
+    /// caller may want to log a warning on `false`).
+    pub fn apply_ruling(&mut self, id: &str, ruling: bool, reason: impl Into<String>) -> bool {
+        let Some(objection) = self.objections.iter_mut().find(|o| o.id == id) else {
+            return false;
+        };
+        if objection.status != ObjectionStatus::Unresolved {
+            return false;
         }
+        objection.status = if ruling {
+            ObjectionStatus::Conceded
+        } else {
+            ObjectionStatus::Refuted
+        };
+        objection.ruling_reason = Some(reason.into());
+        true
     }
 
     /// All objections in the ledger, in insertion order.
@@ -192,7 +203,7 @@ mod tests {
     fn apply_ruling_conceded() {
         let mut ledger = ObjectionLedger::new();
         let id = ledger.add(1, "claim", "evidence", ObjectionSeverity::Major);
-        ledger.apply_ruling(&id, true, "critic's evidence is solid");
+        assert!(ledger.apply_ruling(&id, true, "critic's evidence is solid"));
 
         let objection = ledger.all().iter().find(|o| o.id == id).unwrap();
         assert_eq!(objection.status, ObjectionStatus::Conceded);
@@ -206,7 +217,7 @@ mod tests {
     fn apply_ruling_refuted() {
         let mut ledger = ObjectionLedger::new();
         let id = ledger.add(1, "claim", "evidence", ObjectionSeverity::Minor);
-        ledger.apply_ruling(&id, false, "already addressed in round 1");
+        assert!(ledger.apply_ruling(&id, false, "already addressed in round 1"));
 
         let objection = ledger.all().iter().find(|o| o.id == id).unwrap();
         assert_eq!(objection.status, ObjectionStatus::Refuted);
@@ -216,10 +227,30 @@ mod tests {
     fn apply_ruling_unknown_id_is_noop() {
         let mut ledger = ObjectionLedger::new();
         ledger.add(1, "claim", "evidence", ObjectionSeverity::Major);
-        ledger.apply_ruling("R99-1", true, "does not exist");
+        assert!(!ledger.apply_ruling("R99-1", true, "does not exist"));
 
         // Original objection remains unresolved; nothing panics.
         assert_eq!(ledger.open_objections().len(), 1);
+    }
+
+    #[test]
+    fn apply_ruling_already_resolved_is_ignored() {
+        // A later round's moderator re-mentioning the same REBUTTAL_ID must
+        // not silently overwrite an already-decided ruling.
+        let mut ledger = ObjectionLedger::new();
+        let id = ledger.add(1, "claim", "evidence", ObjectionSeverity::Major);
+        assert!(ledger.apply_ruling(&id, false, "refuted in round 1"));
+
+        // A conflicting re-ruling on the same ID is rejected...
+        assert!(!ledger.apply_ruling(&id, true, "conceded in round 2 — should not stick"));
+
+        // ...and the original ruling is untouched.
+        let objection = ledger.all().iter().find(|o| o.id == id).unwrap();
+        assert_eq!(objection.status, ObjectionStatus::Refuted);
+        assert_eq!(
+            objection.ruling_reason.as_deref(),
+            Some("refuted in round 1")
+        );
     }
 
     #[test]
