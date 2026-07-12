@@ -10,10 +10,12 @@ mod interaction_scheduler;
 use self::interaction_scheduler::{InteractionScheduler, PendingRestart, RequestAction};
 use super::event::{RoutedTuiEvent, TuiCommand, TuiEvent};
 use super::progress::TuiProgressBridge;
+use futures::FutureExt;
 use quorum_application::use_cases::agent_controller::TaskCompletion;
 use quorum_application::{AgentController, CommandAction, build_partial_context_prefix};
 use quorum_domain::AgentState;
 use quorum_domain::interaction::{InteractionForm, InteractionId};
+use std::panic::AssertUnwindSafe;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -45,8 +47,8 @@ pub(super) async fn controller_task(
             // Handle completed tasks (spawns + inline executions)
             Some(res) = tasks.join_next() => {
                 match res {
-                    Ok((iid, generation, completion)) => {
-                        let cancelled_state = completion.cancelled_state.clone();
+                    Ok((iid, generation, mut completion)) => {
+                        let cancelled_state = completion.cancelled_state.take();
                         controller.finalize(completion);
                         if let Some((new_generation, pending)) = scheduler.complete(iid, generation) {
                             spawn_pending(
@@ -61,7 +63,14 @@ pub(super) async fn controller_task(
                         }
                     }
                     Err(e) => {
-                        // Task panic or cancellation
+                        // Genuine `JoinError` (task aborted, or — in
+                        // principle — a panic from outside the
+                        // `catch_unwind` guard every task body is now
+                        // wrapped in below, which shouldn't happen). Unlike
+                        // a guarded panic, this carries no `(InteractionId,
+                        // generation)`, so the scheduler entry for whichever
+                        // interaction owned this task can't be cleared here
+                        // — it stays "busy" until the tab closes.
                         if e.is_cancelled() {
                             // ignore
                         } else {
@@ -148,8 +157,17 @@ pub(super) async fn controller_task(
                                 let tx = progress_tx.clone();
 
                                 tasks.spawn(async move {
-                                    let progress = TuiProgressBridge::for_interaction(tx, child_id);
-                                    let completion = context.execute(Some(child_id), form, clean_query, full_query, &progress).await;
+                                    let progress = TuiProgressBridge::for_interaction(tx.clone(), child_id);
+                                    let query_for_panic = clean_query.clone();
+                                    let fut = context.execute(Some(child_id), form, clean_query, full_query, &progress);
+                                    let (completion, panic_message) =
+                                        catch_panic(Some(child_id), form, query_for_panic, fut).await;
+                                    if let Some(message) = panic_message {
+                                        let _ = tx.send(RoutedTuiEvent::for_interaction(
+                                            child_id,
+                                            TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
+                                        ));
+                                    }
                                     // `child_id` is always freshly allocated, so this task never
                                     // participates in Cancel & Replace; generation `0` is a fixed
                                     // placeholder the scheduler safely ignores on completion.
@@ -176,10 +194,17 @@ pub(super) async fn controller_task(
                         let context = controller.build_spawn_context_for(root_id);
                         let tx = progress_tx.clone();
                         tasks.spawn(async move {
-                            let progress = TuiProgressBridge::for_interaction(tx, root_id);
-                            let completion = context
-                                .execute(Some(root_id), form, label, material, &progress)
-                                .await;
+                            let progress = TuiProgressBridge::for_interaction(tx.clone(), root_id);
+                            let query_for_panic = label.clone();
+                            let fut = context.execute(Some(root_id), form, label, material, &progress);
+                            let (completion, panic_message) =
+                                catch_panic(Some(root_id), form, query_for_panic, fut).await;
+                            if let Some(message) = panic_message {
+                                let _ = tx.send(RoutedTuiEvent::for_interaction(
+                                    root_id,
+                                    TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
+                                ));
+                            }
                             // Root spawns get a brand new `root_id` too — not subject to
                             // Cancel & Replace, hence the same fixed `0` generation.
                             (root_id, 0, completion)
@@ -216,10 +241,16 @@ fn spawn_inline(
     let context = controller.build_spawn_context_for(iid);
     let tx = progress_tx.clone();
     tasks.spawn(async move {
-        let progress = TuiProgressBridge::for_interaction(tx, iid);
-        let completion = context
-            .execute(None, form, clean_query, full_query, &progress)
-            .await;
+        let progress = TuiProgressBridge::for_interaction(tx.clone(), iid);
+        let query_for_panic = clean_query.clone();
+        let fut = context.execute(None, form, clean_query, full_query, &progress);
+        let (completion, panic_message) = catch_panic(None, form, query_for_panic, fut).await;
+        if let Some(message) = panic_message {
+            let _ = tx.send(RoutedTuiEvent::for_interaction(
+                iid,
+                TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
+            ));
+        }
         (iid, generation, completion)
     });
 }
@@ -282,10 +313,214 @@ fn spawn_inline_with_partial_context(
     let context = controller.build_spawn_context_for(iid);
     let tx = progress_tx.clone();
     tasks.spawn(async move {
-        let progress = TuiProgressBridge::for_interaction(tx, iid);
-        let completion = context
-            .execute(None, form, clean_query, full_query, &progress)
-            .await;
+        let progress = TuiProgressBridge::for_interaction(tx.clone(), iid);
+        let query_for_panic = clean_query.clone();
+        let fut = context.execute(None, form, clean_query, full_query, &progress);
+        let (completion, panic_message) = catch_panic(None, form, query_for_panic, fut).await;
+        if let Some(message) = panic_message {
+            let _ = tx.send(RoutedTuiEvent::for_interaction(
+                iid,
+                TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
+            ));
+        }
         (iid, generation, completion)
     });
+}
+
+/// Runs `fut` to completion, catching a panic and converting it into a
+/// synthetic [`TaskCompletion`] (`result: None`, `cancelled_state: None`)
+/// instead of letting it unwind out of the spawned task.
+///
+/// Without this, a panicking task only surfaced as a bare `JoinError` at
+/// `tasks.join_next()`, which carries no `(InteractionId, generation)` — so
+/// `scheduler.complete` was never called for it: the scheduler entry for the
+/// interaction never cleared, and every future input to it was deferred
+/// forever (issue #318). Returns the panic's message alongside the
+/// completion so the caller can surface it to the user.
+async fn catch_panic(
+    interaction_id: Option<InteractionId>,
+    form: InteractionForm,
+    query: String,
+    fut: impl std::future::Future<Output = TaskCompletion> + Send,
+) -> (TaskCompletion, Option<String>) {
+    match AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(completion) => (completion, None),
+        Err(payload) => (
+            TaskCompletion {
+                interaction_id,
+                form,
+                query,
+                result: None,
+                cancelled_state: None,
+            },
+            // `&*payload`, not `&payload`: `Box<dyn Any + Send>` is itself
+            // `Any + Send` (blanket impl), so `&payload` would coerce to
+            // `&(dyn Any + Send)` by unsizing the *outer* Box rather than
+            // dereferencing to the panic value it holds — every downcast_ref
+            // in `panic_payload_message` would then silently miss.
+            Some(panic_payload_message(&*payload)),
+        ),
+    }
+}
+
+/// Best-effort extraction of a human-readable message from a panic payload
+/// (`std::panic::catch_unwind`'s error type carries no guaranteed structure —
+/// only the two conventional payload types produced by `panic!` are handled).
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(n: usize) -> InteractionId {
+        InteractionId(n)
+    }
+
+    #[tokio::test]
+    async fn catch_panic_passes_through_successful_completion() {
+        let completion = TaskCompletion {
+            interaction_id: None,
+            form: InteractionForm::Agent,
+            query: "hello".to_string(),
+            result: None,
+            cancelled_state: None,
+        };
+        let fut = async { completion };
+
+        let (completion, message) =
+            catch_panic(None, InteractionForm::Agent, "hello".to_string(), fut).await;
+
+        assert_eq!(completion.query, "hello");
+        assert!(message.is_none());
+    }
+
+    #[tokio::test]
+    async fn catch_panic_recovers_from_panic_with_message() {
+        let fut = async {
+            panic!("boom");
+            #[allow(unreachable_code)]
+            TaskCompletion {
+                interaction_id: None,
+                form: InteractionForm::Agent,
+                query: String::new(),
+                result: None,
+                cancelled_state: None,
+            }
+        };
+
+        let (completion, message) = catch_panic(
+            Some(id(1)),
+            InteractionForm::Agent,
+            "original request".to_string(),
+            fut,
+        )
+        .await;
+
+        assert_eq!(completion.interaction_id, Some(id(1)));
+        assert_eq!(completion.form, InteractionForm::Agent);
+        assert_eq!(completion.query, "original request");
+        assert!(completion.result.is_none());
+        assert!(completion.cancelled_state.is_none());
+        assert!(message.unwrap().contains("boom"));
+    }
+
+    /// Regression for issue #318 (finding ①): before this fix, a panicking
+    /// task never called `scheduler.complete`, so the scheduler's generation
+    /// entry for the interaction never cleared and every later request for
+    /// it was deferred forever. This reproduces the exact sequence
+    /// `controller_task`'s `join_next` Ok arm now drives — panic recovery via
+    /// `catch_panic`, then feeding the recovered completion's generation into
+    /// `scheduler.complete` — and checks the interaction goes back to idle
+    /// (no pending request) rather than staying stuck.
+    #[tokio::test]
+    async fn panicking_task_still_lets_scheduler_return_to_idle() {
+        let mut scheduler = InteractionScheduler::new();
+        let iid = id(1);
+
+        assert_eq!(
+            scheduler.request(iid, InteractionForm::Agent, "first".to_string()),
+            RequestAction::SpawnNow(1)
+        );
+
+        let panicking = async {
+            panic!("boom");
+            #[allow(unreachable_code)]
+            TaskCompletion {
+                interaction_id: None,
+                form: InteractionForm::Agent,
+                query: String::new(),
+                result: None,
+                cancelled_state: None,
+            }
+        };
+        let (completion, message) =
+            catch_panic(None, InteractionForm::Agent, "first".to_string(), panicking).await;
+        assert!(completion.result.is_none());
+        assert!(message.is_some());
+
+        // No request was deferred while generation 1 was running, so
+        // completing it marks the interaction idle again.
+        assert_eq!(scheduler.complete(iid, 1), None);
+
+        // Idle: the SAME interaction id must be able to spawn immediately —
+        // before the fix, the scheduler's entry for `iid` was never cleared,
+        // so this would have incorrectly deferred.
+        assert_eq!(
+            scheduler.request(iid, InteractionForm::Agent, "second".to_string()),
+            RequestAction::SpawnNow(1)
+        );
+    }
+
+    /// Same as above, but a request arrived (and was deferred) while the
+    /// now-panicking task was running: the panic recovery must still drive
+    /// Cancel & Replace's promotion, not just leave the interaction idle.
+    #[tokio::test]
+    async fn panicking_task_still_promotes_pending_request() {
+        let mut scheduler = InteractionScheduler::new();
+        let iid = id(7);
+
+        assert_eq!(
+            scheduler.request(iid, InteractionForm::Agent, "first".to_string()),
+            RequestAction::SpawnNow(1)
+        );
+        assert_eq!(
+            scheduler.request(iid, InteractionForm::Agent, "second".to_string()),
+            RequestAction::Deferred
+        );
+
+        let panicking = async {
+            panic!("boom");
+            #[allow(unreachable_code)]
+            TaskCompletion {
+                interaction_id: None,
+                form: InteractionForm::Agent,
+                query: String::new(),
+                result: None,
+                cancelled_state: None,
+            }
+        };
+        let (completion, _message) =
+            catch_panic(None, InteractionForm::Agent, "first".to_string(), panicking).await;
+        assert!(completion.result.is_none());
+
+        let promoted = scheduler.complete(iid, 1);
+        assert_eq!(
+            promoted,
+            Some((
+                2,
+                PendingRestart {
+                    form: InteractionForm::Agent,
+                    request: "second".to_string(),
+                }
+            ))
+        );
+    }
 }
