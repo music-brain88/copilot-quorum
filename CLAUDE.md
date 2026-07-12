@@ -288,6 +288,7 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 
 **Config Key Sections** (all mutable at runtime):
 - `agent.*` — consensus_level, phase_scope, strategy, hil_mode, max_plan_revisions
+- `debate.*` — models, max_rounds, intensity, allow_interjection（Debate 戦略のロースター/パラメータ。`QuorumConfig` が `DebateConfig` を独立保持するため `agent.strategy` の quorum⇔debate 往復でも失われない。`debate.models` が空なら `models.participants` にフォールバック — #325）
 - `models.*` — exploration, decision, review, participants, moderator, ask
 - `execution.*` — max_iterations, max_tool_turns
 - `output.*` — format, color

@@ -34,6 +34,22 @@ quorum.config.set("agent.hil_mode", "interactive")
 -- Maximum plan revisions before human intervention (default: 3)
 -- quorum.config.set("agent.max_plan_revisions", 3)
 
+-- ==================== Debate Strategy ====================
+-- Roster/parameters for the Debate strategy (agent.strategy = "debate", #325).
+-- Persisted independently of agent.strategy, so these survive a
+-- quorum <-> debate round-trip.
+
+-- Debate roster: first two are proponent/opponent, the rest are optional
+-- interjectors (only used if allow_interjection is true).
+-- Leave unset (default: {}) to fall back to models.participants.
+-- quorum.config.set("debate.models", { "gpt-5.3-codex", "claude-sonnet-4.5", "gemini-3.1-pro-preview" })
+-- Maximum number of debate rounds (default: 3)
+-- quorum.config.set("debate.max_rounds", 3)
+-- Debate intensity: "mild" (collaborative pushback) or "strong" (aggressive challenge) (default: "mild")
+-- quorum.config.set("debate.intensity", "mild")
+-- Allow third-party models (roster[2..]) to interject during rounds (default: false)
+-- quorum.config.set("debate.allow_interjection", false)
+
 -- ==================== Output ====================
 
 -- Output format: "full", "synthesis", or "json" (default: synthesis)

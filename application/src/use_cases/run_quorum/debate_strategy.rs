@@ -1373,6 +1373,58 @@ mod tests {
         assert!(matches!(err, RunQuorumError::NotEnoughModelsForDebate(1)));
     }
 
+    #[tokio::test]
+    async fn debate_roster_falls_back_to_model_config_participants_when_empty() {
+        // DebateConfig.models is empty (its default, since #325) — roster()
+        // must fall back to ModelConfig.participants rather than erroring.
+        let config = DebateConfig {
+            models: vec![],
+            moderator: Some(Model::ClaudeSonnet45),
+            intensity: DebateIntensity::Strong,
+            allow_interjection: false,
+            max_rounds: 1,
+        };
+        let models = ModelConfig {
+            participants: vec![Model::Gpt53Codex, Model::Gemini31Pro],
+            ..ModelConfig::default()
+        };
+        let input =
+            RunQuorumInput::new("Should the cache be write-through or write-behind?", models)
+                .with_strategy(OrchestrationStrategy::Debate(config));
+
+        let gateway = ScriptedGateway::new();
+        gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
+        gateway.respond(Model::Gemini31Pro, "Attack round 1: latency matters more.");
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            divergence_response(true, "They disagree on consistency vs. latency tradeoffs."),
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            verdict_response(true, &[], "Write-through wins."),
+        );
+
+        let result = DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(gateway),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.models,
+            vec![
+                Model::Gpt53Codex.to_string(),
+                Model::Gemini31Pro.to_string()
+            ]
+        );
+        assert_eq!(result.responses[0].model, Model::Gpt53Codex.to_string());
+    }
+
     /// Builds a common fixture: opponent raises one CRITICAL rebuttal and the
     /// moderator declares `SETTLED` in round 1 without ruling on it — i.e. the
     /// moderator tries to settle early while a critical objection is still open.

@@ -631,16 +631,16 @@ impl AgentController {
 
         match args.split_whitespace().next().unwrap_or("") {
             "quorum" | "q" => {
-                self.config().mode_mut().strategy = quorum_domain::OrchestrationStrategy::default();
+                self.config().use_quorum_strategy();
                 let _ = self.tx.send(UiEvent::StrategyChanged {
                     strategy: "quorum".to_string(),
                     description: "equal discussion + review + synthesis".to_string(),
                 });
             }
             "debate" | "d" => {
-                self.config().mode_mut().strategy = quorum_domain::OrchestrationStrategy::Debate(
-                    quorum_domain::DebateConfig::default(),
-                );
+                // Carries over any persisted `debate.*` settings rather than
+                // resetting to `DebateConfig::default()` (#325).
+                self.config().use_debate_strategy();
                 let _ = self.tx.send(UiEvent::StrategyChanged {
                     strategy: "debate".to_string(),
                     description: "adversarial discussion + consensus building".to_string(),

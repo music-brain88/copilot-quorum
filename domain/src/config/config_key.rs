@@ -36,7 +36,7 @@ pub fn lookup_key(key: &str) -> Option<&'static ConfigKeyInfo> {
     KNOWN_KEYS.iter().find(|k| k.key == key)
 }
 
-static KNOWN_KEYS: [ConfigKeyInfo; 30] = [
+static KNOWN_KEYS: [ConfigKeyInfo; 34] = [
     // ==================== agent.* (SessionMode + AgentPolicy) ====================
     ConfigKeyInfo {
         key: "agent.consensus_level",
@@ -65,6 +65,31 @@ static KNOWN_KEYS: [ConfigKeyInfo; 30] = [
     ConfigKeyInfo {
         key: "agent.max_plan_revisions",
         description: "Maximum plan revision attempts",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    // ==================== debate.* (DebateConfig) ====================
+    ConfigKeyInfo {
+        key: "debate.models",
+        description: "Debate roster (empty falls back to models.participants)",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    ConfigKeyInfo {
+        key: "debate.max_rounds",
+        description: "Maximum number of debate rounds",
+        mutability: Mutability::Mutable,
+        valid_values: &[],
+    },
+    ConfigKeyInfo {
+        key: "debate.intensity",
+        description: "Debate intensity: mild or strong",
+        mutability: Mutability::Mutable,
+        valid_values: &["mild", "strong"],
+    },
+    ConfigKeyInfo {
+        key: "debate.allow_interjection",
+        description: "Whether third-party models can interject during the debate",
         mutability: Mutability::Mutable,
         valid_values: &[],
     },
@@ -254,12 +279,12 @@ mod tests {
 
     #[test]
     fn test_all_keys_mutable() {
-        // All 30 keys are mutable
+        // All 34 keys are mutable
         let mutable: Vec<_> = known_keys()
             .iter()
             .filter(|k| k.mutability == Mutability::Mutable)
             .collect();
-        assert_eq!(mutable.len(), 30);
+        assert_eq!(mutable.len(), 34);
     }
 
     #[test]
@@ -269,6 +294,16 @@ mod tests {
             .filter(|k| k.mutability == Mutability::ReadOnly)
             .collect();
         assert_eq!(readonly.len(), 0);
+    }
+
+    #[test]
+    fn test_debate_keys() {
+        assert!(lookup_key("debate.models").is_some());
+        assert!(lookup_key("debate.max_rounds").is_some());
+        let intensity = lookup_key("debate.intensity").unwrap();
+        assert!(intensity.valid_values.contains(&"mild"));
+        assert!(intensity.valid_values.contains(&"strong"));
+        assert!(lookup_key("debate.allow_interjection").is_some());
     }
 
     #[test]

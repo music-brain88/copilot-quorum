@@ -24,7 +24,8 @@ Rust defaults  →  init.lua  →  plugins/*.lua (アルファベット順)  →
 ```
 
 後段が前段を上書きします。CLI フラグ（`--ensemble` 等）が最優先です。
-設定全体は `QuorumConfig`（4型コンテナ: SessionMode / ModelConfig / AgentPolicy / ExecutionParams）で管理され、
+設定全体は `QuorumConfig`（SessionMode / ModelConfig / AgentPolicy / ExecutionParams に加え、
+Debate 戦略専用の DebateConfig を保持）で管理され、
 `AgentController` と `LuaScriptingEngine` が `Arc<Mutex<QuorumConfig>>` を共有するため、
 Lua からの変更は runtime でエージェントに伝播します。
 
@@ -32,7 +33,7 @@ Lua からの変更は runtime でエージェントに伝播します。
 
 ## Configuration Keys / 設定キー一覧
 
-`quorum.config.set(key, value)` / `quorum.config.get(key)` で読み書きできる全 29 キー。
+`quorum.config.set(key, value)` / `quorum.config.get(key)` で読み書きできる全 34 キー。
 すべて runtime で変更可能です。
 
 ### `agent.*` — エージェント動作
@@ -57,6 +58,24 @@ settle チェックポイントでも）このモードでゲートされます:
 fail-secure）。`auto_approve` は未解決のまま強制的に settle し、`interactive`
 は `HumanInterventionPort::request_debate_escalation` 経由で都度ユーザーに
 判断を委ねます。
+
+### `debate.*` — Debate 戦略のロースター/パラメータ（#325）
+
+| キー | 型 | 値 | デフォルト |
+|------|-----|-----|-----------|
+| `debate.models` | StringList | Debate のロースター（先頭2つが proponent/opponent、3つ目以降は interjector 候補） | `[]`（空の場合は `models.participants` にフォールバック） |
+| `debate.max_rounds` | Integer | 最大討議ラウンド数 | `3` |
+| `debate.intensity` | String | `"mild"`, `"strong"` | `"mild"` |
+| `debate.allow_interjection` | Boolean | 第三者モデルの割り込み発言を許可するか | `false` |
+
+`debate.*` の設定値は `agent.strategy` を `quorum` ⇔ `debate` と切り替えても失われません
+（`QuorumConfig` が `DebateConfig` を独立に保持し、`debate` へ切り替えるたびにその値を
+引き継ぎます）。設定する順序（`debate.*` を先に設定してから `agent.strategy = "debate"`
+にする／その逆）はどちらでも同じ結果になります。
+
+`debate.models` を空のままにした場合、`DebateStrategyExecutor::roster()` が
+`models.participants` にフォールバックします — Debate 専用のロースターを別途用意しなくても、
+Quorum Discussion と同じ参加モデル構成で討議できます。
 
 ### `models.*` — ロール別モデル設定
 
@@ -313,4 +332,4 @@ quorum.tui.content.slots()
 - [How to Write Lua Plugins](../how-to/write-lua-plugins.md) - プラグイン作成手順
 - [Tutorial: Customizing with Lua](../tutorials/customizing-with-lua.md) - 入門チュートリアル
 
-<!-- LLM Context: 設定は Lua (init.lua + plugins/*.lua) のみ。TOML (quorum.toml) 基盤は撤去済み。Boot: Rust defaults → init.lua → plugins → CLI flags。全30キー runtime 変更可能: agent.*(5), models.*(6), execution.*(2), output.*(2), repl.*(2), context_budget.*(3), tui.input.*(7), tui.layout.*(2), supervisor.*(1)。QuorumConfig(application/src/config/quorum_config.rs) が4型コンテナ(SessionMode/ModelConfig/AgentPolicy/ExecutionParams)。AgentController と LuaScriptingEngine が Arc<Mutex<QuorumConfig>> を共有し runtime 伝播。Lua API: quorum.config/{get,set,keys}+metatable proxy, quorum.providers.{set_default,route,bedrock,anthropic,openai}, quorum.tools.register, quorum.keymap.set, quorum.command.register, quorum.on, quorum.tui.{routes,layout,content}。 -->
+<!-- LLM Context: 設定は Lua (init.lua + plugins/*.lua) のみ。TOML (quorum.toml) 基盤は撤去済み。Boot: Rust defaults → init.lua → plugins → CLI flags。全34キー runtime 変更可能: agent.*(5), debate.*(4), models.*(6), execution.*(2), output.*(2), repl.*(2), context_budget.*(3), tui.input.*(7), tui.layout.*(2), supervisor.*(1)。QuorumConfig(application/src/config/quorum_config.rs) が SessionMode/ModelConfig/AgentPolicy/ExecutionParams に加え DebateConfig を保持(agent.strategy の quorum⇔debate 往復でも debate.* を保持するため、#325)。AgentController と LuaScriptingEngine が Arc<Mutex<QuorumConfig>> を共有し runtime 伝播。Lua API: quorum.config/{get,set,keys}+metatable proxy, quorum.providers.{set_default,route,bedrock,anthropic,openai}, quorum.tools.register, quorum.keymap.set, quorum.command.register, quorum.on, quorum.tui.{routes,layout,content}。 -->

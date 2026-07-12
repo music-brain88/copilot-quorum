@@ -89,7 +89,10 @@ impl std::fmt::Display for OrchestrationStrategy {
 /// opposing positions, moderated by an optional moderator model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DebateConfig {
-    /// Models participating in the debate
+    /// Models participating in the debate. Empty by default — falls back to
+    /// `ModelConfig.participants` at runtime (see `DebateStrategyExecutor::roster()`
+    /// in `application/src/use_cases/run_quorum/debate_strategy.rs`) so a debate
+    /// roster doesn't need its own hardcoded default (#325).
     pub models: Vec<Model>,
     /// Optional moderator to guide the debate
     pub moderator: Option<Model>,
@@ -104,7 +107,7 @@ pub struct DebateConfig {
 impl Default for DebateConfig {
     fn default() -> Self {
         Self {
-            models: Model::default_models(),
+            models: vec![],
             moderator: None,
             intensity: DebateIntensity::default(),
             allow_interjection: false,
@@ -171,6 +174,13 @@ mod tests {
         let strategy = OrchestrationStrategy::Debate(DebateConfig::default());
         let phases = strategy.phases();
         assert_eq!(phases.len(), 3);
+    }
+
+    #[test]
+    fn test_debate_config_default_models_is_empty() {
+        // Empty by default so `DebateStrategyExecutor::roster()` falls back to
+        // `ModelConfig.participants` (#325) instead of a hardcoded roster.
+        assert!(DebateConfig::default().models.is_empty());
     }
 
     #[test]
