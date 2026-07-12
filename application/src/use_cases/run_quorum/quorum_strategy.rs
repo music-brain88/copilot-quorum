@@ -6,6 +6,8 @@
 
 use super::strategy_executor::StrategyExecutor;
 use super::types::{RunQuorumError, RunQuorumInput};
+use crate::ports::event_publisher::EventPublisher;
+use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::{GatewayError, LlmGateway, StreamObserver};
 use crate::ports::progress::ProgressNotifier;
 use async_trait::async_trait;
@@ -347,6 +349,10 @@ impl StrategyExecutor for QuorumStrategyExecutor {
         input: &RunQuorumInput,
         gateway: Arc<dyn LlmGateway>,
         progress: &dyn ProgressNotifier,
+        // Not wired up yet for Quorum — vote/event publishing for this strategy
+        // is out of scope for this change (see `StrategyExecutor::execute` docs).
+        _event_publisher: Arc<dyn EventPublisher>,
+        _human_intervention: Option<Arc<dyn HumanInterventionPort>>,
     ) -> Result<QuorumResult, RunQuorumError> {
         // Phase 1: Initial Query
         let responses = self.phase_initial(&gateway, input, progress).await?;
@@ -389,6 +395,7 @@ impl StrategyExecutor for QuorumStrategyExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::event_publisher::NoEventPublisher;
     use crate::ports::progress::NoProgress;
     use crate::use_cases::run_quorum::test_support::ScriptedGateway;
     use quorum_domain::ModelConfig;
@@ -411,7 +418,13 @@ mod tests {
         gateway.respond(Model::ClaudeSonnet45, "Final synthesis: use write-through.");
 
         let result = QuorumStrategyExecutor::new()
-            .execute(&input(models), Arc::new(gateway), &NoProgress)
+            .execute(
+                &input(models),
+                Arc::new(gateway),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
             .await
             .unwrap();
 
@@ -439,6 +452,8 @@ mod tests {
                 &input(models).without_review(),
                 Arc::new(gateway),
                 &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
             )
             .await
             .unwrap();
@@ -455,7 +470,13 @@ mod tests {
         let gateway = ScriptedGateway::new();
 
         let err = QuorumStrategyExecutor::new()
-            .execute(&input(models), Arc::new(gateway), &NoProgress)
+            .execute(
+                &input(models),
+                Arc::new(gateway),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
             .await
             .unwrap_err();
 

@@ -18,6 +18,8 @@ pub use quorum_strategy::QuorumStrategyExecutor;
 pub use strategy_executor::StrategyExecutor;
 pub use types::{RunQuorumError, RunQuorumInput};
 
+use crate::ports::event_publisher::{EventPublisher, NoEventPublisher};
+use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::{NoProgress, ProgressNotifier};
 use quorum_domain::{OrchestrationStrategy, QuorumResult};
@@ -27,11 +29,30 @@ use tracing::info;
 /// Use case for running a Quorum discussion
 pub struct RunQuorumUseCase {
     gateway: Arc<dyn LlmGateway>,
+    event_publisher: Arc<dyn EventPublisher>,
+    human_intervention: Option<Arc<dyn HumanInterventionPort>>,
 }
 
 impl RunQuorumUseCase {
     pub fn new(gateway: Arc<dyn LlmGateway>) -> Self {
-        Self { gateway }
+        Self {
+            gateway,
+            event_publisher: Arc::new(NoEventPublisher),
+            human_intervention: None,
+        }
+    }
+
+    /// Set the typed event publisher (the seam for `quorum_result` etc.).
+    pub fn with_event_publisher(mut self, publisher: Arc<dyn EventPublisher>) -> Self {
+        self.event_publisher = publisher;
+        self
+    }
+
+    /// Set a human intervention handler for strategies that need to escalate
+    /// to a human when automated resolution stalls (e.g. Debate deadlocks).
+    pub fn with_human_intervention(mut self, intervention: Arc<dyn HumanInterventionPort>) -> Self {
+        self.human_intervention = Some(intervention);
+        self
     }
 
     /// Execute the use case with default (no-op) progress
@@ -56,15 +77,29 @@ impl RunQuorumUseCase {
         );
 
         let gateway = Arc::clone(&self.gateway);
+        let event_publisher = Arc::clone(&self.event_publisher);
+        let human_intervention = self.human_intervention.clone();
         match &input.strategy {
             OrchestrationStrategy::Quorum(_) => {
                 QuorumStrategyExecutor::new()
-                    .execute(&input, gateway, progress)
+                    .execute(
+                        &input,
+                        gateway,
+                        progress,
+                        event_publisher,
+                        human_intervention,
+                    )
                     .await
             }
             OrchestrationStrategy::Debate(_) => {
                 DebateStrategyExecutor::new()
-                    .execute(&input, gateway, progress)
+                    .execute(
+                        &input,
+                        gateway,
+                        progress,
+                        event_publisher,
+                        human_intervention,
+                    )
                     .await
             }
         }

@@ -87,8 +87,9 @@ pub use tool::{
 
 // Re-export quorum types
 pub use quorum::{
-    ConsensusOutcome, ConsensusRound, QUORUM_RESULT_API_VERSION, QUORUM_RESULT_EVENT_TYPE,
-    QuorumResultPayload, QuorumRule, QuorumTarget, QuorumTopic, Vote, VoteResult, VoteVerdict,
+    ConsensusOutcome, ConsensusRound, Objection, ObjectionLedger, ObjectionSeverity,
+    ObjectionStatus, QUORUM_RESULT_API_VERSION, QUORUM_RESULT_EVENT_TYPE, QuorumResultPayload,
+    QuorumRule, QuorumTarget, QuorumTopic, Vote, VoteResult, VoteVerdict,
     parse_final_review_response, parse_review_response, parse_vote_score,
 };
 

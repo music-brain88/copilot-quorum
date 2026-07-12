@@ -56,6 +56,7 @@
 //! ```
 
 pub mod consensus;
+pub mod objection;
 pub mod parsing;
 pub mod result_event;
 pub mod rule;
@@ -63,6 +64,7 @@ pub mod vote;
 
 // Re-export main types
 pub use consensus::{ConsensusOutcome, ConsensusRound};
+pub use objection::{Objection, ObjectionLedger, ObjectionSeverity, ObjectionStatus};
 pub use parsing::{parse_final_review_response, parse_review_response, parse_vote_score};
 pub use result_event::{
     QUORUM_RESULT_API_VERSION, QUORUM_RESULT_EVENT_TYPE, QuorumResultPayload, QuorumTarget,

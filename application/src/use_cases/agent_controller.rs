@@ -118,6 +118,10 @@ pub struct AgentController {
     /// The current composite event publisher, rebuilt whenever the logger,
     /// scripting engine, or extra subscribers change.
     event_publisher: Arc<dyn EventPublisher>,
+    /// Human-in-the-loop port, propagated to `RunQuorumUseCase` instances
+    /// built for `/discuss` (both inline and `SpawnContext`) so debate
+    /// escalation checkpoints can prompt the user (issue #316).
+    human_intervention: Arc<dyn HumanInterventionPort>,
 }
 
 impl AgentController {
@@ -151,7 +155,7 @@ impl AgentController {
                 tool_schema,
                 context_loader.clone(),
             )
-            .with_human_intervention(human_intervention)
+            .with_human_intervention(human_intervention.clone())
             .with_status_tracker(status_tracker.clone()),
             ask_use_case,
             review_use_case,
@@ -170,6 +174,7 @@ impl AgentController {
             status_tracker,
             extra_event_subscribers: Vec::new(),
             event_publisher: Arc::new(NoEventPublisher),
+            human_intervention,
         }
     }
 
@@ -974,6 +979,7 @@ impl AgentController {
             scripting_engine: self.scripting_engine.clone(),
             status_tracker: self.status_tracker.clone(),
             event_publisher: self.event_publisher.clone(),
+            human_intervention: self.human_intervention.clone(),
         }
     }
 
@@ -1183,6 +1189,7 @@ pub struct SpawnContext {
     pub(crate) scripting_engine: Arc<dyn ScriptingEnginePort>,
     pub(crate) status_tracker: Arc<StatusTracker>,
     pub(crate) event_publisher: Arc<dyn EventPublisher>,
+    pub(crate) human_intervention: Arc<dyn HumanInterventionPort>,
 }
 
 /// Completion result of a task (spawn or inline execution)
@@ -1281,7 +1288,9 @@ impl SpawnContext {
     ) -> Option<InteractionResult> {
         let _ = self.tx.send(UiEvent::QuorumStarting);
         let input = self.config.to_quorum_input(query.to_string());
-        let use_case = RunQuorumUseCase::new(self.gateway.clone());
+        let use_case = RunQuorumUseCase::new(self.gateway.clone())
+            .with_event_publisher(self.event_publisher.clone())
+            .with_human_intervention(self.human_intervention.clone());
         let adapter = QuorumProgressAdapter::new(progress);
         match use_case.execute_with_progress(input, &adapter).await {
             Ok(output) => {

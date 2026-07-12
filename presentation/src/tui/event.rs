@@ -3,6 +3,7 @@
 //! Defines the commands sent TO the controller task and the events
 //! coming FROM it (via UiEvent channel and progress bridge).
 
+use quorum_domain::quorum::Objection;
 use quorum_domain::{
     AgentPhase, ConsensusLevel, ContextMode, HumanDecision, InteractionForm, InteractionId, Plan,
     ReviewRound, StreamContext,
@@ -223,6 +224,14 @@ pub enum HilKind {
     ExecutionConfirmation {
         request: String,
         plan: Plan,
+    },
+    /// Debate strategy round-limit escalation — unresolved objections remain
+    /// after the moderator ran out of checkpoint rounds (see
+    /// `HumanInterventionPort::request_debate_escalation`).
+    DebateEscalation {
+        question: String,
+        unresolved: Vec<Objection>,
+        transcript_summary: String,
     },
 }
 

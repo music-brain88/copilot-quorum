@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use quorum_application::ports::human_intervention::{
     HumanInterventionError, HumanInterventionPort,
 };
+use quorum_domain::quorum::Objection;
 use quorum_domain::{HumanDecision, Plan, ReviewRound};
 use tokio::sync::{mpsc, oneshot};
 
@@ -64,6 +65,32 @@ impl HumanInterventionPort for TuiHumanIntervention {
             kind: HilKind::ExecutionConfirmation {
                 request: request.to_string(),
                 plan: plan.clone(),
+            },
+            response_tx,
+        };
+
+        self.hil_tx
+            .send(hil_request)
+            .map_err(|_| HumanInterventionError::IoError("TUI channel closed".to_string()))?;
+
+        response_rx.await.map_err(|_| {
+            HumanInterventionError::IoError("TUI response channel dropped".to_string())
+        })
+    }
+
+    async fn request_debate_escalation(
+        &self,
+        question: &str,
+        unresolved: &[Objection],
+        transcript_summary: &str,
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        let hil_request = HilRequest {
+            kind: HilKind::DebateEscalation {
+                question: question.to_string(),
+                unresolved: unresolved.to_vec(),
+                transcript_summary: transcript_summary.to_string(),
             },
             response_tx,
         };

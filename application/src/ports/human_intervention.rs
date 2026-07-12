@@ -139,6 +139,34 @@ pub trait HumanInterventionPort: Send + Sync {
     ) -> Result<HumanDecision, HumanInterventionError> {
         Ok(HumanDecision::Approve)
     }
+
+    /// Request human escalation when a Debate strategy run cannot resolve
+    /// all objections (e.g. unresolved objections remain at `max_rounds`).
+    ///
+    /// Called when the `Debate` orchestration strategy reaches its round
+    /// limit with open [`quorum_domain::quorum::Objection`]s still
+    /// unresolved by the moderator.
+    ///
+    /// # Arguments
+    ///
+    /// * `question` - The original question/topic being debated
+    /// * `unresolved` - The objections that remain unresolved
+    /// * `transcript_summary` - A condensed summary of the debate transcript
+    ///
+    /// # Default
+    ///
+    /// Defaults to `Reject` (fail-secure). This matches the philosophy of
+    /// [`AutoRejectIntervention`]: an unresolved adversarial debate should
+    /// not silently proceed. Override in interactive implementations to
+    /// prompt the user, or in [`AutoApproveIntervention`] to bypass.
+    async fn request_debate_escalation(
+        &self,
+        _question: &str,
+        _unresolved: &[quorum_domain::quorum::Objection],
+        _transcript_summary: &str,
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        Ok(HumanDecision::Reject)
+    }
 }
 
 /// Auto-reject implementation for `HilMode::AutoReject`.
@@ -182,6 +210,21 @@ impl HumanInterventionPort for AutoApproveIntervention {
         _request: &str,
         _plan: &Plan,
         _review_history: &[ReviewRound],
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        Ok(HumanDecision::Approve)
+    }
+
+    /// # Warning
+    ///
+    /// **Use with caution!** This bypasses the fail-secure default and
+    /// approves proceeding even though the Debate strategy could not
+    /// resolve all objections. Only use when the consequences of
+    /// proceeding despite unresolved objections are acceptable.
+    async fn request_debate_escalation(
+        &self,
+        _question: &str,
+        _unresolved: &[quorum_domain::quorum::Objection],
+        _transcript_summary: &str,
     ) -> Result<HumanDecision, HumanInterventionError> {
         Ok(HumanDecision::Approve)
     }
@@ -231,6 +274,44 @@ mod tests {
         let plan = Plan::new("test", "test");
         let result = intervention
             .request_execution_confirmation("test", &plan)
+            .await
+            .unwrap();
+        assert!(matches!(result, HumanDecision::Approve));
+    }
+
+    fn sample_objection() -> quorum_domain::quorum::Objection {
+        let mut ledger = quorum_domain::quorum::ObjectionLedger::new();
+        let id = ledger.add(
+            1,
+            "The plan ignores concurrent writes",
+            "See race in step 3",
+            quorum_domain::quorum::ObjectionSeverity::Major,
+        );
+        ledger
+            .open_objections()
+            .into_iter()
+            .find(|o| o.id == id)
+            .cloned()
+            .expect("objection should exist after add")
+    }
+
+    #[tokio::test]
+    async fn test_auto_reject_debate_escalation_defaults_to_reject() {
+        let intervention = AutoRejectIntervention;
+        let objection = sample_objection();
+        let result = intervention
+            .request_debate_escalation("test question", &[objection], "transcript summary")
+            .await
+            .unwrap();
+        assert!(matches!(result, HumanDecision::Reject));
+    }
+
+    #[tokio::test]
+    async fn test_auto_approve_debate_escalation_returns_approve() {
+        let intervention = AutoApproveIntervention;
+        let objection = sample_objection();
+        let result = intervention
+            .request_debate_escalation("test question", &[objection], "transcript summary")
             .await
             .unwrap();
         assert!(matches!(result, HumanDecision::Approve));

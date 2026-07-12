@@ -1,7 +1,7 @@
 //! Input/error types for the RunQuorum use case.
 
 use crate::ports::llm_gateway::GatewayError;
-use quorum_domain::{ModelConfig, OrchestrationStrategy, Question};
+use quorum_domain::{HilMode, ModelConfig, OrchestrationStrategy, Question};
 use thiserror::Error;
 
 /// Errors that can occur during Quorum execution
@@ -21,6 +21,15 @@ pub enum RunQuorumError {
 
     #[error("Gateway error: {0}")]
     GatewayError(#[from] GatewayError),
+
+    #[error("Debate escalation rejected by human: {0}")]
+    DebateEscalationRejected(String),
+
+    #[error("Operation cancelled")]
+    Cancelled,
+
+    #[error("Human intervention failed: {0}")]
+    HumanInterventionFailed(String),
 }
 
 /// Input for the RunQuorum use case
@@ -34,6 +43,8 @@ pub struct RunQuorumInput {
     pub enable_review: bool,
     /// Which orchestration strategy drives this discussion
     pub strategy: OrchestrationStrategy,
+    /// Human-in-the-loop mode for debate escalation checkpoints
+    pub hil_mode: HilMode,
 }
 
 impl RunQuorumInput {
@@ -43,6 +54,9 @@ impl RunQuorumInput {
             models,
             enable_review: true,
             strategy: OrchestrationStrategy::default(),
+            // Safe-by-default: avoid surprising auto-approvals for callers that
+            // don't explicitly opt into a HiL mode.
+            hil_mode: HilMode::AutoReject,
         }
     }
 
@@ -53,6 +67,11 @@ impl RunQuorumInput {
 
     pub fn with_strategy(mut self, strategy: OrchestrationStrategy) -> Self {
         self.strategy = strategy;
+        self
+    }
+
+    pub fn with_hil_mode(mut self, mode: HilMode) -> Self {
+        self.hil_mode = mode;
         self
     }
 }

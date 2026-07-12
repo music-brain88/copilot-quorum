@@ -333,6 +333,7 @@ impl QuorumConfig {
         let question_str: String = question.into();
         RunQuorumInput::new(question_str, self.models.clone())
             .with_strategy(self.mode.strategy.clone())
+            .with_hil_mode(self.policy.hil_mode)
     }
 }
 
