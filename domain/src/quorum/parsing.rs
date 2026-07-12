@@ -486,10 +486,13 @@ pub fn parse_moderator_rulings(text: &str) -> Vec<(String, bool, String)> {
 /// `DIVERGENT: YES` or `DIVERGENT: NO` line, followed by either the shared
 /// premise (if not divergent) or a note on what diverges (if divergent).
 ///
-/// Conservative: if the first line doesn't clearly declare `DIVERGENT: YES`,
-/// this returns `divergent = false` — an ambiguous or malformed response is
-/// treated as "no divergence detected" rather than triggering a possibly
-/// unwarranted decomposition.
+/// Conservative: if the first line doesn't clearly declare `DIVERGENT: NO`,
+/// this returns `divergent = true` — the caller only takes action (running
+/// the extra contrarian-brief LLM call, and folding the raw response text
+/// into the prompt as a "shared premise") when it reads `divergent = false`.
+/// An ambiguous or malformed response should not silently trigger that
+/// extra work just because the moderator ignored the format; "no action"
+/// is the safe default here, not "divergence detected".
 ///
 /// # Returns
 ///
@@ -519,7 +522,7 @@ pub fn parse_divergence_check(text: &str) -> (bool, String) {
     let first_upper = first_line.to_uppercase();
 
     if !first_upper.contains("DIVERGENT") {
-        return (false, text.trim().to_string());
+        return (true, text.trim().to_string());
     }
 
     let divergent = first_upper.contains("YES") && !first_upper.contains("NO");
@@ -1002,9 +1005,11 @@ REASON: second";
     }
 
     #[test]
-    fn test_divergence_check_missing_format_defaults_to_not_divergent() {
+    fn test_divergence_check_missing_format_defaults_to_divergent() {
+        // Fail-secure: an unparseable response must not silently trigger the
+        // contrarian-brief detour (see doc comment on parse_divergence_check).
         let (divergent, note) = parse_divergence_check("The two sides seem to agree overall.");
-        assert!(!divergent);
+        assert!(divergent);
         assert_eq!(note, "The two sides seem to agree overall.");
     }
 
