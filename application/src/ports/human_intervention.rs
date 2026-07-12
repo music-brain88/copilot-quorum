@@ -140,30 +140,40 @@ pub trait HumanInterventionPort: Send + Sync {
         Ok(HumanDecision::Approve)
     }
 
-    /// Request human escalation when a Debate strategy run cannot resolve
-    /// all objections (e.g. unresolved objections remain at `max_rounds`).
+    /// Request human escalation when a Debate strategy moderator tries to
+    /// settle while critical/major [`quorum_domain::quorum::Objection`]s
+    /// remain unresolved.
     ///
-    /// Called when the `Debate` orchestration strategy reaches its round
-    /// limit with open [`quorum_domain::quorum::Objection`]s still
-    /// unresolved by the moderator.
+    /// Called at *every* settle checkpoint gated this way — not only the
+    /// final round. An early premature settle attempt and the final round
+    /// forcing a settle both route through here; `can_continue` tells the
+    /// implementation which one it's showing the user.
     ///
     /// # Arguments
     ///
     /// * `question` - The original question/topic being debated
     /// * `unresolved` - The objections that remain unresolved
     /// * `transcript_summary` - A condensed summary of the debate transcript
+    /// * `can_continue` - `true` if this is a non-final round: rejecting
+    ///   declines the premature settle and the debate continues to the next
+    ///   round. `false` if this is the final round (`max_rounds` reached):
+    ///   rejecting aborts the debate entirely, since there is no next round
+    ///   to continue to.
     ///
     /// # Default
     ///
     /// Defaults to `Reject` (fail-secure). This matches the philosophy of
     /// [`AutoRejectIntervention`]: an unresolved adversarial debate should
-    /// not silently proceed. Override in interactive implementations to
-    /// prompt the user, or in [`AutoApproveIntervention`] to bypass.
+    /// not silently settle. When `can_continue` is `true`, `Reject` simply
+    /// continues the debate rather than aborting it. Override in interactive
+    /// implementations to prompt the user, or in [`AutoApproveIntervention`]
+    /// to bypass.
     async fn request_debate_escalation(
         &self,
         _question: &str,
         _unresolved: &[quorum_domain::quorum::Objection],
         _transcript_summary: &str,
+        _can_continue: bool,
     ) -> Result<HumanDecision, HumanInterventionError> {
         Ok(HumanDecision::Reject)
     }
@@ -225,6 +235,7 @@ impl HumanInterventionPort for AutoApproveIntervention {
         _question: &str,
         _unresolved: &[quorum_domain::quorum::Objection],
         _transcript_summary: &str,
+        _can_continue: bool,
     ) -> Result<HumanDecision, HumanInterventionError> {
         Ok(HumanDecision::Approve)
     }
@@ -300,7 +311,7 @@ mod tests {
         let intervention = AutoRejectIntervention;
         let objection = sample_objection();
         let result = intervention
-            .request_debate_escalation("test question", &[objection], "transcript summary")
+            .request_debate_escalation("test question", &[objection], "transcript summary", true)
             .await
             .unwrap();
         assert!(matches!(result, HumanDecision::Reject));
@@ -311,7 +322,7 @@ mod tests {
         let intervention = AutoApproveIntervention;
         let objection = sample_objection();
         let result = intervention
-            .request_debate_escalation("test question", &[objection], "transcript summary")
+            .request_debate_escalation("test question", &[objection], "transcript summary", true)
             .await
             .unwrap();
         assert!(matches!(result, HumanDecision::Approve));

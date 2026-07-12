@@ -40,6 +40,7 @@ pub(super) fn handle_hil_request(
             question,
             unresolved,
             transcript_summary,
+            can_continue,
         } => (
             "Debate Requires Human Ruling".to_string(),
             question.clone(),
@@ -54,11 +55,19 @@ pub(super) fn handle_hil_request(
                     format!("[{}] ({}) {}", o.id, severity, o.claim)
                 })
                 .collect(),
-            format!(
-                "{} unresolved objection(s). {} Approve to force a decision, reject to abort.",
-                unresolved.len(),
-                transcript_summary
-            ),
+            if *can_continue {
+                format!(
+                    "{} unresolved objection(s). Moderator wants to settle early. {} Approve to force a decision, reject to continue the debate.",
+                    unresolved.len(),
+                    transcript_summary
+                )
+            } else {
+                format!(
+                    "{} unresolved objection(s) at the round limit. {} Approve to force a decision, reject to abort.",
+                    unresolved.len(),
+                    transcript_summary
+                )
+            },
         ),
     };
 
@@ -151,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_hil_request_builds_prompt_for_debate_escalation() {
+    fn handle_hil_request_builds_prompt_for_debate_escalation_at_final_round() {
         let mut state = TuiState::new();
         let (response_tx, _response_rx) = oneshot::channel();
         let pending_hil_tx = Arc::new(Mutex::new(None));
@@ -161,6 +170,7 @@ mod tests {
                 question: "Should we ship the migration?".to_string(),
                 unresolved: vec![sample_objection()],
                 transcript_summary: "3 rounds, 1 objection remains".to_string(),
+                can_continue: false,
             },
             response_tx,
         };
@@ -174,7 +184,33 @@ mod tests {
         assert!(prompt.tasks[0].contains("MAJOR"));
         assert!(prompt.tasks[0].contains("The plan ignores concurrent writes"));
         assert!(prompt.message.contains("1 unresolved objection"));
+        assert!(prompt.message.contains("round limit"));
+        assert!(prompt.message.contains("reject to abort"));
         assert!(prompt.message.contains("3 rounds, 1 objection remains"));
+        assert!(pending_hil_tx.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn handle_hil_request_builds_prompt_for_debate_escalation_at_early_settle() {
+        let mut state = TuiState::new();
+        let (response_tx, _response_rx) = oneshot::channel();
+        let pending_hil_tx = Arc::new(Mutex::new(None));
+
+        let request = HilRequest {
+            kind: HilKind::DebateEscalation {
+                question: "Should we ship the migration?".to_string(),
+                unresolved: vec![sample_objection()],
+                transcript_summary: "1 round, 1 objection remains".to_string(),
+                can_continue: true,
+            },
+            response_tx,
+        };
+
+        handle_hil_request(&mut state, &pending_hil_tx, request);
+
+        let prompt = state.hil_prompt.expect("hil_prompt should be set");
+        assert!(prompt.message.contains("settle early"));
+        assert!(prompt.message.contains("reject to continue the debate"));
         assert!(pending_hil_tx.lock().unwrap().is_some());
     }
 

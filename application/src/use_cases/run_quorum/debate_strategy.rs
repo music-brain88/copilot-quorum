@@ -193,6 +193,12 @@ impl DebateStrategyExecutor {
     /// final round) is reached while critical/major objections are still
     /// unresolved.
     ///
+    /// `can_continue` is `true` for a non-final round (a `Reject` decision
+    /// declines the premature settle and the debate continues) and `false`
+    /// at the final round (a `Reject` decision aborts the debate, since
+    /// there is no next round to continue to) — see the caller's match on
+    /// the returned `HumanDecision`.
+    ///
     /// This mirrors `RunAgentUseCase::handle_human_intervention`
     /// (`run_agent/hil.rs`) so the three `HilMode` branches behave
     /// consistently across use cases:
@@ -200,12 +206,14 @@ impl DebateStrategyExecutor {
     /// - `AutoApprove` — force the settlement through, loudly logged.
     /// - `Interactive` — defer to `HumanInterventionPort::request_debate_escalation`
     ///   if one is configured, otherwise fall back to `AutoReject`'s behavior.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_debate_escalation(
         hil_mode: HilMode,
         human_intervention: Option<&Arc<dyn HumanInterventionPort>>,
         question: &str,
         unresolved: &[Objection],
         transcript_summary: &str,
+        can_continue: bool,
     ) -> Result<HumanDecision, RunQuorumError> {
         match hil_mode {
             HilMode::AutoReject => {
@@ -225,7 +233,12 @@ impl DebateStrategyExecutor {
             HilMode::Interactive => {
                 if let Some(intervention) = human_intervention {
                     intervention
-                        .request_debate_escalation(question, unresolved, transcript_summary)
+                        .request_debate_escalation(
+                            question,
+                            unresolved,
+                            transcript_summary,
+                            can_continue,
+                        )
                         .await
                         .map_err(|e| match e {
                             HumanInterventionError::Cancelled => RunQuorumError::Cancelled,
@@ -603,6 +616,7 @@ impl StrategyExecutor for DebateStrategyExecutor {
                     question,
                     &unresolved,
                     &Self::render_transcript(&transcript),
+                    !is_final_round,
                 )
                 .await?;
 
@@ -628,11 +642,24 @@ impl StrategyExecutor for DebateStrategyExecutor {
                         break;
                     }
                     HumanDecision::Reject | HumanDecision::Edit(_) => {
-                        return Err(RunQuorumError::DebateEscalationRejected(format!(
-                            "{} unresolved critical/major objection(s) at round {}",
-                            unresolved.len(),
-                            round
-                        )));
+                        if is_final_round {
+                            return Err(RunQuorumError::DebateEscalationRejected(format!(
+                                "{} unresolved critical/major objection(s) at round {}",
+                                unresolved.len(),
+                                round
+                            )));
+                        }
+                        // Non-final round: the natural response to a
+                        // premature settle attempt is to decline it and keep
+                        // debating, not to kill the whole run — fall through
+                        // to the same transcript note a normal
+                        // VERDICT: CONTINUE round would get, and proceed to
+                        // round + 1.
+                        info!(
+                            "Debate escalation declined at round {} — continuing rather than settling ({} unresolved critical/major objection(s))",
+                            round,
+                            unresolved.len()
+                        );
                     }
                 }
             }
@@ -733,10 +760,12 @@ mod tests {
     use std::sync::Mutex;
 
     /// Mock `HumanInterventionPort` that returns a pre-configured
-    /// (`request_debate_escalation`-only) outcome and counts invocations.
+    /// (`request_debate_escalation`-only) outcome and records each
+    /// invocation's `can_continue` flag (in call order) alongside the count.
     struct MockEscalationHandler {
         outcome: Result<HumanDecision, HumanInterventionError>,
         calls: Mutex<usize>,
+        can_continue_calls: Mutex<Vec<bool>>,
     }
 
     impl MockEscalationHandler {
@@ -744,6 +773,7 @@ mod tests {
             Self {
                 outcome,
                 calls: Mutex::new(0),
+                can_continue_calls: Mutex::new(Vec::new()),
             }
         }
     }
@@ -764,8 +794,10 @@ mod tests {
             _question: &str,
             _unresolved: &[Objection],
             _transcript_summary: &str,
+            can_continue: bool,
         ) -> Result<HumanDecision, HumanInterventionError> {
             *self.calls.lock().unwrap() += 1;
+            self.can_continue_calls.lock().unwrap().push(can_continue);
             self.outcome.clone()
         }
     }
@@ -817,7 +849,6 @@ mod tests {
 
     /// Builds a single `REBUTTAL_ID`/`RULING`/`REASON` block for use inside
     /// [`verdict_response`]'s `rulings` slice.
-    #[allow(dead_code)] // no target test in this file currently needs a ruling block
     fn ruling_block(id: &str, accepted: bool, reason: &str) -> String {
         format!(
             "REBUTTAL_ID: {}\nRULING: {}\nREASON: {}",
@@ -1322,6 +1353,9 @@ mod tests {
     /// Builds a common fixture: opponent raises one CRITICAL rebuttal and the
     /// moderator declares `SETTLED` in round 1 without ruling on it — i.e. the
     /// moderator tries to settle early while a critical objection is still open.
+    ///
+    /// Paired with `debate_config(_, 1)` this makes round 1 the *final*
+    /// round, so the escalation this triggers has `can_continue = false`.
     fn escalation_gateway() -> ScriptedGateway {
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
@@ -1341,9 +1375,37 @@ mod tests {
         gateway
     }
 
+    /// Same round-1 premature-settle setup as [`escalation_gateway`], but
+    /// paired with `debate_config(_, 2)` so round 1 is *not* final —
+    /// `can_continue = true`. Scripts a round 2 that resolves the R1-1
+    /// objection and settles cleanly, so tests can assert the debate
+    /// actually continues (rather than aborting) after the escalation is
+    /// declined in round 1.
+    fn escalation_continues_gateway() -> ScriptedGateway {
+        let gateway = escalation_gateway();
+        gateway.respond(
+            Model::Gpt53Codex,
+            "Defense round 2: adds a cache warmer to mitigate the TTL gap.",
+        );
+        gateway.respond(Model::Gemini31Pro, "No further rebuttal.");
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            verdict_response(
+                true,
+                &[ruling_block(
+                    "R1-1",
+                    false,
+                    "cache warmer mitigates the TTL gap",
+                )],
+                "Write-through wins with a cache warmer.",
+            ),
+        );
+        gateway
+    }
+
     #[tokio::test]
-    async fn debate_early_settle_with_unresolved_critical_objection_is_auto_rejected() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+    async fn debate_early_settle_reject_at_final_round_aborts() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
         // RunQuorumInput::new() defaults to HilMode::AutoReject.
         let input = base_input(OrchestrationStrategy::Debate(config));
 
@@ -1359,6 +1421,35 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, RunQuorumError::DebateEscalationRejected(_)));
+    }
+
+    #[tokio::test]
+    async fn debate_early_settle_reject_at_non_final_round_continues_debate() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        // RunQuorumInput::new() defaults to HilMode::AutoReject — but at a
+        // non-final round that now means "decline the early settle and keep
+        // debating", not "abort".
+        let input = base_input(OrchestrationStrategy::Debate(config));
+
+        let result = DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(escalation_continues_gateway()),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result
+                .synthesis
+                .conclusion
+                .contains("Write-through wins with a cache warmer."),
+            "unexpected conclusion: {}",
+            result.synthesis.conclusion
+        );
     }
 
     #[tokio::test]
@@ -1433,8 +1524,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debate_interactive_escalation_reject_aborts_execute() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+    async fn debate_interactive_escalation_reject_at_final_round_aborts_execute() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
         let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Reject)));
@@ -1451,12 +1542,47 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(*handler.calls.lock().unwrap(), 1);
+        assert_eq!(handler.can_continue_calls.lock().unwrap().as_slice(), &[
+            false
+        ]);
         assert!(matches!(err, RunQuorumError::DebateEscalationRejected(_)));
     }
 
     #[tokio::test]
-    async fn debate_interactive_without_handler_falls_back_to_reject() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+    async fn debate_interactive_escalation_reject_at_non_final_round_continues_debate() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let input =
+            base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
+        let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Reject)));
+
+        let result = DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(escalation_continues_gateway()),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                Some(handler.clone() as Arc<dyn HumanInterventionPort>),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(*handler.calls.lock().unwrap(), 1);
+        assert_eq!(handler.can_continue_calls.lock().unwrap().as_slice(), &[
+            true
+        ]);
+        assert!(
+            result
+                .synthesis
+                .conclusion
+                .contains("Write-through wins with a cache warmer."),
+            "unexpected conclusion: {}",
+            result.synthesis.conclusion
+        );
+    }
+
+    #[tokio::test]
+    async fn debate_interactive_without_handler_falls_back_to_reject_at_final_round() {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
 
@@ -1472,6 +1598,34 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, RunQuorumError::DebateEscalationRejected(_)));
+    }
+
+    #[tokio::test]
+    async fn debate_interactive_without_handler_falls_back_to_reject_at_non_final_round_continues()
+     {
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let input =
+            base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
+
+        let result = DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(escalation_continues_gateway()),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result
+                .synthesis
+                .conclusion
+                .contains("Write-through wins with a cache warmer."),
+            "unexpected conclusion: {}",
+            result.synthesis.conclusion
+        );
     }
 
     #[tokio::test]
