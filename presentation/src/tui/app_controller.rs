@@ -104,6 +104,7 @@ pub(super) async fn controller_task(
                                 spawn_inline(&mut controller, &mut tasks, &progress_tx, iid, generation, InteractionForm::Agent, request);
                             }
                             RequestAction::Deferred => {
+                                notify_deferred(&progress_tx, iid);
                                 // A task for this interaction is already running:
                                 // cancel it now. Its completion drives `scheduler.complete`
                                 // above, which promotes this deferred request (Cancel & Replace).
@@ -135,6 +136,7 @@ pub(super) async fn controller_task(
                                         spawn_inline(&mut controller, &mut tasks, &progress_tx, iid, generation, form, query);
                                     }
                                     RequestAction::Deferred => {
+                                        notify_deferred(&progress_tx, iid);
                                         controller.cancel_interaction(iid);
                                     }
                                 }
@@ -240,6 +242,20 @@ pub(super) async fn controller_task(
             }
         }
     }
+}
+
+/// Notify the interaction's tab that a new request arrived while its
+/// previous task was still running: the running task is being cancelled now,
+/// and this request will replace it once that finishes (Cancel & Replace,
+/// issue #212). Before this, the `Deferred` branch gave no UI feedback at
+/// all — the request just silently waited (issue #318).
+fn notify_deferred(progress_tx: &mpsc::UnboundedSender<RoutedTuiEvent>, iid: InteractionId) {
+    let _ = progress_tx.send(RoutedTuiEvent::for_interaction(
+        iid,
+        TuiEvent::Flash(
+            "実行中のタスクをキャンセル中… 完了後にこのリクエストを実行します".to_string(),
+        ),
+    ));
 }
 
 /// Spawn an inline (no tree node) or command-execute task for `iid`, tagging

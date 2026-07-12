@@ -1283,6 +1283,16 @@ impl SpawnContext {
     ///
     /// `None` leaves the inherited (root) token in place. Passing a per-interaction
     /// child token makes this execution cancellable independently (issue #282).
+    ///
+    /// **Known limitation (issue #318):** only `agent_use_case` is wired to
+    /// the token here — `ask_use_case` and `review_use_case` never see it, and
+    /// Discuss has no per-execution cancellation hook at all. So when the
+    /// in-flight task for an interaction is Ask/Discuss/Review, Cancel &
+    /// Replace's "cancel now" step (`AgentController::cancel_interaction`) is a
+    /// no-op: the replacement request stays deferred until that task finishes
+    /// on its own instead of being cancelled immediately. Wiring cancellation
+    /// into Ask/Discuss/Review is future work, tracked in the PR that
+    /// introduced this comment rather than as a new issue.
     pub fn with_cancellation(mut self, token: Option<CancellationToken>) -> Self {
         if let Some(token) = token {
             self.agent_use_case = self.agent_use_case.with_cancellation(token);
