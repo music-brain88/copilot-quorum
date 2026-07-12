@@ -28,8 +28,9 @@ use crate::use_cases::run_quorum::RunQuorumInput;
 use quorum_domain::agent::validation::{ConfigIssue, Severity};
 use quorum_domain::config::config_key::lookup_key;
 use quorum_domain::{
-    AgentPolicy, ConsensusLevel, HilMode, Model, ModelConfig, OrchestrationStrategy, OutputFormat,
-    PhaseScope, ProviderConfig, SessionMode, SupervisorReporterMode,
+    AgentPolicy, ConsensusLevel, DebateConfig, DebateIntensity, HilMode, Model, ModelConfig,
+    OrchestrationStrategy, OutputFormat, PhaseScope, ProviderConfig, SessionMode,
+    SupervisorReporterMode,
 };
 
 /// Configuration container for buffer controllers.
@@ -43,6 +44,10 @@ pub struct QuorumConfig {
     models: ModelConfig,
     policy: AgentPolicy,
     execution: ExecutionParams,
+    // Persisted independently of `mode.strategy` so `debate.*` settings
+    // survive round-trips through `agent.strategy` (quorum <-> debate, #325)
+    // instead of being reset to `DebateConfig::default()` every switch.
+    debate_config: DebateConfig,
     output_format: OutputFormat,
     color: bool,
     show_progress: bool,
@@ -70,6 +75,7 @@ impl Default for QuorumConfig {
             models: ModelConfig::default(),
             policy: AgentPolicy::default(),
             execution: ExecutionParams::default(),
+            debate_config: DebateConfig::default(),
             output_format: OutputFormat::default(),
             color: true,
             show_progress: true,
@@ -102,6 +108,7 @@ impl QuorumConfig {
             models,
             policy,
             execution,
+            debate_config: DebateConfig::default(),
             output_format: OutputFormat::default(),
             color: true,
             show_progress: true,
@@ -140,6 +147,39 @@ impl QuorumConfig {
     /// Mutable access to model configuration.
     pub fn models_mut(&mut self) -> &mut ModelConfig {
         &mut self.models
+    }
+
+    /// Debate strategy roster/parameters (`debate.*` config keys, #325).
+    /// Persisted independently of `mode.strategy` — see [`Self::use_debate_strategy`].
+    pub fn debate_config(&self) -> &DebateConfig {
+        &self.debate_config
+    }
+
+    /// Mutable access to debate strategy configuration.
+    pub fn debate_config_mut(&mut self) -> &mut DebateConfig {
+        &mut self.debate_config
+    }
+
+    /// Switch the active orchestration strategy to Quorum.
+    pub fn use_quorum_strategy(&mut self) {
+        self.mode.strategy = OrchestrationStrategy::default();
+    }
+
+    /// Switch the active orchestration strategy to Debate, carrying over the
+    /// persisted `debate_config` rather than resetting to
+    /// `DebateConfig::default()` — so `debate.*` settings survive a
+    /// quorum -> debate -> quorum -> debate round-trip (#325).
+    pub fn use_debate_strategy(&mut self) {
+        self.mode.strategy = OrchestrationStrategy::Debate(self.debate_config.clone());
+    }
+
+    /// Mirrors `self.debate_config` into `self.mode.strategy` when Debate is
+    /// already active, so a `debate.*` setter takes effect immediately
+    /// without requiring `agent.strategy` to be re-set.
+    fn sync_debate_strategy(&mut self) {
+        if matches!(self.mode.strategy, OrchestrationStrategy::Debate(_)) {
+            self.mode.strategy = OrchestrationStrategy::Debate(self.debate_config.clone());
+        }
     }
 
     /// Agent behavioral policy.
@@ -356,6 +396,21 @@ impl ConfigAccessorPort for QuorumConfig {
             "agent.max_plan_revisions" => {
                 Ok(ConfigValue::Integer(self.policy.max_plan_revisions as i64))
             }
+            // ---- debate.* ----
+            "debate.models" => Ok(ConfigValue::StringList(
+                self.debate_config
+                    .models
+                    .iter()
+                    .map(|m| m.to_string())
+                    .collect(),
+            )),
+            "debate.max_rounds" => Ok(ConfigValue::Integer(self.debate_config.max_rounds as i64)),
+            "debate.intensity" => Ok(ConfigValue::String(
+                self.debate_config.intensity.to_string(),
+            )),
+            "debate.allow_interjection" => {
+                Ok(ConfigValue::Boolean(self.debate_config.allow_interjection))
+            }
             // ---- models.* ----
             "models.exploration" => Ok(ConfigValue::String(self.models.exploration.to_string())),
             "models.decision" => Ok(ConfigValue::String(self.models.decision.to_string())),
@@ -452,13 +507,8 @@ impl ConfigAccessorPort for QuorumConfig {
             "agent.strategy" => {
                 let s = extract_string(key, value)?;
                 match s.to_lowercase().as_str() {
-                    "quorum" => {
-                        self.mode.strategy = OrchestrationStrategy::default();
-                    }
-                    "debate" => {
-                        self.mode.strategy =
-                            OrchestrationStrategy::Debate(quorum_domain::DebateConfig::default());
-                    }
+                    "quorum" => self.use_quorum_strategy(),
+                    "debate" => self.use_debate_strategy(),
                     _ => {
                         return Err(ConfigAccessError::InvalidValue {
                             key: key.to_string(),
@@ -482,6 +532,40 @@ impl ConfigAccessorPort for QuorumConfig {
             "agent.max_plan_revisions" => {
                 let n = extract_positive_int(key, value)?;
                 self.policy.max_plan_revisions = n;
+                Ok(vec![])
+            }
+            // ---- debate.* (DebateConfig) ----
+            "debate.models" => {
+                let list = extract_string_list(key, value)?;
+                self.debate_config.models = list
+                    .into_iter()
+                    .map(|s| s.parse::<Model>().unwrap())
+                    .collect();
+                self.sync_debate_strategy();
+                Ok(vec![])
+            }
+            "debate.max_rounds" => {
+                let n = extract_positive_int(key, value)?;
+                self.debate_config.max_rounds = n;
+                self.sync_debate_strategy();
+                Ok(vec![])
+            }
+            "debate.intensity" => {
+                let s = extract_string(key, value)?;
+                let intensity =
+                    s.parse::<DebateIntensity>()
+                        .map_err(|e| ConfigAccessError::InvalidValue {
+                            key: key.to_string(),
+                            message: e,
+                        })?;
+                self.debate_config.intensity = intensity;
+                self.sync_debate_strategy();
+                Ok(vec![])
+            }
+            "debate.allow_interjection" => {
+                let b = extract_bool(key, value)?;
+                self.debate_config.allow_interjection = b;
+                self.sync_debate_strategy();
                 Ok(vec![])
             }
             // ---- models.* (ModelConfig) ----
@@ -892,6 +976,155 @@ mod tests {
         ));
     }
 
+    // ==================== debate.* Tests (#325) ====================
+
+    #[test]
+    fn test_config_get_debate_defaults() {
+        let config = QuorumConfig::default();
+        assert_eq!(
+            config.config_get("debate.models").unwrap(),
+            ConfigValue::StringList(vec![])
+        );
+        assert_eq!(
+            config.config_get("debate.max_rounds").unwrap(),
+            ConfigValue::Integer(3)
+        );
+        assert_eq!(
+            config.config_get("debate.intensity").unwrap(),
+            ConfigValue::String("mild".to_string())
+        );
+        assert_eq!(
+            config.config_get("debate.allow_interjection").unwrap(),
+            ConfigValue::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn test_config_set_get_debate_roundtrip() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set(
+                "debate.models",
+                ConfigValue::StringList(vec![
+                    "claude-opus-4.5".to_string(),
+                    "gpt-5.2-codex".to_string(),
+                ]),
+            )
+            .unwrap();
+        config
+            .config_set("debate.max_rounds", ConfigValue::Integer(5))
+            .unwrap();
+        config
+            .config_set(
+                "debate.intensity",
+                ConfigValue::String("strong".to_string()),
+            )
+            .unwrap();
+        config
+            .config_set("debate.allow_interjection", ConfigValue::Boolean(true))
+            .unwrap();
+
+        assert_eq!(
+            config.debate_config().models,
+            vec![Model::ClaudeOpus45, Model::Gpt52Codex]
+        );
+        assert_eq!(config.debate_config().max_rounds, 5);
+        assert_eq!(
+            config.debate_config().intensity,
+            quorum_domain::DebateIntensity::Strong
+        );
+        assert!(config.debate_config().allow_interjection);
+
+        assert_eq!(
+            config.config_get("debate.models").unwrap(),
+            ConfigValue::StringList(vec![
+                "claude-opus-4.5".to_string(),
+                "gpt-5.2-codex".to_string(),
+            ])
+        );
+        assert_eq!(
+            config.config_get("debate.max_rounds").unwrap(),
+            ConfigValue::Integer(5)
+        );
+        assert_eq!(
+            config.config_get("debate.intensity").unwrap(),
+            ConfigValue::String("strong".to_string())
+        );
+        assert_eq!(
+            config.config_get("debate.allow_interjection").unwrap(),
+            ConfigValue::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn test_config_set_debate_intensity_rejects_invalid_value() {
+        let mut config = QuorumConfig::default();
+        let err = config
+            .config_set(
+                "debate.intensity",
+                ConfigValue::String("extreme".to_string()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConfigAccessError::InvalidValue { .. }));
+    }
+
+    #[test]
+    fn test_debate_config_survives_strategy_round_trip() {
+        // debate.* set first, *then* agent.strategy switched to debate —
+        // settings must not be reset to DebateConfig::default().
+        let mut config = QuorumConfig::default();
+        config
+            .config_set("debate.max_rounds", ConfigValue::Integer(7))
+            .unwrap();
+        config
+            .config_set(
+                "debate.intensity",
+                ConfigValue::String("strong".to_string()),
+            )
+            .unwrap();
+
+        config
+            .config_set("agent.strategy", ConfigValue::String("debate".to_string()))
+            .unwrap();
+        let OrchestrationStrategy::Debate(active) = &config.mode().strategy else {
+            panic!("expected Debate strategy");
+        };
+        assert_eq!(active.max_rounds, 7);
+        assert_eq!(active.intensity, quorum_domain::DebateIntensity::Strong);
+
+        // Round-trip through quorum and back to debate — still preserved.
+        config
+            .config_set("agent.strategy", ConfigValue::String("quorum".to_string()))
+            .unwrap();
+        config
+            .config_set("agent.strategy", ConfigValue::String("debate".to_string()))
+            .unwrap();
+        let OrchestrationStrategy::Debate(active) = &config.mode().strategy else {
+            panic!("expected Debate strategy");
+        };
+        assert_eq!(active.max_rounds, 7);
+        assert_eq!(active.intensity, quorum_domain::DebateIntensity::Strong);
+    }
+
+    #[test]
+    fn test_debate_config_setter_applies_immediately_when_already_debate() {
+        // agent.strategy switched to debate *first*, then debate.* set —
+        // the change must be reflected in mode.strategy right away, without
+        // needing to re-set agent.strategy.
+        let mut config = QuorumConfig::default();
+        config
+            .config_set("agent.strategy", ConfigValue::String("debate".to_string()))
+            .unwrap();
+        config
+            .config_set("debate.max_rounds", ConfigValue::Integer(9))
+            .unwrap();
+
+        let OrchestrationStrategy::Debate(active) = &config.mode().strategy else {
+            panic!("expected Debate strategy");
+        };
+        assert_eq!(active.max_rounds, 9);
+    }
+
     #[test]
     fn test_config_set_hil_mode() {
         let mut config = QuorumConfig::default();
@@ -1141,10 +1374,10 @@ mod tests {
     }
 
     #[test]
-    fn test_config_keys_returns_all_30() {
+    fn test_config_keys_returns_all_34() {
         let config = QuorumConfig::default();
         let keys = config.config_keys();
-        assert_eq!(keys.len(), 30);
+        assert_eq!(keys.len(), 34);
         // Spot-check existing keys
         assert!(keys.contains(&"models.participants".to_string()));
         assert!(keys.contains(&"output.format".to_string()));
@@ -1157,6 +1390,11 @@ mod tests {
         assert!(keys.contains(&"tui.layout.flex_threshold".to_string()));
         // Spot-check supervisor key
         assert!(keys.contains(&"supervisor.reporter".to_string()));
+        // Spot-check debate keys (#325)
+        assert!(keys.contains(&"debate.models".to_string()));
+        assert!(keys.contains(&"debate.max_rounds".to_string()));
+        assert!(keys.contains(&"debate.intensity".to_string()));
+        assert!(keys.contains(&"debate.allow_interjection".to_string()));
     }
 
     #[test]
