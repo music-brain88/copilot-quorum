@@ -694,7 +694,11 @@ impl StrategyExecutor for DebateStrategyExecutor {
         // Refuted (critic's objection rejected) reads as the moderator
         // "approving" the proponent's claim; Conceded reads as a rejection
         // of it; anything never ruled on abstains rather than silently
-        // counting either way.
+        // counting either way. The ruling itself (refuted/conceded/
+        // unresolved) is spelled out in `reasoning` alongside the verdict —
+        // without it, e.g. `verdict=Approve` next to `reasoning` quoting the
+        // *attacking* claim reads backwards (as if the attack were being
+        // approved, not rejected).
         let mut votes: Vec<Vote> = ledger
             .all()
             .iter()
@@ -705,15 +709,15 @@ impl StrategyExecutor for DebateStrategyExecutor {
                     .ruling_reason
                     .as_deref()
                     .unwrap_or("no ruling recorded");
-                let verdict = match objection.status {
-                    ObjectionStatus::Refuted => VoteVerdict::Approve,
-                    ObjectionStatus::Conceded => VoteVerdict::Reject,
-                    ObjectionStatus::Unresolved => VoteVerdict::Abstain,
+                let (verdict, ruling_label) = match objection.status {
+                    ObjectionStatus::Refuted => (VoteVerdict::Approve, "refuted"),
+                    ObjectionStatus::Conceded => (VoteVerdict::Reject, "conceded"),
+                    ObjectionStatus::Unresolved => (VoteVerdict::Abstain, "unresolved"),
                 };
                 Vote::new(
                     moderator.to_string(),
                     verdict,
-                    format!("[{id}] {claim}: {reason}"),
+                    format!("[{id}][{ruling_label}] {claim}: {reason}"),
                 )
             })
             .collect();
@@ -1557,7 +1561,7 @@ mod tests {
         assert!(payload.approved);
         assert_eq!(payload.votes.len(), 2);
         assert_eq!(payload.votes[0].verdict, VoteVerdict::Abstain);
-        assert!(payload.votes[0].reasoning.starts_with("[R1-1]"));
+        assert!(payload.votes[0].reasoning.starts_with("[R1-1][unresolved]"));
         assert!(
             payload.votes[0]
                 .reasoning
