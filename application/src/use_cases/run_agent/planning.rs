@@ -176,7 +176,7 @@ impl RunAgentUseCase {
                     biased;
                     _ = token.cancelled() => {
                         join_set.abort_all();
-                        return Err(RunAgentError::Cancelled);
+                        return Err(RunAgentError::Cancelled(None));
                     }
                     Some((model, chunk)) = agg_rx.recv() => {
                         progress.on_model_stream_chunk(&model, &chunk);
@@ -411,7 +411,7 @@ impl RunAgentUseCase {
                         biased;
                         _ = token.cancelled() => {
                             voting_join_set.abort_all();
-                            return Err(RunAgentError::Cancelled);
+                            return Err(RunAgentError::Cancelled(None));
                         }
                         result = voting_join_set.join_next() => result,
                     }

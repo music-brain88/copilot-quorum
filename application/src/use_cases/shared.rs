@@ -12,12 +12,14 @@ use crate::ports::llm_gateway::LlmSession;
 
 /// Check if cancellation has been requested.
 ///
-/// Returns `Err(RunAgentError::Cancelled)` if the token exists and is cancelled.
+/// Returns `Err(RunAgentError::Cancelled(None))` if the token exists and is
+/// cancelled. Callers with access to the in-flight `AgentState` are
+/// responsible for attaching a snapshot to the error as it propagates up.
 pub(crate) fn check_cancelled(token: &Option<CancellationToken>) -> Result<(), RunAgentError> {
     if let Some(token) = token
         && token.is_cancelled()
     {
-        return Err(RunAgentError::Cancelled);
+        return Err(RunAgentError::Cancelled(None));
     }
     Ok(())
 }

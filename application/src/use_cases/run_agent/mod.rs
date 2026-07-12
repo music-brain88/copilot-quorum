@@ -313,7 +313,7 @@ impl RunAgentUseCase {
                     biased;
                     _ = token.cancelled() => {
                         progress.on_llm_stream_end();
-                        return Err(RunAgentError::Cancelled);
+                        return Err(RunAgentError::Cancelled(None));
                     }
                     event = receiver.recv() => event,
                 }
@@ -359,10 +359,40 @@ impl RunAgentUseCase {
         self.execute_with_progress(input, &NoAgentProgress).await
     }
 
-    /// Execute the agent with progress callbacks
+    /// Execute the agent with progress callbacks.
+    ///
+    /// Thin wrapper around [`Self::run_phases`]: owns the `AgentState` for the
+    /// lifetime of the run and, if cancellation is detected mid-flight, attaches
+    /// a snapshot of the state to the returned [`RunAgentError::Cancelled`] so
+    /// callers can inspect/persist partial progress.
     pub async fn execute_with_progress(
         &self,
         input: RunAgentInput,
+        progress: &dyn AgentProgressNotifier,
+    ) -> Result<RunAgentOutput, RunAgentError> {
+        let agent_id = format!("agent-{}", chrono_lite_timestamp());
+        let mut state = input.to_agent_state(agent_id);
+
+        match self.run_phases(&input, &mut state, progress).await {
+            Ok(output) => Ok(output),
+            Err(RunAgentError::Cancelled(None)) => {
+                Err(RunAgentError::Cancelled(Some(Box::new(state))))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Run the agent's phases (Context Gathering → Planning → Review → Execution → Final Review).
+    ///
+    /// Mutates `state` in place as the run progresses. On cancellation, phases
+    /// that don't have easy access to a meaningful state snapshot return
+    /// `Err(RunAgentError::Cancelled(None))`; the caller ([`Self::execute_with_progress`])
+    /// fills in the snapshot. Phases that already have the up-to-date state at
+    /// hand (e.g. Phase 4 task execution) attach it directly.
+    async fn run_phases(
+        &self,
+        input: &RunAgentInput,
+        state: &mut AgentState,
         progress: &dyn AgentProgressNotifier,
     ) -> Result<RunAgentOutput, RunAgentError> {
         // Check for cancellation before starting
@@ -378,10 +408,6 @@ impl RunAgentUseCase {
                 "phase_scope": format!("{}", input.mode.phase_scope),
             }),
         ));
-
-        // Initialize agent state
-        let agent_id = format!("agent-{}", chrono_lite_timestamp());
-        let mut state = input.to_agent_state(agent_id);
 
         // Create system prompt (shared across phases)
         let system_prompt = AgentPromptTemplate::agent_system();
@@ -455,7 +481,7 @@ impl RunAgentUseCase {
 
                 match self
                     .create_ensemble_plans(
-                        &input,
+                        input,
                         &state.context,
                         &system_prompt,
                         plan_feedback.as_deref(),
@@ -503,14 +529,14 @@ impl RunAgentUseCase {
                             "No plan needed — ensemble text responses synthesized",
                         ));
                         state.complete();
-                        self.log_agent_complete(&state, &text, true);
+                        self.log_agent_complete(state, &text, true);
                         return Ok(RunAgentOutput {
                             summary: text,
                             success: true,
-                            state,
+                            state: state.clone(),
                         });
                     }
-                    Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
+                    Err(e) if e.is_cancelled() => return Err(e),
                     Err(e) => {
                         // Fallback to Solo planning
                         warn!("Ensemble planning failed, falling back to solo: {}", e);
@@ -554,21 +580,21 @@ impl RunAgentUseCase {
                     // LLM determined no plan is needed — return text response directly
                     state.add_thought(Thought::observation("No plan needed for this request"));
                     state.complete();
-                    self.log_agent_complete(&state, &text, true);
+                    self.log_agent_complete(state, &text, true);
                     return Ok(RunAgentOutput {
                         summary: text,
                         success: true,
-                        state,
+                        state: state.clone(),
                     });
                 }
                 Err(e) => {
                     let summary = format!("Agent failed during planning: {}", e);
                     state.fail(format!("Planning failed: {}", e));
-                    self.log_agent_complete(&state, &summary, false);
+                    self.log_agent_complete(state, &summary, false);
                     return Ok(RunAgentOutput {
                         summary,
                         success: false,
-                        state,
+                        state: state.clone(),
                     });
                 }
             };
@@ -592,7 +618,7 @@ impl RunAgentUseCase {
             progress.on_phase_change(&AgentPhase::PlanReview);
             state.set_phase(AgentPhase::PlanReview);
 
-            let plan_review = self.review_plan(&input, &state, progress).await?;
+            let plan_review = self.review_plan(input, state, progress).await?;
 
             // Create review round for history
             let review_round = {
@@ -637,7 +663,7 @@ impl RunAgentUseCase {
             if revision_count >= input.policy.max_plan_revisions {
                 // Human intervention required
                 let decision = self
-                    .handle_human_intervention(&input, &state, progress)
+                    .handle_human_intervention(input, state, progress)
                     .await?;
 
                 match decision {
@@ -670,11 +696,11 @@ impl RunAgentUseCase {
                     state.iteration_count, feedback
                 );
                 state.fail("Max plan retries exceeded");
-                self.log_agent_complete(&state, &summary, false);
+                self.log_agent_complete(state, &summary, false);
                 return Ok(RunAgentOutput {
                     summary,
                     success: false,
-                    state,
+                    state: state.clone(),
                 });
             }
 
@@ -703,18 +729,18 @@ impl RunAgentUseCase {
             state.complete();
             let summary = format!("Plan created (plan-only mode): {}", plan_summary);
             info!("PlanOnly scope: skipping execution, returning plan");
-            self.log_agent_complete(&state, &summary, true);
+            self.log_agent_complete(state, &summary, true);
             return Ok(RunAgentOutput {
                 summary,
                 success: true,
-                state,
+                state: state.clone(),
             });
         }
 
         // ==================== Execution Confirmation Gate ====================
         if input.mode.requires_execution_confirmation() {
             let decision = self
-                .handle_execution_confirmation(&input, &state, progress)
+                .handle_execution_confirmation(input, state, progress)
                 .await?;
             match decision {
                 HumanDecision::Approve => {
@@ -725,11 +751,11 @@ impl RunAgentUseCase {
                     info!("Execution confirmation: rejected, stopping");
                     state.complete();
                     let summary = "Plan approved but not executed (user declined execution)";
-                    self.log_agent_complete(&state, summary, true);
+                    self.log_agent_complete(state, summary, true);
                     return Ok(RunAgentOutput {
                         summary: summary.to_string(),
                         success: true,
-                        state,
+                        state: state.clone(),
                     });
                 }
             }
@@ -759,24 +785,29 @@ impl RunAgentUseCase {
         }
 
         let execution_result = execute_uc
-            .execute(&input, &mut state, &system_prompt, progress)
+            .execute(input, state, &system_prompt, progress)
             .await;
 
         let summary = match execution_result {
             Ok(mechanical_summary) => {
                 // Attempt LLM-based structured summary synthesis
-                self.synthesize_summary(&input, &state, &mechanical_summary)
+                self.synthesize_summary(input, state, &mechanical_summary)
                     .await
                     .unwrap_or(mechanical_summary)
+            }
+            Err(e) if e.is_cancelled() => {
+                // Attach the up-to-date state snapshot so the caller can
+                // inspect/persist partial progress from Phase 4.
+                return Err(RunAgentError::Cancelled(Some(Box::new(state.clone()))));
             }
             Err(e) => {
                 let summary = format!("Agent failed during execution: {}", e);
                 state.fail(e.to_string());
-                self.log_agent_complete(&state, &summary, false);
+                self.log_agent_complete(state, &summary, false);
                 return Ok(RunAgentOutput {
                     summary,
                     success: false,
-                    state,
+                    state: state.clone(),
                 });
             }
         };
@@ -786,9 +817,7 @@ impl RunAgentUseCase {
             progress.on_phase_change(&AgentPhase::FinalReview);
             state.set_phase(AgentPhase::FinalReview);
 
-            let final_review = self
-                .final_review(&input, &state, &summary, progress)
-                .await?;
+            let final_review = self.final_review(input, state, &summary, progress).await?;
 
             // UI notification for final review result
             progress.on_quorum_complete_with_votes(
@@ -813,12 +842,12 @@ impl RunAgentUseCase {
 
         state.complete();
 
-        self.log_agent_complete(&state, &summary, true);
+        self.log_agent_complete(state, &summary, true);
 
         Ok(RunAgentOutput {
             summary,
             success: true,
-            state,
+            state: state.clone(),
         })
     }
 }
@@ -839,7 +868,7 @@ mod tests {
 
     #[test]
     fn test_run_agent_error_cancelled() {
-        let error = RunAgentError::Cancelled;
+        let error = RunAgentError::Cancelled(None);
         assert_eq!(error.to_string(), "Operation cancelled");
         assert!(error.is_cancelled());
     }
@@ -1165,6 +1194,28 @@ mod tests {
         }
     }
 
+    /// Wraps [`TrackingProgress`] and cancels a [`CancellationToken`] as soon
+    /// as the run reaches `trigger_phase`, so tests can deterministically
+    /// simulate mid-flight cancellation without relying on timing/sleeps.
+    struct CancelOnPhase {
+        inner: TrackingProgress,
+        token: CancellationToken,
+        trigger_phase: AgentPhase,
+    }
+
+    impl AgentProgressNotifier for CancelOnPhase {
+        fn on_phase_change(&self, phase: &AgentPhase) {
+            self.inner.on_phase_change(phase);
+            if *phase == self.trigger_phase {
+                self.token.cancel();
+            }
+        }
+
+        fn on_execution_confirmation_required(&self, request: &str, plan: &Plan) {
+            self.inner.on_execution_confirmation_required(request, plan);
+        }
+    }
+
     /// Helper to create a plan as a ToolUse LlmResponse (Native Tool Use path)
     fn make_plan_response(objective: &str) -> ScriptedResponse {
         let mut input = HashMap::new();
@@ -1475,6 +1526,44 @@ mod tests {
 
             (result, progress)
         }
+
+        /// Like [`Self::execute`], but wires a [`CancellationToken`] that gets
+        /// cancelled as soon as the run reaches `trigger_phase`, simulating a
+        /// user-initiated cancellation mid-flight.
+        async fn execute_with_cancellation(
+            self,
+            trigger_phase: AgentPhase,
+        ) -> (Result<RunAgentOutput, RunAgentError>, CancelOnPhase) {
+            let token = CancellationToken::new();
+            let progress = CancelOnPhase {
+                inner: TrackingProgress::new(),
+                token: token.clone(),
+                trigger_phase,
+            };
+            let gateway = Arc::new(self.gateway);
+            let executor = Arc::new(self.tool_executor);
+
+            let mut use_case = RunAgentUseCase::new(gateway, executor, mock_tool_schema())
+                .with_cancellation(token);
+
+            if let Some(intervention) = self.human_intervention {
+                use_case = use_case.with_human_intervention(intervention);
+            }
+            if let Some(publisher) = self.event_publisher {
+                use_case = use_case.with_event_publisher(publisher);
+            }
+
+            let input = RunAgentInput::new(
+                "Test request",
+                self.mode,
+                self.models,
+                self.policy,
+                self.execution,
+            );
+            let result = use_case.execute_with_progress(input, &progress).await;
+
+            (result, progress)
+        }
     }
 
     // ==================== Flow Tests ====================
@@ -1492,6 +1581,36 @@ mod tests {
         assert!(progress.has_phase(&AgentPhase::Planning));
         assert!(progress.has_phase(&AgentPhase::PlanReview));
         assert!(progress.has_phase(&AgentPhase::Executing));
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_mid_flight_returns_cancelled_with_partial_state() {
+        // Cancel as soon as Context Gathering is reached — this fires before
+        // Planning's `check_cancelled` at the top of the phase loop, so the
+        // run stops mid-flight instead of completing.
+        let (result, progress) = FlowTestBuilder::solo_full()
+            .execute_with_cancellation(AgentPhase::ContextGathering)
+            .await;
+
+        let error = result.expect_err("run should be cancelled");
+        assert!(error.is_cancelled());
+
+        let state = match error {
+            RunAgentError::Cancelled(Some(state)) => state,
+            RunAgentError::Cancelled(None) => {
+                panic!("expected a state snapshot to be attached to the Cancelled error")
+            }
+            other => panic!("expected RunAgentError::Cancelled, got {:?}", other),
+        };
+
+        // The snapshot reflects the mid-flight phase, not a terminal one.
+        assert_eq!(state.phase, AgentPhase::ContextGathering);
+        assert_ne!(state.phase, AgentPhase::Completed);
+
+        // Planning (and everything after it) never ran.
+        assert!(progress.inner.has_phase(&AgentPhase::ContextGathering));
+        assert!(!progress.inner.has_phase(&AgentPhase::Planning));
+        assert!(!progress.inner.has_phase(&AgentPhase::Executing));
     }
 
     #[tokio::test]

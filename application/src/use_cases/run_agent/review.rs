@@ -118,7 +118,7 @@ impl ActionReviewer for QuorumActionReviewer {
                     biased;
                     _ = token.cancelled() => {
                         join_set.abort_all();
-                        return Err(RunAgentError::Cancelled);
+                        return Err(RunAgentError::Cancelled(None));
                     }
                     result = join_set.join_next() => result,
                 }
@@ -271,7 +271,7 @@ impl RunAgentUseCase {
                     biased;
                     _ = token.cancelled() => {
                         join_set.abort_all();
-                        return Err(RunAgentError::Cancelled);
+                        return Err(RunAgentError::Cancelled(None));
                     }
                     result = join_set.join_next() => result,
                 }
@@ -374,7 +374,7 @@ impl RunAgentUseCase {
                     biased;
                     _ = token.cancelled() => {
                         join_set.abort_all();
-                        return Err(RunAgentError::Cancelled);
+                        return Err(RunAgentError::Cancelled(None));
                     }
                     result = join_set.join_next() => result,
                 }

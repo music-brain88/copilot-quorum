@@ -54,7 +54,7 @@ impl RunAgentUseCase {
                         .request_intervention(&input.request, plan, review_history)
                         .await
                         .map_err(|e| match e {
-                            HumanInterventionError::Cancelled => RunAgentError::Cancelled,
+                            HumanInterventionError::Cancelled => RunAgentError::Cancelled(None),
                             _ => RunAgentError::HumanInterventionFailed(e.to_string()),
                         })
                 } else {
@@ -104,7 +104,7 @@ impl RunAgentUseCase {
                         .request_execution_confirmation(&input.request, plan)
                         .await
                         .map_err(|e| match e {
-                            HumanInterventionError::Cancelled => RunAgentError::Cancelled,
+                            HumanInterventionError::Cancelled => RunAgentError::Cancelled(None),
                             _ => RunAgentError::HumanInterventionFailed(e.to_string()),
                         })
                 } else {
