@@ -71,4 +71,6 @@ pub use ports::ui_event::{
 };
 
 // Agent controller
-pub use use_cases::agent_controller::{AgentController, CommandAction};
+pub use use_cases::agent_controller::{
+    AgentController, CommandAction, build_partial_context_prefix,
+};

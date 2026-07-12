@@ -26,7 +26,7 @@ use crate::ports::ui_event::{
 use crate::use_cases::init_context::{
     InitContextInput, InitContextProgressNotifier, InitContextUseCase,
 };
-use crate::use_cases::run_agent::RunAgentUseCase;
+use crate::use_cases::run_agent::{RunAgentError, RunAgentUseCase};
 use crate::use_cases::run_ask::RunAskUseCase;
 use crate::use_cases::run_quorum::RunQuorumUseCase;
 use crate::use_cases::run_review::{RunReviewInput, RunReviewUseCase};
@@ -35,7 +35,9 @@ use quorum_domain::interaction::{
     InteractionForm, InteractionId, InteractionResult, InteractionTree,
 };
 use quorum_domain::util::truncate_str;
-use quorum_domain::{AgentPhase, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult};
+use quorum_domain::{
+    AgentPhase, AgentState, ConsensusLevel, Model, OutputFormat, PhaseScope, QuorumResult,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -678,6 +680,7 @@ impl AgentController {
                 InteractionForm::Ask,
                 clean_query,
                 full_query,
+                None,
                 progress,
             )
             .await;
@@ -694,6 +697,7 @@ impl AgentController {
                 InteractionForm::Discuss,
                 clean_query,
                 full_query,
+                None,
                 progress,
             )
             .await;
@@ -784,6 +788,7 @@ impl AgentController {
                 InteractionForm::Agent,
                 clean_query,
                 full_query,
+                None,
                 progress,
             )
             .await;
@@ -1037,7 +1042,14 @@ impl AgentController {
         {
             let context = self.build_spawn_context();
             let completion = context
-                .execute(Some(child_id), form, clean_query, full_query, progress)
+                .execute(
+                    Some(child_id),
+                    form,
+                    clean_query,
+                    full_query,
+                    None,
+                    progress,
+                )
                 .await;
             self.finalize(completion);
         }
@@ -1081,6 +1093,88 @@ impl AgentController {
     /// Get the active interaction ID
     pub fn active_interaction_id(&self) -> InteractionId {
         self.active_interaction_id
+    }
+}
+
+/// Maximum bytes kept from a task's description when summarizing it in the
+/// partial-context prefix (see [`build_partial_context_prefix`]).
+const PARTIAL_CONTEXT_TASK_DESC_MAX_LEN: usize = 100;
+/// Maximum bytes kept from a task's result when summarizing it in the
+/// partial-context prefix (see [`build_partial_context_prefix`]).
+const PARTIAL_CONTEXT_TASK_RESULT_MAX_LEN: usize = 150;
+/// Maximum bytes kept from a thought's content in the partial-context prefix.
+const PARTIAL_CONTEXT_THOUGHT_MAX_LEN: usize = 150;
+/// Number of most recent thoughts included in the partial-context prefix.
+const PARTIAL_CONTEXT_THOUGHT_COUNT: usize = 3;
+
+/// Build a summary of a cancelled agent's partial progress, suitable for
+/// prefixing the replacement request when a Cancel & Replace (issue #212)
+/// promotes a deferred request over an in-flight one.
+///
+/// Includes the phase the cancelled run had reached, the plan's objective (if
+/// any), a per-task status/description/result-preview line for each task in
+/// the plan, and the most recent thoughts — all truncated to keep the prefix
+/// small.
+pub fn build_partial_context_prefix(state: &AgentState) -> String {
+    let mut out = String::from("## Previous Agent Partial Results (cancelled)\n\n");
+    out.push_str(&format!("Phase: {}\n", state.phase.display_name()));
+
+    if let Some(plan) = &state.plan {
+        out.push_str(&format!("Objective: {}\n", plan.objective));
+        if !plan.tasks.is_empty() {
+            out.push_str("\nTasks:\n");
+            for task in &plan.tasks {
+                out.push_str(&format!(
+                    "- [{}] {}",
+                    task.status.as_str(),
+                    truncate_with_ellipsis(&task.description, PARTIAL_CONTEXT_TASK_DESC_MAX_LEN)
+                ));
+                if let Some(result) = &task.result {
+                    let preview = if result.success {
+                        &result.output
+                    } else {
+                        result.error.as_deref().unwrap_or("")
+                    };
+                    let preview =
+                        truncate_with_ellipsis(preview, PARTIAL_CONTEXT_TASK_RESULT_MAX_LEN);
+                    if !preview.is_empty() {
+                        out.push_str(&format!(" — {}", preview));
+                    }
+                }
+                out.push('\n');
+            }
+        }
+    }
+
+    if !state.thoughts.is_empty() {
+        out.push_str("\nRecent thoughts:\n");
+        for thought in state
+            .thoughts
+            .iter()
+            .rev()
+            .take(PARTIAL_CONTEXT_THOUGHT_COUNT)
+            .rev()
+        {
+            out.push_str(&format!(
+                "- {}\n",
+                truncate_with_ellipsis(&thought.content, PARTIAL_CONTEXT_THOUGHT_MAX_LEN)
+            ));
+        }
+    }
+
+    out.trim_end().to_string()
+}
+
+/// Truncates `s` to `max_bytes` (UTF-8 boundary safe, via [`truncate_str`]),
+/// appending an ellipsis when truncation actually removed content so a model
+/// reading [`build_partial_context_prefix`]'s output can tell the text was
+/// cut off rather than mistaking it for the full value.
+fn truncate_with_ellipsis(s: &str, max_bytes: usize) -> String {
+    let truncated = truncate_str(s, max_bytes);
+    if truncated.len() < s.len() {
+        format!("{truncated}…")
+    } else {
+        truncated.to_string()
     }
 }
 
@@ -1192,6 +1286,10 @@ pub struct TaskCompletion {
     pub form: InteractionForm,
     pub query: String,
     pub result: Option<InteractionResult>,
+    /// In-flight `AgentState` snapshot captured when this task was cancelled
+    /// (Agent form only). `None` for non-Agent forms or non-cancelled
+    /// completions.
+    pub cancelled_state: Option<Box<AgentState>>,
 }
 
 impl SpawnContext {
@@ -1199,6 +1297,16 @@ impl SpawnContext {
     ///
     /// `None` leaves the inherited (root) token in place. Passing a per-interaction
     /// child token makes this execution cancellable independently (issue #282).
+    ///
+    /// **Known limitation (issue #318):** only `agent_use_case` is wired to
+    /// the token here — `ask_use_case` and `review_use_case` never see it, and
+    /// Discuss has no per-execution cancellation hook at all. So when the
+    /// in-flight task for an interaction is Ask/Discuss/Review, Cancel &
+    /// Replace's "cancel now" step (`AgentController::cancel_interaction`) is a
+    /// no-op: the replacement request stays deferred until that task finishes
+    /// on its own instead of being cancelled immediately. Wiring cancellation
+    /// into Ask/Discuss/Review is future work, tracked in the PR that
+    /// introduced this comment rather than as a new issue.
     pub fn with_cancellation(mut self, token: Option<CancellationToken>) -> Self {
         if let Some(token) = token {
             self.agent_use_case = self.agent_use_case.with_cancellation(token);
@@ -1206,12 +1314,20 @@ impl SpawnContext {
         self
     }
 
+    /// `partial_context`, when present, is a summary of a cancelled task's
+    /// partial progress (built by [`build_partial_context_prefix`]) to prefix
+    /// onto the query actually sent to the model for Agent-form executions
+    /// (Cancel & Replace promotion, issue #212). It is applied only to the
+    /// planning/execution query — [`TaskCompletion::query`] always stays the
+    /// plain `clean_query`, so the prefix never leaks into conversation
+    /// history or later context injection (issue #318).
     pub async fn execute(
         self,
         interaction_id: Option<InteractionId>,
         form: InteractionForm,
         clean_query: String,
         full_query: String,
+        partial_context: Option<String>,
         progress: &dyn AgentProgressNotifier,
     ) -> TaskCompletion {
         // Working for the duration of this call (any form) — dropped at the
@@ -1229,11 +1345,14 @@ impl SpawnContext {
         let composite = CompositeProgressNotifier::new(vec![progress, &script_bridge]);
         let progress: &dyn AgentProgressNotifier = &composite;
 
-        let result = match form {
-            InteractionForm::Ask => self.execute_ask(&full_query, progress).await,
-            InteractionForm::Discuss => self.execute_discuss(&full_query, progress).await,
-            InteractionForm::Agent => self.execute_agent(&clean_query, progress).await,
-            InteractionForm::Review => self.execute_review(&full_query, progress).await,
+        let (result, cancelled_state) = match form {
+            InteractionForm::Ask => (self.execute_ask(&full_query, progress).await, None),
+            InteractionForm::Discuss => (self.execute_discuss(&full_query, progress).await, None),
+            InteractionForm::Agent => {
+                self.execute_agent(&clean_query, partial_context.as_deref(), progress)
+                    .await
+            }
+            InteractionForm::Review => (self.execute_review(&full_query, progress).await, None),
         };
 
         TaskCompletion {
@@ -1241,6 +1360,7 @@ impl SpawnContext {
             form,
             query: clean_query,
             result,
+            cancelled_state,
         }
     }
 
@@ -1307,14 +1427,22 @@ impl SpawnContext {
     async fn execute_agent(
         &self,
         query: &str,
+        partial_context: Option<&str>,
         progress: &dyn AgentProgressNotifier,
-    ) -> Option<InteractionResult> {
+    ) -> (Option<InteractionResult>, Option<Box<AgentState>>) {
         let _ = self.tx.send(UiEvent::AgentStarting {
             mode: self.config.mode().consensus_level,
         });
 
+        // Prefix the partial-results summary onto the query sent to the model
+        // only — `TaskCompletion.query` (built by the caller) stays clean.
+        let effective_query = match partial_context {
+            Some(prefix) => format!("{prefix}\n\n{query}"),
+            None => query.to_string(),
+        };
+
         // Use the factory method from QuorumConfig
-        let input = self.config.to_agent_input(query);
+        let input = self.config.to_agent_input(effective_query);
 
         match self
             .agent_use_case
@@ -1331,18 +1459,25 @@ impl SpawnContext {
                         verbose: self.verbose,
                         thoughts: output.state.thoughts.clone(),
                     })));
-                Some(InteractionResult::AgentResult {
-                    summary: output.summary,
-                    success: output.success,
-                })
+                (
+                    Some(InteractionResult::AgentResult {
+                        summary: output.summary,
+                        success: output.success,
+                    }),
+                    None,
+                )
             }
             Err(e) => {
                 let cancelled = e.is_cancelled();
-                let _ = self.tx.send(UiEvent::AgentError(AgentErrorEvent {
-                    error: e.to_string(),
-                    cancelled,
-                }));
-                None
+                let error = e.to_string();
+                let cancelled_state = match e {
+                    RunAgentError::Cancelled(state) => state,
+                    _ => None,
+                };
+                let _ = self
+                    .tx
+                    .send(UiEvent::AgentError(AgentErrorEvent { error, cancelled }));
+                (None, cancelled_state)
             }
         }
     }
@@ -1377,6 +1512,95 @@ impl SpawnContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quorum_domain::{AgentPolicy, ModelConfig, SessionMode, Task, TaskResult, Thought};
+
+    /// Builds a sample [`AgentState`] mid-execution: a plan with a completed,
+    /// a failed, and a still-pending task, plus a couple of thoughts — enough
+    /// to exercise every section of [`build_partial_context_prefix`].
+    fn sample_cancelled_state() -> AgentState {
+        let mut state = AgentState::new(
+            "agent-test",
+            "Refactor the auth module",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            50,
+        );
+        state.set_phase(AgentPhase::Executing);
+
+        let mut plan = Plan::new("Refactor the auth module", "Split into smaller functions");
+
+        let mut done_task = Task::new("t1", "Extract validate_token helper");
+        done_task.status = quorum_domain::TaskStatus::Completed;
+        done_task.result = Some(TaskResult::success("Extracted successfully"));
+        plan.add_task(done_task);
+
+        let mut failed_task = Task::new("t2", "Update call sites");
+        failed_task.status = quorum_domain::TaskStatus::Failed;
+        failed_task.result = Some(TaskResult::failure("compile error: unresolved import"));
+        plan.add_task(failed_task);
+
+        plan.add_task(Task::new("t3", "Add regression tests"));
+
+        // Set the plan directly (rather than via `set_plan()`) so the phase
+        // stays `Executing`, matching the scenario this helper simulates.
+        state.plan = Some(plan);
+
+        state.add_thought(Thought::observation("Context gathered successfully"));
+        state.add_thought(Thought::analysis("Plan approved by quorum"));
+        state.add_thought(Thought::observation("Task t1 completed"));
+
+        state
+    }
+
+    #[test]
+    fn test_build_partial_context_prefix_includes_heading_objective_and_task_statuses() {
+        let state = sample_cancelled_state();
+
+        let prefix = build_partial_context_prefix(&state);
+
+        // Heading.
+        assert!(prefix.starts_with("## Previous Agent Partial Results (cancelled)"));
+
+        // Phase and objective.
+        assert!(prefix.contains("Phase: Executing"));
+        assert!(prefix.contains("Objective: Refactor the auth module"));
+
+        // Each task's status marker and description are present.
+        assert!(prefix.contains("[completed] Extract validate_token helper"));
+        assert!(prefix.contains("[failed] Update call sites"));
+        assert!(prefix.contains("[pending] Add regression tests"));
+
+        // Task result previews are included for tasks that have one.
+        assert!(prefix.contains("Extracted successfully"));
+        assert!(prefix.contains("compile error: unresolved import"));
+
+        // Recent thoughts are included.
+        assert!(prefix.contains("Recent thoughts:"));
+        assert!(prefix.contains("Context gathered successfully"));
+        assert!(prefix.contains("Plan approved by quorum"));
+        assert!(prefix.contains("Task t1 completed"));
+    }
+
+    #[test]
+    fn test_build_partial_context_prefix_without_plan_or_thoughts_is_minimal() {
+        let state = AgentState::new(
+            "agent-empty",
+            "Do nothing yet",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            50,
+        );
+
+        let prefix = build_partial_context_prefix(&state);
+
+        assert!(prefix.starts_with("## Previous Agent Partial Results (cancelled)"));
+        assert!(prefix.contains("Phase: Context Gathering"));
+        // No plan and no thoughts means no "Tasks:"/"Recent thoughts:" sections.
+        assert!(!prefix.contains("Tasks:"));
+        assert!(!prefix.contains("Recent thoughts:"));
+    }
 
     #[test]
     fn test_split_bang() {
@@ -1897,6 +2121,7 @@ mod tests {
             form: InteractionForm::Agent,
             query: "q".into(),
             result: None,
+            cancelled_state: None,
         });
         assert!(!controller.interaction_tokens.contains_key(&id));
     }
@@ -2202,6 +2427,7 @@ mod tests {
             result: Some(InteractionResult::AskResult {
                 answer: "done".to_string(),
             }),
+            cancelled_state: None,
         });
 
         let event = rx.try_recv().unwrap();
@@ -2230,6 +2456,7 @@ mod tests {
                 summary: "done it".to_string(),
                 success: true,
             }),
+            cancelled_state: None,
         });
 
         // No InteractionCompleted event for inline
@@ -2272,5 +2499,76 @@ mod tests {
         let (clean, full) = controller.prepare_inline("--fresh no context please");
         assert_eq!(clean, "no context please");
         assert_eq!(full, "no context please"); // --fresh = no context
+    }
+
+    // === SpawnContext::execute / partial_context tests (issue #318) ===
+
+    #[tokio::test]
+    async fn execute_keeps_task_completion_query_free_of_partial_context_prefix() {
+        // Regression for #318: the Cancel & Replace partial-context prefix
+        // must reach the model (via `execute_agent`'s effective query) but
+        // must NOT leak into `TaskCompletion.query` — that field feeds
+        // conversation history (`finalize`) and later context injection
+        // (`build_context_from_history`), so a leaked prefix would
+        // permanently pollute every subsequent request's context.
+        let (controller, _rx) = create_test_controller();
+        let context = controller.build_spawn_context();
+
+        let prefix =
+            "## Previous Agent Partial Results (cancelled)\n\nPhase: Executing".to_string();
+
+        let completion = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            context.execute(
+                None,
+                InteractionForm::Agent,
+                "clean user request".to_string(),
+                "full user request".to_string(),
+                Some(prefix),
+                &NoAgentProgress,
+            ),
+        )
+        .await
+        .expect("execute() should not hang");
+
+        assert_eq!(completion.query, "clean user request");
+        assert!(!completion.query.contains("Previous Agent Partial Results"));
+    }
+
+    // === truncate_with_ellipsis / build_partial_context_prefix tests ===
+
+    #[test]
+    fn truncate_with_ellipsis_marks_truncated_text() {
+        assert_eq!(truncate_with_ellipsis("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_leaves_short_text_unchanged() {
+        assert_eq!(truncate_with_ellipsis("hi", 10), "hi");
+        assert_eq!(truncate_with_ellipsis("", 10), "");
+    }
+
+    #[test]
+    fn build_partial_context_prefix_marks_truncated_task_description() {
+        let mut state = AgentState::new(
+            "agent-test",
+            "Refactor",
+            SessionMode::default(),
+            ModelConfig::default(),
+            AgentPolicy::default(),
+            50,
+        );
+        state.set_phase(AgentPhase::Executing);
+
+        let mut plan = Plan::new("Refactor", "Split into smaller functions");
+        let long_desc = "x".repeat(PARTIAL_CONTEXT_TASK_DESC_MAX_LEN + 20);
+        plan.add_task(Task::new("t1", &long_desc));
+        state.plan = Some(plan);
+
+        let prefix = build_partial_context_prefix(&state);
+        assert!(
+            prefix.contains('…'),
+            "expected an ellipsis marker for truncated task description: {prefix}"
+        );
     }
 }

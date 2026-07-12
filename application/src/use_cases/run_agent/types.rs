@@ -47,14 +47,17 @@ pub enum RunAgentError {
     #[error("Gateway error: {0}")]
     GatewayError(#[from] GatewayError),
 
+    /// Operation cancelled. Carries the in-flight [`AgentState`] snapshot (if
+    /// available at the point of cancellation) so callers can inspect/persist
+    /// partial progress instead of losing it.
     #[error("Operation cancelled")]
-    Cancelled,
+    Cancelled(Option<Box<AgentState>>),
 }
 
 impl RunAgentError {
     /// Check if this error represents a cancellation
     pub fn is_cancelled(&self) -> bool {
-        matches!(self, RunAgentError::Cancelled)
+        matches!(self, RunAgentError::Cancelled(_))
     }
 }
 

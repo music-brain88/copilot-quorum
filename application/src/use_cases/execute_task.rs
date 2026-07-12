@@ -446,7 +446,7 @@ impl ExecuteTaskUseCase {
         .await
         {
             Ok(response) => response,
-            Err(RunAgentError::Cancelled) => return Err(RunAgentError::Cancelled),
+            Err(e) if e.is_cancelled() => return Err(e),
             Err(e) => return Err(RunAgentError::TaskExecutionFailed(e.to_string())),
         };
 
