@@ -254,4 +254,51 @@ mod tests {
         // An unknown id is also safely ignored.
         assert_eq!(scheduler.complete(id(999), 1), None);
     }
+
+    /// Regression for issue #318 (finding ②): `TuiCommand::SpawnInteraction`/
+    /// `SpawnRootInteraction` used to skip `request()` entirely and tag their
+    /// task with a fixed placeholder generation, so the scheduler had no
+    /// entry for a freshly spawned (now tab-bound) interaction. An input
+    /// arriving at that tab while the spawn task was still running then saw
+    /// the interaction as idle and raced a second concurrent task for it —
+    /// exactly the double-execution `#212` was meant to prevent.
+    ///
+    /// This reproduces the fixed flow: the spawn path now calls `request()`
+    /// too (always `SpawnNow(1)`, since the id is freshly allocated), so a
+    /// concurrent input for the same id correctly defers instead of racing,
+    /// and is promoted once the spawn task completes.
+    #[test]
+    fn spawn_registration_then_concurrent_request_defers_and_promotes() {
+        let mut scheduler = InteractionScheduler::new();
+        let spawned = id(99);
+
+        // The spawn path registers its freshly allocated id — always idle,
+        // so always SpawnNow(1).
+        let action = scheduler.request(spawned, InteractionForm::Agent, "spawn query".to_string());
+        assert_eq!(action, RequestAction::SpawnNow(1));
+
+        // While the spawn task is still running, input arrives at the now
+        // bound tab (e.g. the user types into it): must defer, not spawn a
+        // second concurrent task for the same interaction.
+        let action = scheduler.request(
+            spawned,
+            InteractionForm::Agent,
+            "concurrent input".to_string(),
+        );
+        assert_eq!(action, RequestAction::Deferred);
+
+        // Completing the spawn task's generation promotes the deferred
+        // request (Cancel & Replace).
+        let result = scheduler.complete(spawned, 1);
+        assert_eq!(
+            result,
+            Some((
+                2,
+                PendingRestart {
+                    form: InteractionForm::Agent,
+                    request: "concurrent input".to_string(),
+                }
+            ))
+        );
+    }
 }

@@ -19,11 +19,18 @@ use std::panic::AssertUnwindSafe;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
-/// Tasks in flight, each tagged with the [`InteractionId`] and generation
-/// number the [`InteractionScheduler`] assigned it (or a fixed `0` for
-/// `SpawnInteraction`/`SpawnRootInteraction` tasks, which always use a brand
-/// new id and so never participate in Cancel & Replace), so `join_next` can
-/// route completions back through the scheduler.
+/// Tasks in flight, tagged with the [`InteractionId`] and generation number
+/// the [`InteractionScheduler`] assigned it, so `join_next` can route
+/// completions back through the scheduler.
+///
+/// Every task — inline executions and spawned tabs alike — registers with
+/// the scheduler via [`InteractionScheduler::request`] before it spawns.
+/// `SpawnInteraction`/`SpawnRootInteraction` tasks used to skip that
+/// registration and tag their completion with a fixed placeholder generation
+/// instead, which made them invisible to Cancel & Replace: an input arriving
+/// at the newly bound tab while the spawn task was still running raced a
+/// second concurrent task for the same interaction (issue #318). Now that
+/// every task is registered, there is no placeholder value left.
 type ControllerJoinSet = JoinSet<(InteractionId, u64, TaskCompletion)>;
 
 /// Background controller task (Actor)
@@ -153,6 +160,19 @@ pub(super) async fn controller_task(
                     } => {
                         match controller.prepare_spawn(form, &query, context_mode_override) {
                             Ok((child_id, clean_query, full_query)) => {
+                                // Register with the scheduler before spawning: `child_id`
+                                // is freshly allocated so this always resolves to
+                                // `SpawnNow(1)`, but registering is what populates the
+                                // scheduler's generation map — without it, a request
+                                // arriving at this (now bound) tab while the spawn task
+                                // is still running would see the interaction as idle and
+                                // race a second concurrent task for it (issue #318).
+                                let generation = match scheduler.request(child_id, form, clean_query.clone()) {
+                                    RequestAction::SpawnNow(generation) => generation,
+                                    RequestAction::Deferred => unreachable!(
+                                        "child_id is freshly allocated by InteractionTree; the scheduler can't already track it"
+                                    ),
+                                };
                                 let context = controller.build_spawn_context_for(child_id);
                                 let tx = progress_tx.clone();
 
@@ -168,10 +188,7 @@ pub(super) async fn controller_task(
                                             TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
                                         ));
                                     }
-                                    // `child_id` is always freshly allocated, so this task never
-                                    // participates in Cancel & Replace; generation `0` is a fixed
-                                    // placeholder the scheduler safely ignores on completion.
-                                    (child_id, 0, completion)
+                                    (child_id, generation, completion)
                                 });
                             }
                             Err(e) => {
@@ -191,6 +208,15 @@ pub(super) async fn controller_task(
                             controller.prepare_root_spawn(form, label, material);
                         let _ = respond_to.send(root_id);
 
+                        // See the `SpawnInteraction` arm above: registering here is what
+                        // makes a later request to this same root interaction defer
+                        // instead of racing a second concurrent task (issue #318).
+                        let generation = match scheduler.request(root_id, form, label.clone()) {
+                            RequestAction::SpawnNow(generation) => generation,
+                            RequestAction::Deferred => unreachable!(
+                                "root_id is freshly allocated by InteractionTree; the scheduler can't already track it"
+                            ),
+                        };
                         let context = controller.build_spawn_context_for(root_id);
                         let tx = progress_tx.clone();
                         tasks.spawn(async move {
@@ -205,9 +231,7 @@ pub(super) async fn controller_task(
                                     TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
                                 ));
                             }
-                            // Root spawns get a brand new `root_id` too — not subject to
-                            // Cancel & Replace, hence the same fixed `0` generation.
-                            (root_id, 0, completion)
+                            (root_id, generation, completion)
                         });
                     }
                     TuiCommand::ActivateInteraction(id) => {
