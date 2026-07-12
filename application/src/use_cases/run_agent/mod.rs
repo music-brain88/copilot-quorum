@@ -374,7 +374,11 @@ impl RunAgentUseCase {
         let mut state = input.to_agent_state(agent_id);
 
         match self.run_phases(&input, &mut state, progress).await {
-            Ok(output) => Ok(output),
+            Ok((summary, success)) => Ok(RunAgentOutput {
+                summary,
+                success,
+                state,
+            }),
             Err(RunAgentError::Cancelled(None)) => {
                 Err(RunAgentError::Cancelled(Some(Box::new(state))))
             }
@@ -384,17 +388,16 @@ impl RunAgentUseCase {
 
     /// Run the agent's phases (Context Gathering → Planning → Review → Execution → Final Review).
     ///
-    /// Mutates `state` in place as the run progresses. On cancellation, phases
-    /// that don't have easy access to a meaningful state snapshot return
-    /// `Err(RunAgentError::Cancelled(None))`; the caller ([`Self::execute_with_progress`])
-    /// fills in the snapshot. Phases that already have the up-to-date state at
-    /// hand (e.g. Phase 4 task execution) attach it directly.
+    /// Mutates `state` in place as the run progresses and returns `(summary, success)`
+    /// on completion. On cancellation, returns `Err(RunAgentError::Cancelled(None))`;
+    /// the caller ([`Self::execute_with_progress`]) attaches a snapshot of the
+    /// (in-place mutated) `state` to the error.
     async fn run_phases(
         &self,
         input: &RunAgentInput,
         state: &mut AgentState,
         progress: &dyn AgentProgressNotifier,
-    ) -> Result<RunAgentOutput, RunAgentError> {
+    ) -> Result<(String, bool), RunAgentError> {
         // Check for cancellation before starting
         check_cancelled(&self.cancellation_token)?;
 
@@ -530,11 +533,7 @@ impl RunAgentUseCase {
                         ));
                         state.complete();
                         self.log_agent_complete(state, &text, true);
-                        return Ok(RunAgentOutput {
-                            summary: text,
-                            success: true,
-                            state: state.clone(),
-                        });
+                        return Ok((text, true));
                     }
                     Err(e) if e.is_cancelled() => return Err(e),
                     Err(e) => {
@@ -581,21 +580,13 @@ impl RunAgentUseCase {
                     state.add_thought(Thought::observation("No plan needed for this request"));
                     state.complete();
                     self.log_agent_complete(state, &text, true);
-                    return Ok(RunAgentOutput {
-                        summary: text,
-                        success: true,
-                        state: state.clone(),
-                    });
+                    return Ok((text, true));
                 }
                 Err(e) => {
                     let summary = format!("Agent failed during planning: {}", e);
                     state.fail(format!("Planning failed: {}", e));
                     self.log_agent_complete(state, &summary, false);
-                    return Ok(RunAgentOutput {
-                        summary,
-                        success: false,
-                        state: state.clone(),
-                    });
+                    return Ok((summary, false));
                 }
             };
 
@@ -697,11 +688,7 @@ impl RunAgentUseCase {
                 );
                 state.fail("Max plan retries exceeded");
                 self.log_agent_complete(state, &summary, false);
-                return Ok(RunAgentOutput {
-                    summary,
-                    success: false,
-                    state: state.clone(),
-                });
+                return Ok((summary, false));
             }
 
             // Notify about plan revision
@@ -730,11 +717,7 @@ impl RunAgentUseCase {
             let summary = format!("Plan created (plan-only mode): {}", plan_summary);
             info!("PlanOnly scope: skipping execution, returning plan");
             self.log_agent_complete(state, &summary, true);
-            return Ok(RunAgentOutput {
-                summary,
-                success: true,
-                state: state.clone(),
-            });
+            return Ok((summary, true));
         }
 
         // ==================== Execution Confirmation Gate ====================
@@ -752,11 +735,7 @@ impl RunAgentUseCase {
                     state.complete();
                     let summary = "Plan approved but not executed (user declined execution)";
                     self.log_agent_complete(state, summary, true);
-                    return Ok(RunAgentOutput {
-                        summary: summary.to_string(),
-                        success: true,
-                        state: state.clone(),
-                    });
+                    return Ok((summary.to_string(), true));
                 }
             }
         }
@@ -795,20 +774,12 @@ impl RunAgentUseCase {
                     .await
                     .unwrap_or(mechanical_summary)
             }
-            Err(e) if e.is_cancelled() => {
-                // Attach the up-to-date state snapshot so the caller can
-                // inspect/persist partial progress from Phase 4.
-                return Err(RunAgentError::Cancelled(Some(Box::new(state.clone()))));
-            }
+            Err(e) if e.is_cancelled() => return Err(e),
             Err(e) => {
                 let summary = format!("Agent failed during execution: {}", e);
                 state.fail(e.to_string());
                 self.log_agent_complete(state, &summary, false);
-                return Ok(RunAgentOutput {
-                    summary,
-                    success: false,
-                    state: state.clone(),
-                });
+                return Ok((summary, false));
             }
         };
 
@@ -844,11 +815,7 @@ impl RunAgentUseCase {
 
         self.log_agent_complete(state, &summary, true);
 
-        Ok(RunAgentOutput {
-            summary,
-            success: true,
-            state: state.clone(),
-        })
+        Ok((summary, true))
     }
 }
 
