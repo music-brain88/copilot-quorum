@@ -12,6 +12,7 @@ mod app_hil;
 mod app_render;
 mod app_tab_command;
 mod app_tui_changes;
+mod command_completion;
 mod command_registry;
 pub mod content;
 pub mod editor;

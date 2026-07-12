@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use super::command_completion::CommandCompletion;
 use super::content::{ContentRegistry, ContentSlot};
 use super::layout::TuiLayoutConfig;
 use super::mode::InputMode;
@@ -20,6 +21,9 @@ pub struct TuiState {
     // -- Command buffer (for : mode) — global, not per-tab --
     pub command_input: String,
     pub command_cursor: usize,
+    /// Active wildmenu-style completion state (Tab/Shift+Tab, #326).
+    /// `None` when no completion session is in progress.
+    pub command_completion: Option<CommandCompletion>,
 
     // -- Tabs (own per-pane input, messages, streaming, scroll, progress) --
     pub tabs: TabManager,
@@ -77,6 +81,7 @@ impl Default for TuiState {
             mode: InputMode::default(),
             command_input: String::new(),
             command_cursor: 0,
+            command_completion: None,
             tabs: TabManager::new(),
             route: RouteTable::default(),
             pending_key: None,
@@ -187,6 +192,7 @@ impl TuiState {
     /// Take the command buffer contents and clear it
     pub fn take_command(&mut self) -> String {
         self.command_cursor = 0;
+        self.command_completion = None;
         std::mem::take(&mut self.command_input)
     }
 

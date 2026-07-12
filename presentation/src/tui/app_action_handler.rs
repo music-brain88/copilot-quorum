@@ -1,8 +1,9 @@
 //! KeyAction handling — maps semantic key actions to state changes and commands.
 
+use super::command_completion;
 use super::content::ContentRegistry;
 use super::event::TuiCommand;
-use super::mode::{InputMode, KeyAction, VisualDirection};
+use super::mode::{CompletionDirection, InputMode, KeyAction, VisualDirection};
 use super::state::{DisplayMessage, TuiState, VisualSelection, YankMode, content_slot_label};
 use super::tab::PaneKind;
 use std::cell::RefCell;
@@ -31,16 +32,33 @@ pub(super) fn handle_action(
             state.mode = InputMode::Command;
             state.command_input.clear();
             state.command_cursor = 0;
+            state.command_completion = None;
         }
         KeyAction::ExitToNormal => {
-            state.mode = InputMode::Normal;
-            state.visual_selection = None;
+            // Esc during an active completion session cancels the
+            // completion (restoring what was typed before Tab) and stays in
+            // Command mode — mirrors vim's wildmenu Esc behavior (#326).
+            if state.mode == InputMode::Command
+                && let Some(completion) = state.command_completion.take()
+            {
+                state.command_input = completion.original_input;
+                state.command_cursor = state.command_input.len();
+            } else {
+                state.mode = InputMode::Normal;
+                state.visual_selection = None;
+            }
         }
 
         // Text editing
-        KeyAction::InsertChar(c) => state.insert_char(c),
+        KeyAction::InsertChar(c) => {
+            state.command_completion = None;
+            state.insert_char(c);
+        }
         KeyAction::InsertNewline => state.insert_newline(),
-        KeyAction::DeleteChar => state.delete_char(),
+        KeyAction::DeleteChar => {
+            state.command_completion = None;
+            state.delete_char();
+        }
         KeyAction::CursorLeft => state.cursor_left(),
         KeyAction::CursorRight => state.cursor_right(),
         KeyAction::CursorHome => state.cursor_home(),
@@ -133,12 +151,14 @@ pub(super) fn handle_action(
             state.mode = InputMode::Command;
             state.command_input = "ask ".into();
             state.command_cursor = state.command_input.len();
+            state.command_completion = None;
         }
         KeyAction::SwitchDiscuss => {
             // Enter command mode with "discuss " pre-filled
             state.mode = InputMode::Command;
             state.command_input = "discuss ".into();
             state.command_cursor = state.command_input.len();
+            state.command_completion = None;
         }
 
         // Scrolling
@@ -238,8 +258,47 @@ pub(super) fn handle_action(
                 content_slot_label(&state.focused_slot)
             ));
         }
+
+        KeyAction::CommandComplete(direction) => {
+            complete_command(state, scripting_engine, direction);
+        }
     }
     None
+}
+
+/// Advance Command-mode wildmenu completion by one Tab/Shift+Tab press (#326).
+/// No-op outside Command mode (Tab/BackTab only dispatch this action from
+/// `handle_command()`, so this guard should never actually trigger).
+fn complete_command(
+    state: &mut TuiState,
+    scripting_engine: &Arc<dyn quorum_application::ScriptingEnginePort>,
+    direction: CompletionDirection,
+) {
+    if state.mode != InputMode::Command {
+        return;
+    }
+    let lua_command_names: Vec<String> = scripting_engine
+        .registered_commands()
+        .into_iter()
+        .map(|(name, _description, _usage, _callback_id)| name)
+        .collect();
+
+    match command_completion::advance(
+        &state.command_input,
+        state.command_completion.as_ref(),
+        &lua_command_names,
+        direction,
+    ) {
+        Some((new_input, new_completion)) => {
+            state.command_input = new_input;
+            state.command_cursor = state.command_input.len();
+            state.command_completion = Some(new_completion);
+        }
+        None => {
+            state.command_completion = None;
+            state.set_flash("No matching command");
+        }
+    }
 }
 
 /// Shared yank helper — extract text from the focused slot, write to clipboard,
@@ -432,5 +491,149 @@ mod tests {
         // No local echo — the spawn path echoes via InteractionSpawned, so the
         // placeholder pane must not have pushed a duplicate user message.
         assert!(state.tabs.active_pane().conversation.messages.is_empty());
+    }
+
+    // -- Command-mode completion (#326) --
+
+    fn enter_command(state: &mut TuiState, cmd_tx: &mpsc::UnboundedSender<TuiCommand>, text: &str) {
+        run(state, KeyAction::EnterCommand, cmd_tx);
+        for c in text.chars() {
+            run(state, KeyAction::InsertChar(c), cmd_tx);
+        }
+    }
+
+    #[test]
+    fn tab_completes_command_name_to_longest_prefix() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "st");
+
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Forward),
+            &tx,
+        );
+
+        assert_eq!(state.command_input, "strategy");
+        assert!(state.command_completion.is_some());
+    }
+
+    #[test]
+    fn tab_cycles_through_multiple_matches() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "q");
+
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Forward),
+            &tx,
+        );
+        let first = state.command_input.clone();
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Forward),
+            &tx,
+        );
+        let second = state.command_input.clone();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn shift_tab_cycles_backward() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "q");
+
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Backward),
+            &tx,
+        );
+
+        let completion = state.command_completion.as_ref().unwrap();
+        assert_eq!(completion.cycle_index, Some(completion.matches.len() - 1));
+    }
+
+    #[test]
+    fn typing_after_tab_discards_completion_state() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "q");
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Forward),
+            &tx,
+        );
+        assert!(state.command_completion.is_some());
+
+        run(&mut state, KeyAction::InsertChar('a'), &tx);
+
+        assert!(state.command_completion.is_none());
+    }
+
+    #[test]
+    fn backspace_after_tab_discards_completion_state() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "q");
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Forward),
+            &tx,
+        );
+        assert!(state.command_completion.is_some());
+
+        run(&mut state, KeyAction::DeleteChar, &tx);
+
+        assert!(state.command_completion.is_none());
+    }
+
+    #[test]
+    fn esc_during_completion_restores_original_input_and_stays_in_command_mode() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "st");
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Forward),
+            &tx,
+        );
+        assert_eq!(state.command_input, "strategy");
+
+        run(&mut state, KeyAction::ExitToNormal, &tx);
+
+        assert_eq!(state.command_input, "st");
+        assert!(state.command_completion.is_none());
+        assert_eq!(state.mode, InputMode::Command);
+    }
+
+    #[test]
+    fn esc_without_completion_exits_to_normal_as_before() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "q");
+
+        run(&mut state, KeyAction::ExitToNormal, &tx);
+
+        assert_eq!(state.mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn tab_with_no_matches_sets_flash_and_leaves_input_untouched() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = TuiState::new();
+        enter_command(&mut state, &tx, "zzz");
+
+        run(
+            &mut state,
+            KeyAction::CommandComplete(CompletionDirection::Forward),
+            &tx,
+        );
+
+        assert_eq!(state.command_input, "zzz");
+        assert!(state.command_completion.is_none());
+        assert!(state.flash_message.is_some());
     }
 }

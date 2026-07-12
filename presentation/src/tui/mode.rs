@@ -116,6 +116,11 @@ pub enum KeyAction {
 
     // -- Lua scripting --
     LuaCallback(u64),
+
+    // -- Command-mode completion (#326) --
+    /// `Tab` / `Shift+Tab` in Command mode — advance wildmenu-style
+    /// completion one step in the given direction.
+    CommandComplete(CompletionDirection),
 }
 
 /// Directions for extending the Visual selection.
@@ -127,6 +132,15 @@ pub enum VisualDirection {
     LineEnd,
     WordLeft,
     WordRight,
+}
+
+/// Direction to step through Command-mode completion candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionDirection {
+    /// `Tab`
+    Forward,
+    /// `Shift+Tab` (`BackTab`)
+    Backward,
 }
 
 /// A table of custom keybindings registered from Lua scripts.
@@ -246,6 +260,7 @@ pub fn parse_key_descriptor(desc: &str) -> Option<(KeyCode, KeyModifiers)> {
         "Esc" => KeyCode::Esc,
         "Enter" => KeyCode::Enter,
         "Tab" => KeyCode::Tab,
+        "BackTab" => KeyCode::BackTab,
         "Backspace" => KeyCode::Backspace,
         "Delete" => KeyCode::Delete,
         "Space" => KeyCode::Char(' '),
@@ -420,6 +435,8 @@ fn handle_command(key: KeyEvent) -> KeyAction {
         KeyCode::Right => KeyAction::CursorRight,
         KeyCode::Home => KeyAction::CursorHome,
         KeyCode::End => KeyAction::CursorEnd,
+        KeyCode::Tab => KeyAction::CommandComplete(CompletionDirection::Forward),
+        KeyCode::BackTab => KeyAction::CommandComplete(CompletionDirection::Backward),
         KeyCode::Char(c) if is_text_input(&key) => KeyAction::InsertChar(c),
         _ => KeyAction::None,
     }
@@ -615,6 +632,24 @@ mod tests {
     }
 
     #[test]
+    fn test_command_tab_completes_forward() {
+        let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(
+            handle_key_event(InputMode::Command, key, None),
+            KeyAction::CommandComplete(CompletionDirection::Forward)
+        );
+    }
+
+    #[test]
+    fn test_command_backtab_completes_backward() {
+        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(
+            handle_key_event(InputMode::Command, key, None),
+            KeyAction::CommandComplete(CompletionDirection::Backward)
+        );
+    }
+
+    #[test]
     fn test_normal_quick_commands() {
         let cases = vec![
             ('s', KeyAction::SwitchSolo),
@@ -753,6 +788,10 @@ mod tests {
         assert_eq!(
             parse_key_descriptor("Backspace"),
             Some((KeyCode::Backspace, KeyModifiers::NONE))
+        );
+        assert_eq!(
+            parse_key_descriptor("BackTab"),
+            Some((KeyCode::BackTab, KeyModifiers::NONE))
         );
     }
 

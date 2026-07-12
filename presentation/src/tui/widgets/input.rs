@@ -79,7 +79,7 @@ impl<'a> Widget for InputWidget<'a> {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Input ")
+            .title(wildmenu_title(self.state))
             .style(border_style);
 
         // Inner area height (excluding borders) — used for scroll
@@ -110,6 +110,37 @@ impl<'a> Widget for InputWidget<'a> {
             .scroll((scroll_offset as u16, 0))
             .render(area, buf);
     }
+}
+
+/// Build the Input block's title — the default " Input " label, or a
+/// wildmenu-style candidate list while Command-mode completion is active
+/// (#326). Rendered in the border directly above the input text, so no
+/// layout changes are needed to make room for it.
+fn wildmenu_title(state: &TuiState) -> Line<'static> {
+    let Some(completion) = &state.command_completion else {
+        return Line::from(" Input ");
+    };
+    if completion.matches.len() < 2 {
+        return Line::from(" Input ");
+    }
+
+    let mut spans = vec![Span::raw(" ")];
+    for (i, candidate) in completion.matches.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let style = if completion.cycle_index == Some(i) {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
+        spans.push(Span::styled(candidate.clone(), style));
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans)
 }
 
 /// Build lines for active (Insert/Command) mode with cursor rendering
