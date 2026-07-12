@@ -11,7 +11,7 @@ use self::interaction_scheduler::{InteractionScheduler, PendingRestart, RequestA
 use super::event::{RoutedTuiEvent, TuiCommand, TuiEvent};
 use super::progress::TuiProgressBridge;
 use futures::FutureExt;
-use quorum_application::use_cases::agent_controller::TaskCompletion;
+use quorum_application::use_cases::agent_controller::{SpawnContext, TaskCompletion};
 use quorum_application::{AgentController, CommandAction, build_partial_context_prefix};
 use quorum_domain::AgentState;
 use quorum_domain::interaction::{InteractionForm, InteractionId};
@@ -174,22 +174,18 @@ pub(super) async fn controller_task(
                                     ),
                                 };
                                 let context = controller.build_spawn_context_for(child_id);
-                                let tx = progress_tx.clone();
-
-                                tasks.spawn(async move {
-                                    let progress = TuiProgressBridge::for_interaction(tx.clone(), child_id);
-                                    let query_for_panic = clean_query.clone();
-                                    let fut = context.execute(Some(child_id), form, clean_query, full_query, &progress);
-                                    let (completion, panic_message) =
-                                        catch_panic(Some(child_id), form, query_for_panic, fut).await;
-                                    if let Some(message) = panic_message {
-                                        let _ = tx.send(RoutedTuiEvent::for_interaction(
-                                            child_id,
-                                            TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
-                                        ));
-                                    }
-                                    (child_id, generation, completion)
-                                });
+                                spawn_guarded(
+                                    &mut tasks,
+                                    &progress_tx,
+                                    child_id,
+                                    generation,
+                                    context,
+                                    Some(child_id),
+                                    form,
+                                    clean_query,
+                                    full_query,
+                                    None,
+                                );
                             }
                             Err(e) => {
                                 let _ = progress_tx.send(RoutedTuiEvent::global(TuiEvent::Flash(
@@ -218,21 +214,18 @@ pub(super) async fn controller_task(
                             ),
                         };
                         let context = controller.build_spawn_context_for(root_id);
-                        let tx = progress_tx.clone();
-                        tasks.spawn(async move {
-                            let progress = TuiProgressBridge::for_interaction(tx.clone(), root_id);
-                            let query_for_panic = label.clone();
-                            let fut = context.execute(Some(root_id), form, label, material, &progress);
-                            let (completion, panic_message) =
-                                catch_panic(Some(root_id), form, query_for_panic, fut).await;
-                            if let Some(message) = panic_message {
-                                let _ = tx.send(RoutedTuiEvent::for_interaction(
-                                    root_id,
-                                    TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
-                                ));
-                            }
-                            (root_id, generation, completion)
-                        });
+                        spawn_guarded(
+                            &mut tasks,
+                            &progress_tx,
+                            root_id,
+                            generation,
+                            context,
+                            Some(root_id),
+                            form,
+                            label,
+                            material,
+                            None,
+                        );
                     }
                     TuiCommand::ActivateInteraction(id) => {
                         controller.set_active_interaction(id);
@@ -261,22 +254,16 @@ fn spawn_inline(
     form: InteractionForm,
     request: String,
 ) {
-    let (clean_query, full_query) = controller.prepare_inline(&request);
-    let context = controller.build_spawn_context_for(iid);
-    let tx = progress_tx.clone();
-    tasks.spawn(async move {
-        let progress = TuiProgressBridge::for_interaction(tx.clone(), iid);
-        let query_for_panic = clean_query.clone();
-        let fut = context.execute(None, form, clean_query, full_query, &progress);
-        let (completion, panic_message) = catch_panic(None, form, query_for_panic, fut).await;
-        if let Some(message) = panic_message {
-            let _ = tx.send(RoutedTuiEvent::for_interaction(
-                iid,
-                TuiEvent::Flash(format!("タスクが異常終了しました: {message}")),
-            ));
-        }
-        (iid, generation, completion)
-    });
+    spawn_inline_with_partial_context(
+        controller,
+        tasks,
+        progress_tx,
+        iid,
+        generation,
+        form,
+        request,
+        None,
+    );
 }
 
 /// Spawn the request that was deferred while the previous generation for
@@ -292,6 +279,12 @@ fn spawn_pending(
     pending: PendingRestart,
     cancelled_state: Option<Box<AgentState>>,
 ) {
+    // Only Agent executions produce a snapshot; every other form always gets
+    // `None` here, so this behaves exactly like `spawn_inline` for them.
+    let partial_context = match (pending.form, cancelled_state.as_deref()) {
+        (InteractionForm::Agent, Some(state)) => Some(build_partial_context_prefix(state)),
+        _ => None,
+    };
     spawn_inline_with_partial_context(
         controller,
         tasks,
@@ -300,18 +293,17 @@ fn spawn_pending(
         generation,
         pending.form,
         pending.request,
-        cancelled_state,
+        partial_context,
     );
 }
 
-/// Like [`spawn_inline`], but for Agent-form requests promoted via Cancel &
-/// Replace: prefixes `clean_query` with a summary of `cancelled_state` (the
-/// in-flight `AgentState` snapshot from the task it replaced), when present
-/// and non-empty, so the new run can pick up where the cancelled one left off.
-///
-/// For non-Agent forms `cancelled_state` is always `None` (only Agent
-/// executions produce a snapshot), so this is a no-op wrapper around
-/// [`spawn_inline`] in that case.
+/// Like [`spawn_inline`], but threads `partial_context` (a summary of a
+/// cancelled task's partial progress, built by [`build_partial_context_prefix`])
+/// through to [`SpawnContext::execute`]. `execute` applies it only to the
+/// query actually sent to the model for Agent-form executions — never to
+/// [`TaskCompletion::query`], which stays the plain user input (issue #318:
+/// that field feeds conversation history and later context injection, so a
+/// leaked prefix would permanently pollute every later request).
 #[allow(clippy::too_many_arguments)]
 fn spawn_inline_with_partial_context(
     controller: &mut AgentController,
@@ -321,26 +313,59 @@ fn spawn_inline_with_partial_context(
     generation: u64,
     form: InteractionForm,
     request: String,
-    cancelled_state: Option<Box<AgentState>>,
+    partial_context: Option<String>,
 ) {
-    let (mut clean_query, full_query) = controller.prepare_inline(&request);
-
-    if form == InteractionForm::Agent
-        && let Some(state) = cancelled_state.as_deref()
-    {
-        let prefix = build_partial_context_prefix(state);
-        if !prefix.is_empty() {
-            clean_query = format!("{prefix}\n\n{clean_query}");
-        }
-    }
-
+    let (clean_query, full_query) = controller.prepare_inline(&request);
     let context = controller.build_spawn_context_for(iid);
+    spawn_guarded(
+        tasks,
+        progress_tx,
+        iid,
+        generation,
+        context,
+        None,
+        form,
+        clean_query,
+        full_query,
+        partial_context,
+    );
+}
+
+/// Spawn `context.execute(...)` as a background task, tagging its completion
+/// with `(iid, generation)` so `join_next` can route it back through the
+/// [`InteractionScheduler`].
+///
+/// Guards the execution with `catch_unwind` (via [`catch_panic`]) so a
+/// panicking task still yields a `TaskCompletion` instead of only surfacing
+/// as a bare `JoinError` at `tasks.join_next()` — see [`catch_panic`] for why
+/// that matters (issue #318).
+#[allow(clippy::too_many_arguments)]
+fn spawn_guarded(
+    tasks: &mut ControllerJoinSet,
+    progress_tx: &mpsc::UnboundedSender<RoutedTuiEvent>,
+    iid: InteractionId,
+    generation: u64,
+    context: SpawnContext,
+    interaction_id: Option<InteractionId>,
+    form: InteractionForm,
+    clean_query: String,
+    full_query: String,
+    partial_context: Option<String>,
+) {
     let tx = progress_tx.clone();
     tasks.spawn(async move {
         let progress = TuiProgressBridge::for_interaction(tx.clone(), iid);
         let query_for_panic = clean_query.clone();
-        let fut = context.execute(None, form, clean_query, full_query, &progress);
-        let (completion, panic_message) = catch_panic(None, form, query_for_panic, fut).await;
+        let fut = context.execute(
+            interaction_id,
+            form,
+            clean_query,
+            full_query,
+            partial_context,
+            &progress,
+        );
+        let (completion, panic_message) =
+            catch_panic(interaction_id, form, query_for_panic, fut).await;
         if let Some(message) = panic_message {
             let _ = tx.send(RoutedTuiEvent::for_interaction(
                 iid,
