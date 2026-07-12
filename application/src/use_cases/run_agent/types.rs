@@ -59,14 +59,6 @@ impl RunAgentError {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, RunAgentError::Cancelled(_))
     }
-
-    /// Extract the `AgentState` snapshot carried by a `Cancelled` error, if any.
-    pub fn cancelled_state(&self) -> Option<&AgentState> {
-        match self {
-            RunAgentError::Cancelled(state) => state.as_deref(),
-            _ => None,
-        }
-    }
 }
 
 /// Result of the planning phase.
