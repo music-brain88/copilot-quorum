@@ -230,10 +230,20 @@ impl TuiApp {
             context_loader,
             config,
             Arc::new(NoConversationLogger),
+            None,
         )
     }
 
     /// Create a new TUI application with a conversation logger.
+    ///
+    /// `supervisor_reporter`, if given, is folded into the controller's
+    /// event-publisher composite (Issue #309) — it must be threaded in here,
+    /// before the controller is handed off to its background task below, since
+    /// nothing else can reach `AgentController` directly afterwards (only via
+    /// `TuiCommand`, and there's no command for this yet). Infra-agnostic:
+    /// this crate never constructs the concrete adapter itself, only forwards
+    /// whatever the DI-assembly layer (`cli/`) already built.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_logger(
         gateway: Arc<dyn LlmGateway>,
         tool_executor: Arc<dyn ToolExecutorPort>,
@@ -241,6 +251,7 @@ impl TuiApp {
         context_loader: Arc<dyn ContextLoaderPort>,
         config: Arc<Mutex<QuorumConfig>>,
         conversation_logger: Arc<dyn ConversationLogger>,
+        supervisor_reporter: Option<Arc<dyn quorum_application::EventPublisher>>,
     ) -> Self {
         // Channels
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<TuiCommand>();
@@ -263,7 +274,7 @@ impl TuiApp {
         let shared_config = Arc::clone(&config);
 
         // Controller (runs in background task)
-        let controller = AgentController::new(
+        let mut controller = AgentController::new(
             gateway,
             tool_executor,
             tool_schema,
@@ -273,6 +284,9 @@ impl TuiApp {
             ui_tx,
         )
         .with_conversation_logger(conversation_logger);
+        if let Some(reporter) = supervisor_reporter {
+            controller = controller.with_event_subscriber(reporter);
+        }
 
         let controller_handle = tokio::spawn(super::app_controller::controller_task(
             controller,

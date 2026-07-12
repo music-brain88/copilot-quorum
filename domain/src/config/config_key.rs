@@ -36,7 +36,7 @@ pub fn lookup_key(key: &str) -> Option<&'static ConfigKeyInfo> {
     KNOWN_KEYS.iter().find(|k| k.key == key)
 }
 
-static KNOWN_KEYS: [ConfigKeyInfo; 29] = [
+static KNOWN_KEYS: [ConfigKeyInfo; 30] = [
     // ==================== agent.* (SessionMode + AgentPolicy) ====================
     ConfigKeyInfo {
         key: "agent.consensus_level",
@@ -219,6 +219,13 @@ static KNOWN_KEYS: [ConfigKeyInfo; 29] = [
         mutability: Mutability::Mutable,
         valid_values: &[],
     },
+    // ==================== supervisor.* ====================
+    ConfigKeyInfo {
+        key: "supervisor.reporter",
+        description: "Supervisor status reporting: auto (enabled when a supervisor env like herdr is detected) or none",
+        mutability: Mutability::Mutable,
+        valid_values: &["auto", "none"],
+    },
 ];
 
 #[cfg(test)]
@@ -247,12 +254,12 @@ mod tests {
 
     #[test]
     fn test_all_keys_mutable() {
-        // All 29 keys are mutable
+        // All 30 keys are mutable
         let mutable: Vec<_> = known_keys()
             .iter()
             .filter(|k| k.mutability == Mutability::Mutable)
             .collect();
-        assert_eq!(mutable.len(), 29);
+        assert_eq!(mutable.len(), 30);
     }
 
     #[test]
@@ -306,5 +313,12 @@ mod tests {
         assert!(preset.valid_values.contains(&"wide"));
         assert!(preset.valid_values.contains(&"stacked"));
         assert!(lookup_key("tui.layout.flex_threshold").is_some());
+    }
+
+    #[test]
+    fn test_supervisor_key() {
+        let reporter = lookup_key("supervisor.reporter").unwrap();
+        assert!(reporter.valid_values.contains(&"auto"));
+        assert!(reporter.valid_values.contains(&"none"));
     }
 }

@@ -181,10 +181,11 @@ impl RunReviewUseCase {
         let synthesis_content = session.send(&synthesis_prompt).await?;
         let synthesis = SynthesisResult::new(moderator.to_string(), synthesis_content);
 
-        self.event_publisher.publish(AppEvent::QuorumResult(
-            QuorumResultPayload::new(QuorumTopic::PrReview, None, &vote_result)
-                .with_synthesis(synthesis.clone()),
-        ));
+        self.event_publisher
+            .publish(AppEvent::QuorumResult(Box::new(
+                QuorumResultPayload::new(QuorumTopic::PrReview, None, &vote_result)
+                    .with_synthesis(synthesis.clone()),
+            )));
 
         Ok(RunReviewOutput {
             approved: vote_result.passed,
@@ -405,7 +406,9 @@ mod tests {
 
         let events = publisher.events.lock().unwrap();
         assert_eq!(events.len(), 1);
-        let AppEvent::QuorumResult(payload) = &events[0];
+        let AppEvent::QuorumResult(payload) = &events[0] else {
+            panic!("expected QuorumResult, got {:?}", events[0]);
+        };
         assert_eq!(payload.topic, QuorumTopic::PrReview);
         assert!(payload.synthesis.is_some());
     }

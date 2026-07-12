@@ -412,6 +412,33 @@ async fn main() -> Result<()> {
         apply_cli_overrides(&mut config, &cli);
     }
 
+    // Supervisor status reporting (Issue #309): infra-agnostic at the
+    // application/presentation layers, so the concrete adapter is built
+    // here (DI-assembly) and threaded down as a trait object. `none` skips
+    // construction entirely; `auto` still no-ops unless a herdr env is
+    // actually detected (`HerdrReporterAdapter::from_env`).
+    //
+    // `herdr_reporter` keeps the *concrete* type alongside the trait-object
+    // `supervisor_reporter` so every exit path below can call
+    // `.shutdown()` explicitly. Relying on `Drop` alone is not enough here:
+    // in the TUI/headless path the last surviving `Arc` clone lives inside
+    // `AgentController`, moved into a background `tokio::spawn`ed task —
+    // that task's teardown isn't ordered relative to the `#[tokio::main]`
+    // runtime dropping once `main()` returns, so `pane.release_agent` was
+    // observed to go missing in practice (verified against a live herdr
+    // instance, Issue #309 E2E). `shutdown()` is idempotent, so calling it
+    // here in addition to whatever `Drop` eventually does is safe.
+    let herdr_reporter: Option<Arc<quorum_infrastructure::HerdrReporterAdapter>> =
+        match shared_config.lock().unwrap().supervisor_reporter() {
+            quorum_domain::SupervisorReporterMode::None => None,
+            quorum_domain::SupervisorReporterMode::Auto => {
+                quorum_infrastructure::HerdrReporterAdapter::from_env().map(Arc::new)
+            }
+        };
+    let supervisor_reporter: Option<Arc<dyn quorum_application::EventPublisher>> = herdr_reporter
+        .clone()
+        .map(|a| a as Arc<dyn quorum_application::EventPublisher>);
+
     // 4. Read back Lua-configured values for DI wiring
     let provider_config = {
         let config = shared_config.lock().unwrap();
@@ -494,8 +521,14 @@ async fn main() -> Result<()> {
             shared_config,
             conversation_logger,
             scripting_engine,
+            supervisor_reporter,
         )
         .await;
+        // `std::process::exit` below skips destructors — explicit shutdown
+        // so `pane.release_agent` isn't dropped along with them.
+        if let Some(reporter) = &herdr_reporter {
+            reporter.shutdown();
+        }
         match exit_code {
             Ok(code) => std::process::exit(code),
             Err(e) => {
@@ -556,6 +589,7 @@ async fn main() -> Result<()> {
             context_loader.clone(),
             shared_config,
             conversation_logger.clone(),
+            supervisor_reporter.clone(),
         )
         .with_tui_config(tui_input_config)
         .with_layout_config(tui_layout_config)
@@ -575,11 +609,18 @@ async fn main() -> Result<()> {
         if let Some(question) = cli.question.take() {
             tui_app = tui_app.with_initial_request(question);
         }
-        if cli.headless {
-            tui_app.run_headless().await?;
+        let run_result = if cli.headless {
+            tui_app.run_headless().await
         } else {
-            tui_app.run().await?;
+            tui_app.run().await
+        };
+        // Explicit shutdown before returning — see the `herdr_reporter`
+        // comment above for why `Drop` alone isn't reliable here. Covers
+        // both the normal-exit and the `?`-propagated-error paths.
+        if let Some(reporter) = &herdr_reporter {
+            reporter.shutdown();
         }
+        run_result?;
         return Ok(());
     }
 
@@ -618,31 +659,52 @@ async fn main() -> Result<()> {
     let human_intervention = Arc::new(InteractiveHumanIntervention::new());
     let reference_resolver = GitHubReferenceResolver::try_new(working_dir.clone()).await;
 
-    let event_publisher = quorum_application::CompositeEventPublisher::new(vec![
+    let mut event_subscribers: Vec<Arc<dyn quorum_application::EventPublisher>> = vec![
         Arc::new(quorum_application::ConversationLogEventPublisher::new(
             conversation_logger.clone(),
-        )) as Arc<dyn quorum_application::EventPublisher>,
+        )),
         Arc::new(quorum_application::ScriptEventPublisher::new(
             scripting_engine.clone(),
         )),
-    ]);
+    ];
+    if let Some(reporter) = supervisor_reporter {
+        event_subscribers.push(reporter);
+    }
+    let event_publisher: Arc<dyn quorum_application::EventPublisher> = Arc::new(
+        quorum_application::CompositeEventPublisher::new(event_subscribers),
+    );
+    let status_tracker = quorum_application::StatusTracker::new();
     let mut use_case =
         RunAgentUseCase::with_context_loader(gateway, tool_executor, tool_schema, context_loader)
             .with_cancellation(cancellation_token.clone())
             .with_human_intervention(human_intervention)
             .with_conversation_logger(conversation_logger)
-            .with_event_publisher(Arc::new(event_publisher));
+            .with_event_publisher(event_publisher.clone())
+            .with_status_tracker(status_tracker.clone());
     if let Some(resolver) = reference_resolver {
         use_case = use_case.with_reference_resolver(Arc::new(resolver));
     }
     let input = quorum_config.to_agent_input(request);
 
-    let result = if repl_config.show_progress {
-        let progress = AgentProgressReporter::with_options(cli.verbose > 0, cli.show_votes);
-        use_case.execute_with_progress(input, &progress).await
-    } else {
-        use_case.execute(input).await
+    let result = {
+        // Working for the duration of this single request — the guard drops
+        // (and republishes Idle) as soon as this block ends, covering every
+        // return path below including cancellation (Issue #309).
+        let _working_guard = status_tracker.enter_working(event_publisher.clone());
+        if repl_config.show_progress {
+            let progress = AgentProgressReporter::with_options(cli.verbose > 0, cli.show_votes);
+            use_case.execute_with_progress(input, &progress).await
+        } else {
+            use_case.execute(input).await
+        }
     };
+    // Explicit shutdown for consistency with the other exit paths (this one
+    // is a plain local with no cross-task ownership ambiguity, so `Drop`
+    // alone would already be reliable here — see the `herdr_reporter`
+    // comment above).
+    if let Some(reporter) = &herdr_reporter {
+        reporter.shutdown();
+    }
 
     match result {
         Ok(output) => {

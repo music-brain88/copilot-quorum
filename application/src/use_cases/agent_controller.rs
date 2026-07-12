@@ -12,7 +12,8 @@ use crate::ports::conversation_logger::{
     ConversationEvent, ConversationLogger, NoConversationLogger,
 };
 use crate::ports::event_publisher::{
-    CompositeEventPublisher, ConversationLogEventPublisher, EventPublisher, ScriptEventPublisher,
+    CompositeEventPublisher, ConversationLogEventPublisher, EventPublisher, NoEventPublisher,
+    ScriptEventPublisher,
 };
 use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::QuorumProgressAdapter;
@@ -45,6 +46,7 @@ use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::reference_resolver::ReferenceResolverPort;
 use crate::ports::scripting_engine::ScriptingEnginePort;
 use crate::ports::tool_schema::ToolSchemaPort;
+use crate::status_tracker::StatusTracker;
 
 /// Entry in conversation history
 #[derive(Debug, Clone)]
@@ -105,6 +107,17 @@ pub struct AgentController {
     active_interaction_id: InteractionId,
     /// Scripting engine for Lua command dispatch
     scripting_engine: Arc<dyn ScriptingEnginePort>,
+    /// Aggregates working/blocked/idle across concurrent interactions
+    /// (Issue #309). Shared into `RunAgentUseCase` (Blocked, from HiL) and
+    /// `SpawnContext` (Working/Idle, from spawn/finalize).
+    status_tracker: Arc<StatusTracker>,
+    /// Extra `EventPublisher` subscribers injected from DI (e.g. a
+    /// supervisor-reporting adapter) — infra-agnostic seam, see
+    /// [`Self::with_event_subscriber`].
+    extra_event_subscribers: Vec<Arc<dyn EventPublisher>>,
+    /// The current composite event publisher, rebuilt whenever the logger,
+    /// scripting engine, or extra subscribers change.
+    event_publisher: Arc<dyn EventPublisher>,
 }
 
 impl AgentController {
@@ -127,6 +140,7 @@ impl AgentController {
         let mut interaction_tree = InteractionTree::default();
         // Agent form is the default root interaction
         let active_interaction_id = interaction_tree.create_root(InteractionForm::Agent);
+        let status_tracker = StatusTracker::new();
 
         use crate::ports::scripting_engine::NoScriptingEngine;
         Self {
@@ -137,7 +151,8 @@ impl AgentController {
                 tool_schema,
                 context_loader.clone(),
             )
-            .with_human_intervention(human_intervention),
+            .with_human_intervention(human_intervention)
+            .with_status_tracker(status_tracker.clone()),
             ask_use_case,
             review_use_case,
             context_loader,
@@ -152,6 +167,9 @@ impl AgentController {
             interaction_tree,
             active_interaction_id,
             scripting_engine: Arc::new(NoScriptingEngine),
+            status_tracker,
+            extra_event_subscribers: Vec::new(),
+            event_publisher: Arc::new(NoEventPublisher),
         }
     }
 
@@ -174,22 +192,42 @@ impl AgentController {
         self
     }
 
-    /// Rebuild the typed-event seam from the current logger + scripting engine.
+    /// Rebuild the typed-event seam from the current logger + scripting
+    /// engine + extra subscribers, and store it for `SpawnContext` (Working/
+    /// Idle transitions, see [`Self::build_spawn_context`]).
     ///
-    /// Subscribers: JSONL conversation log, Lua scripting engine
-    /// (the latter no-ops while the engine is unavailable).
+    /// Subscribers: JSONL conversation log, Lua scripting engine (the latter
+    /// no-ops while the engine is unavailable), plus whatever was injected
+    /// via [`Self::with_event_subscriber`] (e.g. a supervisor-reporting
+    /// adapter — infra-agnostic: this layer never constructs one itself).
     fn rebuild_event_publisher(&mut self) {
-        let publisher: Arc<dyn EventPublisher> = Arc::new(CompositeEventPublisher::new(vec![
+        let mut subscribers: Vec<Arc<dyn EventPublisher>> = vec![
             Arc::new(ConversationLogEventPublisher::new(
                 self.conversation_logger.clone(),
-            )) as Arc<dyn EventPublisher>,
+            )),
             Arc::new(ScriptEventPublisher::new(self.scripting_engine.clone())),
-        ]));
+        ];
+        subscribers.extend(self.extra_event_subscribers.iter().cloned());
+        let publisher: Arc<dyn EventPublisher> =
+            Arc::new(CompositeEventPublisher::new(subscribers));
+        self.event_publisher = publisher.clone();
         self.use_case = self
             .use_case
             .clone()
             .with_event_publisher(publisher.clone());
         self.review_use_case = self.review_use_case.clone().with_event_publisher(publisher);
+    }
+
+    /// Inject an extra `EventPublisher` subscriber (e.g. a supervisor-
+    /// reporting adapter built by the DI-assembly layer) and fold it into
+    /// the composite. Call before the controller is handed off to a
+    /// background task (`TuiApp::new_with_logger` does this at construction
+    /// time) — builder methods on a running controller only reach it via
+    /// `TuiCommand`, and this one doesn't have one (yet).
+    pub fn with_event_subscriber(mut self, subscriber: Arc<dyn EventPublisher>) -> Self {
+        self.extra_event_subscribers.push(subscriber);
+        self.rebuild_event_publisher();
+        self
     }
 
     /// Set moderator model for synthesis
@@ -934,6 +972,8 @@ impl AgentController {
             tx: self.tx.clone(),
             verbose: self.verbose,
             scripting_engine: self.scripting_engine.clone(),
+            status_tracker: self.status_tracker.clone(),
+            event_publisher: self.event_publisher.clone(),
         }
     }
 
@@ -1141,6 +1181,8 @@ pub struct SpawnContext {
     pub(crate) tx: mpsc::UnboundedSender<UiEvent>,
     pub(crate) verbose: bool,
     pub(crate) scripting_engine: Arc<dyn ScriptingEnginePort>,
+    pub(crate) status_tracker: Arc<StatusTracker>,
+    pub(crate) event_publisher: Arc<dyn EventPublisher>,
 }
 
 /// Completion result of a task (spawn or inline execution)
@@ -1172,6 +1214,13 @@ impl SpawnContext {
         full_query: String,
         progress: &dyn AgentProgressNotifier,
     ) -> TaskCompletion {
+        // Working for the duration of this call (any form) — dropped at the
+        // end of this function (all return paths), so a cancelled or
+        // panicking execution still reverts to Idle (Issue #309).
+        let _working_guard = self
+            .status_tracker
+            .enter_working(self.event_publisher.clone());
+
         // Wrap progress with ScriptProgressBridge via CompositeProgress
         use crate::ports::composite_progress::CompositeProgressNotifier;
         use crate::ports::script_progress_bridge::ScriptProgressBridge;

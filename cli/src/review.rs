@@ -11,8 +11,8 @@
 use anyhow::{Context, Result};
 use quorum_application::QuorumConfig;
 use quorum_application::{
-    ContextLoaderPort, ConversationLogger, LlmGateway, ScriptingEnginePort, ToolExecutorPort,
-    ToolSchemaPort,
+    ContextLoaderPort, ConversationLogger, EventPublisher, LlmGateway, ScriptingEnginePort,
+    ToolExecutorPort, ToolSchemaPort,
 };
 use quorum_domain::{
     InteractionForm, InteractionResult, QuorumResultPayload, QuorumTarget, QuorumTopic,
@@ -37,6 +37,7 @@ pub async fn run(
     shared_config: Arc<Mutex<QuorumConfig>>,
     conversation_logger: Arc<dyn ConversationLogger>,
     scripting_engine: Arc<dyn ScriptingEnginePort>,
+    supervisor_reporter: Option<Arc<dyn EventPublisher>>,
 ) -> Result<i32> {
     let (diff, pr, title) = match (args.pr, &args.diff) {
         (Some(pr), _) => {
@@ -85,6 +86,7 @@ pub async fn run(
         context_loader,
         shared_config,
         conversation_logger,
+        supervisor_reporter,
     )
     .with_scripting_engine(scripting_engine);
 

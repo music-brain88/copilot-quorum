@@ -200,12 +200,12 @@ domain/src/
 ├── core/           # Model, Question, Error
 ├── quorum/         # Vote, QuorumRule, ConsensusRound (合意形成)
 ├── orchestration/  # ConsensusLevel, PhaseScope, OrchestrationStrategy, SessionMode, Phase, QuorumRun, QuorumResult (オーケストレーション。StrategyExecutor は application 層)
-├── agent/          # AgentState, Plan, Task, ModelConfig, AgentPolicy (エージェント)
+├── agent/          # AgentState, Plan, Task, ModelConfig, AgentPolicy, AgentStatus (エージェント。AgentStatus は自己申告・worker 追跡兼用の汎用型 — #309)
 ├── tool/           # ToolDefinition, ToolCall, ToolSpec, ToolResult (ツール)
 ├── prompt/         # PromptTemplate, AgentPromptTemplate
 ├── session/        # Message, LlmSessionRepository, LlmResponse, ContentBlock, StopReason
 ├── context/        # ProjectContext, KnownContextFile (/init用)
-├── config/         # OutputFormat
+├── config/         # OutputFormat, SupervisorReporterMode
 └── scripting/      # ScriptEventType, ScriptEventData, ScriptValue
 ```
 
@@ -256,6 +256,8 @@ The agent system extends quorum to autonomous task execution with safety through
 - Multi-turn loop: `send_with_tools()` → ToolUse stop → execute → `send_tool_results()` → repeat
 - Low-risk ツールは `futures::join_all()` で並列実行、High-risk は順次 + Quorum Review
 
+**Supervisor Reporting (#309)**: quorum が自分の状態(working/blocked/idle)を herdr 等の艦隊管制へ自己申告する仕組み。`application/src/status_tracker.rs` の `StatusTracker` が複数 interaction を集約し `AppEvent::AgentStatusChanged` を publish、`infrastructure/src/supervisor/` の `HerdrReporterAdapter`(`EventPublisher` 購読者)が herdr のソケットへ橋渡しする。`supervisor.reporter` 設定キー(`auto`/`none`)で制御。
+
 詳細は [docs/reference/architecture.md](docs/reference/architecture.md) を参照。
 
 ## Lua Scripting (Phase 1–3)
@@ -291,6 +293,7 @@ User config via `~/.config/copilot-quorum/init.lua`, loaded at startup. Feature-
 - `output.*` — format, color
 - `repl.*` — show_progress, history_file
 - `context_budget.*` — max_entry_bytes, max_total_bytes, recent_full_count
+- `supervisor.*` — reporter (`auto`/`none` — #309)
 
 **Key Components**:
 - `domain/scripting/`: ScriptEventType (12 events), ScriptEventData, ScriptValue

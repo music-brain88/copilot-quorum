@@ -118,6 +118,17 @@ Lua からの変更は runtime でエージェントに伝播します。
 | `wide` | 60/20/20 三分割（conversation + progress + tools） |
 | `stacked` | 70/30 縦分割（conversation 上、progress 下） |
 
+### `supervisor.*` — 現地司令塔の状態自己申告（#309）
+
+| キー | 型 | 説明 | デフォルト |
+|------|-----|------|-----------|
+| `supervisor.reporter` | String | `"auto"`（herdr 環境検出時のみ有効化）, `"none"`（常に無効） | `"auto"` |
+
+working/blocked/idle を上位コックピット（herdr 等）へ自己申告する仕組み。`auto` でも
+`HERDR_ENV` / `HERDR_PANE_ID` / `HERDR_SOCKET_PATH` が揃っていなければ完全 no-op
+（スレッドもソケットも作られない）。詳細は
+[architecture.md の Supervisor Reporting](architecture.md#supervisor-reporting-309) を参照。
+
 ---
 
 ## Lua Configuration API / Lua 設定 API
@@ -292,4 +303,4 @@ quorum.tui.content.slots()
 - [How to Write Lua Plugins](../how-to/write-lua-plugins.md) - プラグイン作成手順
 - [Tutorial: Customizing with Lua](../tutorials/customizing-with-lua.md) - 入門チュートリアル
 
-<!-- LLM Context: 設定は Lua (init.lua + plugins/*.lua) のみ。TOML (quorum.toml) 基盤は撤去済み。Boot: Rust defaults → init.lua → plugins → CLI flags。全29キー runtime 変更可能: agent.*(5), models.*(6), execution.*(2), output.*(2), repl.*(2), context_budget.*(3), tui.input.*(7), tui.layout.*(2)。QuorumConfig(application/src/config/quorum_config.rs) が4型コンテナ(SessionMode/ModelConfig/AgentPolicy/ExecutionParams)。AgentController と LuaScriptingEngine が Arc<Mutex<QuorumConfig>> を共有し runtime 伝播。Lua API: quorum.config/{get,set,keys}+metatable proxy, quorum.providers.{set_default,route,bedrock,anthropic,openai}, quorum.tools.register, quorum.keymap.set, quorum.command.register, quorum.on, quorum.tui.{routes,layout,content}。 -->
+<!-- LLM Context: 設定は Lua (init.lua + plugins/*.lua) のみ。TOML (quorum.toml) 基盤は撤去済み。Boot: Rust defaults → init.lua → plugins → CLI flags。全30キー runtime 変更可能: agent.*(5), models.*(6), execution.*(2), output.*(2), repl.*(2), context_budget.*(3), tui.input.*(7), tui.layout.*(2), supervisor.*(1)。QuorumConfig(application/src/config/quorum_config.rs) が4型コンテナ(SessionMode/ModelConfig/AgentPolicy/ExecutionParams)。AgentController と LuaScriptingEngine が Arc<Mutex<QuorumConfig>> を共有し runtime 伝播。Lua API: quorum.config/{get,set,keys}+metatable proxy, quorum.providers.{set_default,route,bedrock,anthropic,openai}, quorum.tools.register, quorum.keymap.set, quorum.command.register, quorum.on, quorum.tui.{routes,layout,content}。 -->

@@ -163,14 +163,14 @@ impl ActionReviewer for QuorumActionReviewer {
         let review = VoteResult::from_votes(votes);
 
         self.event_publisher
-            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
+            .publish(AppEvent::QuorumResult(Box::new(QuorumResultPayload::new(
                 QuorumTopic::ActionReview,
                 Some(QuorumTarget::action(
                     task.id.to_string(),
                     tool_name_from_json(tool_call_json),
                 )),
                 &review,
-            )));
+            ))));
 
         // Notify with detailed vote information
         progress.on_quorum_complete_with_votes(
@@ -316,11 +316,11 @@ impl RunAgentUseCase {
         let result = VoteResult::from_votes(votes);
 
         self.event_publisher()
-            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
+            .publish(AppEvent::QuorumResult(Box::new(QuorumResultPayload::new(
                 QuorumTopic::PlanReview,
                 None,
                 &result,
-            )));
+            ))));
 
         // Note: UI notification is handled by the caller (execute_with_progress)
         // to maintain separation between business logic and presentation
@@ -420,11 +420,11 @@ impl RunAgentUseCase {
         let result = VoteResult::from_votes(votes);
 
         self.event_publisher()
-            .publish(AppEvent::QuorumResult(QuorumResultPayload::new(
+            .publish(AppEvent::QuorumResult(Box::new(QuorumResultPayload::new(
                 QuorumTopic::FinalReview,
                 None,
                 &result,
-            )));
+            ))));
 
         // Note: UI notification is handled by the caller (execute_with_progress)
         // to maintain separation between business logic and presentation

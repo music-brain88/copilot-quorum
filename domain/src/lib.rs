@@ -39,11 +39,14 @@ pub use agent::{
         ReviewRound, Task, TaskStatus,
     },
     model_config::ModelConfig,
+    status::AgentStatus,
     tool_execution::{ToolExecution, ToolExecutionId, ToolExecutionState},
     validation::{ConfigIssue, ConfigIssueCode, Severity},
     value_objects::{AgentContext, AgentId, TaskId, TaskResult, Thought, ThoughtType},
 };
-pub use config::{ConfigKeyInfo, Mutability, OutputFormat, known_keys, lookup_key};
+pub use config::{
+    ConfigKeyInfo, Mutability, OutputFormat, SupervisorReporterMode, known_keys, lookup_key,
+};
 pub use context::{
     ContextBudget, ContextMode, KnownContextFile, LoadedContextFile, ProjectContext,
     ResourceReference, TaskResultBuffer, extract_references,

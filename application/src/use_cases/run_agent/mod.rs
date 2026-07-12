@@ -34,6 +34,7 @@ use crate::ports::reference_resolver::ReferenceResolverPort;
 use crate::ports::scripting_engine::ScriptingEnginePort;
 use crate::ports::tool_executor::ToolExecutorPort;
 use crate::ports::tool_schema::ToolSchemaPort;
+use crate::status_tracker::StatusTracker;
 use crate::use_cases::execute_task::ExecuteTaskUseCase;
 use crate::use_cases::gather_context::GatherContextUseCase;
 use crate::use_cases::shared::check_cancelled;
@@ -59,6 +60,7 @@ pub struct RunAgentUseCase {
     pub(super) conversation_logger: Arc<dyn ConversationLogger>,
     pub(super) scripting_engine: Option<Arc<dyn ScriptingEnginePort>>,
     pub(super) event_publisher: Option<Arc<dyn EventPublisher>>,
+    pub(super) status_tracker: Option<Arc<StatusTracker>>,
 }
 
 impl Clone for RunAgentUseCase {
@@ -74,6 +76,7 @@ impl Clone for RunAgentUseCase {
             conversation_logger: self.conversation_logger.clone(),
             scripting_engine: self.scripting_engine.clone(),
             event_publisher: self.event_publisher.clone(),
+            status_tracker: self.status_tracker.clone(),
         }
     }
 }
@@ -112,6 +115,7 @@ impl RunAgentUseCase {
             conversation_logger: Arc::new(NoConversationLogger),
             scripting_engine: None,
             event_publisher: None,
+            status_tracker: None,
         }
     }
 
@@ -132,6 +136,7 @@ impl RunAgentUseCase {
             conversation_logger: Arc::new(NoConversationLogger),
             scripting_engine: None,
             event_publisher: None,
+            status_tracker: None,
         }
     }
 
@@ -181,6 +186,25 @@ impl RunAgentUseCase {
                 self.conversation_logger.clone(),
             ))
         })
+    }
+
+    /// Set the shared status tracker (the seam for supervisor reporting's
+    /// Blocked transition — see `run_agent/hil.rs`).
+    pub fn with_status_tracker(mut self, tracker: Arc<StatusTracker>) -> Self {
+        self.status_tracker = Some(tracker);
+        self
+    }
+
+    /// The effective status tracker.
+    ///
+    /// Falls back to a fresh, unshared tracker so Blocked transitions still
+    /// aggregate correctly in isolation when DI doesn't inject one (e.g.
+    /// unit tests) — it just won't observe Working transitions raised
+    /// elsewhere (e.g. `SpawnContext::execute`).
+    pub(super) fn status_tracker(&self) -> Arc<StatusTracker> {
+        self.status_tracker
+            .clone()
+            .unwrap_or_else(StatusTracker::new)
     }
 
     /// Log `agent_complete` event to the conversation logger.
@@ -1528,7 +1552,9 @@ mod tests {
 
         let events = publisher.events.lock().unwrap();
         assert_eq!(events.len(), 1);
-        let AppEvent::QuorumResult(envelope) = &events[0];
+        let AppEvent::QuorumResult(envelope) = &events[0] else {
+            panic!("expected QuorumResult, got {:?}", events[0]);
+        };
         assert_eq!(envelope.api_version, 1);
         assert_eq!(envelope.topic, QuorumTopic::PlanReview);
         assert!(envelope.approved);
@@ -1596,7 +1622,9 @@ mod tests {
 
         let events = publisher.events.lock().unwrap();
         assert_eq!(events.len(), 1);
-        let AppEvent::QuorumResult(envelope) = &events[0];
+        let AppEvent::QuorumResult(envelope) = &events[0] else {
+            panic!("expected QuorumResult, got {:?}", events[0]);
+        };
         assert_eq!(envelope.topic, QuorumTopic::ActionReview);
         assert!(envelope.approved);
         let target = envelope.target.as_ref().expect("target present");
