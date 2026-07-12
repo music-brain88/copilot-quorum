@@ -29,7 +29,7 @@ use quorum_domain::agent::validation::{ConfigIssue, Severity};
 use quorum_domain::config::config_key::lookup_key;
 use quorum_domain::{
     AgentPolicy, ConsensusLevel, HilMode, Model, ModelConfig, OrchestrationStrategy, OutputFormat,
-    PhaseScope, ProviderConfig, SessionMode,
+    PhaseScope, ProviderConfig, SessionMode, SupervisorReporterMode,
 };
 
 /// Configuration container for buffer controllers.
@@ -59,6 +59,8 @@ pub struct QuorumConfig {
     // TUI layout settings
     tui_layout_preset: String,
     tui_flex_threshold: u16,
+    // Supervisor reporting (Issue #309)
+    supervisor_reporter: SupervisorReporterMode,
 }
 
 impl Default for QuorumConfig {
@@ -82,6 +84,7 @@ impl Default for QuorumConfig {
             tui_context_header: true,
             tui_layout_preset: "default".to_string(),
             tui_flex_threshold: 120,
+            supervisor_reporter: SupervisorReporterMode::default(),
         }
     }
 }
@@ -113,6 +116,7 @@ impl QuorumConfig {
             tui_context_header: true,
             tui_layout_preset: "default".to_string(),
             tui_flex_threshold: 120,
+            supervisor_reporter: SupervisorReporterMode::default(),
         }
     }
 
@@ -181,6 +185,13 @@ impl QuorumConfig {
     /// Provider configuration (read-only).
     pub fn provider_config(&self) -> &ProviderConfig {
         &self.provider_config
+    }
+
+    /// Supervisor status reporting policy (`auto` | `none`; see Issue #309).
+    /// Whether a reporting backend actually activates under `auto` is up to
+    /// the concrete adapter (e.g. it may require a supervisor env var).
+    pub fn supervisor_reporter(&self) -> SupervisorReporterMode {
+        self.supervisor_reporter
     }
 
     /// Provider configuration (mutable).
@@ -395,6 +406,8 @@ impl ConfigAccessorPort for QuorumConfig {
             // ---- tui.layout.* ----
             "tui.layout.preset" => Ok(ConfigValue::String(self.tui_layout_preset.clone())),
             "tui.layout.flex_threshold" => Ok(ConfigValue::Integer(self.tui_flex_threshold as i64)),
+            // ---- supervisor.* ----
+            "supervisor.reporter" => Ok(ConfigValue::String(self.supervisor_reporter.to_string())),
             _ => Err(ConfigAccessError::UnknownKey {
                 key: key.to_string(),
             }),
@@ -656,6 +669,18 @@ impl ConfigAccessorPort for QuorumConfig {
             "tui.layout.flex_threshold" => {
                 let n = extract_positive_int(key, value)?;
                 self.tui_flex_threshold = n as u16;
+                Ok(vec![])
+            }
+            // ---- supervisor.* ----
+            "supervisor.reporter" => {
+                let s = extract_string(key, value)?;
+                let mode = s.parse::<SupervisorReporterMode>().map_err(|e| {
+                    ConfigAccessError::InvalidValue {
+                        key: key.to_string(),
+                        message: e,
+                    }
+                })?;
+                self.supervisor_reporter = mode;
                 Ok(vec![])
             }
             _ => Err(ConfigAccessError::UnknownKey {
@@ -973,6 +998,40 @@ mod tests {
     }
 
     #[test]
+    fn test_config_default_supervisor_reporter_is_auto() {
+        let config = QuorumConfig::default();
+        assert_eq!(config.supervisor_reporter(), SupervisorReporterMode::Auto);
+        assert_eq!(
+            config.config_get("supervisor.reporter").unwrap(),
+            ConfigValue::String("auto".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_set_supervisor_reporter() {
+        let mut config = QuorumConfig::default();
+        config
+            .config_set(
+                "supervisor.reporter",
+                ConfigValue::String("none".to_string()),
+            )
+            .unwrap();
+        assert_eq!(config.supervisor_reporter(), SupervisorReporterMode::None);
+    }
+
+    #[test]
+    fn test_config_set_supervisor_reporter_rejects_invalid_value() {
+        let mut config = QuorumConfig::default();
+        let err = config
+            .config_set(
+                "supervisor.reporter",
+                ConfigValue::String("bogus".to_string()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConfigAccessError::InvalidValue { .. }));
+    }
+
+    #[test]
     fn test_config_set_repl_show_progress() {
         let mut config = QuorumConfig::default();
         config
@@ -1081,10 +1140,10 @@ mod tests {
     }
 
     #[test]
-    fn test_config_keys_returns_all_29() {
+    fn test_config_keys_returns_all_30() {
         let config = QuorumConfig::default();
         let keys = config.config_keys();
-        assert_eq!(keys.len(), 29);
+        assert_eq!(keys.len(), 30);
         // Spot-check existing keys
         assert!(keys.contains(&"models.participants".to_string()));
         assert!(keys.contains(&"output.format".to_string()));
@@ -1095,6 +1154,8 @@ mod tests {
         assert!(keys.contains(&"tui.input.max_height".to_string()));
         assert!(keys.contains(&"tui.layout.preset".to_string()));
         assert!(keys.contains(&"tui.layout.flex_threshold".to_string()));
+        // Spot-check supervisor key
+        assert!(keys.contains(&"supervisor.reporter".to_string()));
     }
 
     #[test]

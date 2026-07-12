@@ -329,6 +329,7 @@ Pending ──> Running ──> Completed
 | `ActionReviewer` | `action_reviewer` | 高リスクツール呼び出しのレビュー抽象化 |
 | `ConversationLogger` | `conversation_logger` | 構造化会話ログの記録（JSONL） |
 | `ReferenceResolverPort` | `reference_resolver` | リソース参照の解決（GitHub Issue/PR → コンテンツ） |
+| `EventPublisher` | `event_publisher` | 型付きアプリケーションイベント（`AppEvent`）の発行の抽象化 |
 | `UiEvent` | `ui_event` | アプリケーション → プレゼンテーション層への出力イベント |
 
 #### UiEvent（出力ポート）
@@ -336,6 +337,16 @@ Pending ──> Running ──> Completed
 `UiEvent` は `AgentController` からプレゼンテーション層へのイベントチャネルです。
 Welcome, ModeChanged, AgentResult, QuorumResult, AskResult, InteractionSpawned, InteractionCompleted 等の
 バリアントで、UI の種類（CLI, TUI, 将来の Web）に依存しない形でイベントを伝達します。
+
+#### EventPublisher（型付きイベントの継ぎ目、RFC #304）
+
+`EventPublisher` はバスではなく継ぎ目（seam）として設計されています: ユースケースは
+`AppEvent`（`QuorumResult`, `AgentStatusChanged`）を1点から publish し、`CompositeEventPublisher`
+が購読者へファンアウトします。既存の購読者は JSONL 会話ログ（`ConversationLogEventPublisher`）
+と Lua スクリプティング（`ScriptEventPublisher`）。`AgentStatusChanged`（#309、supervisor
+reporting）はこの継ぎ目に variant を追加するだけで新しい購読者（`HerdrReporterAdapter`、
+[Supervisor Reporting](#supervisor-reporting-309) 参照）を乗せられることを示す実例です。
+将来の Application / Interaction Event Bus も実装の差し替えで導入できます。
 
 ### Use Cases / ユースケース
 
@@ -486,6 +497,35 @@ executor に分割されています：
 `try_new()` で `gh` CLI の存在と認証状態をチェックし、不在時は `None` で graceful degradation。
 `gh issue view --json title,body` で Issue と PR の両方を解決します。
 `resolve_all()` は `futures::future::join_all` で並列解決。
+
+### Supervisor Reporting (#309)
+
+`infrastructure/src/supervisor/`
+
+| Type | Implements | Description |
+|------|------------|-------------|
+| `HerdrReporterAdapter` | `EventPublisher` | この quorum インスタンスの状態（working/blocked/idle）を herdr の制御ソケットへ自己申告 |
+
+`AppEvent::AgentStatusChanged` の購読者。`application/src/status_tracker.rs` の
+`StatusTracker` が複数 interaction の状態を「1つでも Blocked なら Blocked > 1つでも
+Working なら Working > Idle」の優先順位で集約し、変化時のみ publish する（発火点:
+`SpawnContext::execute` の開始/終了、`run_agent/hil.rs` の HiL 要求/解決）。
+
+`HerdrReporterAdapter::from_env()` は `HERDR_ENV` / `HERDR_PANE_ID` /
+`HERDR_SOCKET_PATH` が揃っていなければ `None`（スレッドもソケットも作らない、完全
+no-op）。構築されると専用 OS スレッド + `std::sync::mpsc` チャネルでソケット書き込みを
+非同期化し、`publish()` 自体はブロックしない。送信は herdr の `pane.report_agent` /
+`pane.release_agent`（NDJSON、`$HERDR_SOCKET_PATH` への Unix ソケット、LSP フレーミング
+不要）に対して行い、失敗は黙って degrade（報告は best-effort、本体機能に影響させない）。
+Drop 時に `pane.release_agent` を送信してから書き込みスレッドを join し、プロセス終了前
+に確実にフラッシュされる。
+
+有効化は `supervisor.reporter` 設定キー（`"auto"` | `"none"`、デフォルト `"auto"`）で
+制御。DI 組み立ては `cli/src/main.rs`（オニオン制約上、application/presentation 層は
+infrastructure を参照できないため、具体的なアダプタは cli 層で構築し `Arc<dyn
+EventPublisher>` として `AgentController::with_event_subscriber()` /
+`RunAgentUseCase::with_event_publisher()` に注入する）。設定キーの詳細は
+[Configuration Reference](./configuration.md) の `supervisor.*` セクションを参照。
 
 ### Config Adapter
 

@@ -12,6 +12,7 @@ pub mod providers;
 pub mod reference;
 #[cfg(feature = "scripting")]
 pub mod scripting;
+pub mod supervisor;
 pub mod tools;
 
 // Re-export commonly used types
@@ -32,6 +33,7 @@ pub use providers::{
 pub use reference::GitHubReferenceResolver;
 #[cfg(feature = "scripting")]
 pub use scripting::LuaScriptingEngine;
+pub use supervisor::HerdrReporterAdapter;
 pub use tools::{
     JsonSchemaToolConverter, LocalToolExecutor, default_tool_spec, read_only_tool_spec,
 };

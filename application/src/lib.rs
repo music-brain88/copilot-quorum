@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod ports;
+pub mod status_tracker;
 pub mod use_cases;
 
 // Re-export commonly used types
@@ -38,6 +39,7 @@ pub use ports::{
     tool_executor::ToolExecutorPort,
     tool_schema::ToolSchemaPort,
 };
+pub use status_tracker::{BlockedGuard, StatusTracker, WorkingGuard};
 pub use use_cases::init_context::{
     InitContextError, InitContextInput, InitContextOutput, InitContextProgressNotifier,
     InitContextUseCase, NoInitContextProgress,

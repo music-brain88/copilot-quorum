@@ -47,6 +47,9 @@ impl RunAgentUseCase {
             HilMode::Interactive => {
                 // Use the human intervention port if available
                 if let Some(ref intervention) = self.human_intervention {
+                    let _blocked = self
+                        .status_tracker()
+                        .enter_blocked("HiL: プラン承認待ち", self.event_publisher());
                     intervention
                         .request_intervention(&input.request, plan, review_history)
                         .await
@@ -94,6 +97,9 @@ impl RunAgentUseCase {
             }
             HilMode::Interactive => {
                 if let Some(ref intervention) = self.human_intervention {
+                    let _blocked = self
+                        .status_tracker()
+                        .enter_blocked("HiL: 実行確認待ち", self.event_publisher());
                     intervention
                         .request_execution_confirmation(&input.request, plan)
                         .await

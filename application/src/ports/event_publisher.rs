@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use quorum_domain::AgentStatus;
 use quorum_domain::quorum::{QUORUM_RESULT_EVENT_TYPE, QuorumResultPayload};
 use quorum_domain::scripting::{ScriptEventData, ScriptEventType, ScriptValue};
 use tracing::warn;
@@ -16,14 +17,24 @@ use tracing::warn;
 use super::conversation_logger::{ConversationEvent, ConversationLogger};
 use super::scripting_engine::ScriptingEnginePort;
 
+/// JSONL conversation-log event type for [`AppEvent::AgentStatusChanged`].
+const AGENT_STATUS_EVENT_TYPE: &str = "agent_status_changed";
+
 /// A typed application event.
 ///
 /// Variants grow as more events adopt the seam (e.g. `InteractionCompleted`
 /// for #303, supervisor reporting for Track B).
 #[derive(Debug, Clone)]
 pub enum AppEvent {
-    /// A quorum review concluded (plan / action / final review)
-    QuorumResult(QuorumResultPayload),
+    /// A quorum review concluded (plan / action / final review). Boxed —
+    /// `QuorumResultPayload` is ~280 bytes vs. `AgentStatusChanged`'s ~32,
+    /// which clippy's `large_enum_variant` flags otherwise.
+    QuorumResult(Box<QuorumResultPayload>),
+    /// This quorum instance's coarse status changed (working/blocked/idle),
+    /// aggregated across concurrent interactions by `StatusTracker` — the
+    /// seam supervisor-reporting adapters (e.g. `HerdrReporterAdapter`)
+    /// subscribe to (Issue #309 / RFC Discussion #313).
+    AgentStatusChanged(AgentStatus),
 }
 
 /// Port for publishing typed application events.
@@ -82,6 +93,14 @@ impl EventPublisher for ConversationLogEventPublisher {
                 }
                 Err(e) => warn!("Failed to serialize quorum_result payload: {}", e),
             },
+            AppEvent::AgentStatusChanged(status) => {
+                let json = serde_json::json!({
+                    "state": status.as_str(),
+                    "detail": status.detail(),
+                });
+                self.logger
+                    .log(ConversationEvent::new(AGENT_STATUS_EVENT_TYPE, json));
+            }
         }
     }
 }
@@ -144,6 +163,10 @@ impl EventPublisher for ScriptEventPublisher {
                     warn!("QuorumResult script event failed: {}", e);
                 }
             }
+            // No Lua hook yet for status transitions — out of scope for #309
+            // (Phase 1+2). A future `ScriptEventType::AgentStatusChanged`
+            // can be added here without touching other subscribers.
+            AppEvent::AgentStatusChanged(_) => {}
         }
     }
 }
@@ -209,7 +232,7 @@ mod tests {
         });
         let publisher = ConversationLogEventPublisher::new(logger.clone());
 
-        publisher.publish(AppEvent::QuorumResult(sample_payload()));
+        publisher.publish(AppEvent::QuorumResult(Box::new(sample_payload())));
 
         let events = logger.events.lock().unwrap();
         assert_eq!(events.len(), 1);
@@ -220,6 +243,25 @@ mod tests {
         assert_eq!(payload["target"]["task_id"], "task-1");
         assert_eq!(payload["votes"][0]["verdict"], "approve");
         assert_eq!(payload["votes"][2]["verdict"], "model_error");
+    }
+
+    #[test]
+    fn test_conversation_log_publisher_emits_agent_status_changed() {
+        let logger = Arc::new(RecordingLogger {
+            events: Mutex::new(Vec::new()),
+        });
+        let publisher = ConversationLogEventPublisher::new(logger.clone());
+
+        publisher.publish(AppEvent::AgentStatusChanged(AgentStatus::blocked(
+            "HiL: プラン承認待ち",
+        )));
+
+        let events = logger.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        let (event_type, payload) = &events[0];
+        assert_eq!(event_type, "agent_status_changed");
+        assert_eq!(payload["state"], "blocked");
+        assert_eq!(payload["detail"], "HiL: プラン承認待ち");
     }
 
     struct RecordingScriptEngine {
@@ -273,7 +315,7 @@ mod tests {
         });
         let publisher = ScriptEventPublisher::new(engine.clone());
 
-        publisher.publish(AppEvent::QuorumResult(sample_payload()));
+        publisher.publish(AppEvent::QuorumResult(Box::new(sample_payload())));
 
         let events = engine.events.lock().unwrap();
         assert_eq!(events.len(), 1);
@@ -331,13 +373,27 @@ mod tests {
 
         let result = VoteResult::from_votes(vec![Vote::approve("m", "ok")]);
         let payload = QuorumResultPayload::new(QuorumTopic::PlanReview, None, &result);
-        publisher.publish(AppEvent::QuorumResult(payload));
+        publisher.publish(AppEvent::QuorumResult(Box::new(payload)));
 
         let events = engine.events.lock().unwrap();
         let (_, data) = &events[0];
         assert_eq!(data.fields().get("task_id"), Some(&ScriptValue::Nil));
         assert_eq!(data.fields().get("tool"), Some(&ScriptValue::Nil));
         assert_eq!(data.fields().get("feedback"), Some(&ScriptValue::Nil));
+    }
+
+    #[test]
+    fn test_script_publisher_is_noop_for_agent_status_changed() {
+        // No Lua hook yet (#309 Phase 1+2 scope) — must not emit or panic.
+        let engine = Arc::new(RecordingScriptEngine {
+            events: Mutex::new(Vec::new()),
+            available: true,
+        });
+        let publisher = ScriptEventPublisher::new(engine.clone());
+
+        publisher.publish(AppEvent::AgentStatusChanged(AgentStatus::Working(None)));
+
+        assert!(engine.events.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -348,7 +404,7 @@ mod tests {
         });
         let publisher = ScriptEventPublisher::new(engine.clone());
 
-        publisher.publish(AppEvent::QuorumResult(sample_payload()));
+        publisher.publish(AppEvent::QuorumResult(Box::new(sample_payload())));
 
         assert!(engine.events.lock().unwrap().is_empty());
     }
@@ -360,7 +416,7 @@ mod tests {
         let composite =
             CompositeEventPublisher::new(vec![a.clone() as Arc<dyn EventPublisher>, b.clone()]);
 
-        composite.publish(AppEvent::QuorumResult(sample_payload()));
+        composite.publish(AppEvent::QuorumResult(Box::new(sample_payload())));
 
         assert_eq!(a.events.lock().unwrap().len(), 1);
         assert_eq!(b.events.lock().unwrap().len(), 1);

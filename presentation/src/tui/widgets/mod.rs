@@ -332,14 +332,15 @@ mod tests {
     }
 
     fn visual_state(slot: ContentSlot, anchor: usize, cursor: usize) -> TuiState {
-        let mut state = TuiState::default();
-        state.mode = InputMode::Visual;
-        state.focused_slot = slot;
-        state.visual_selection = Some(VisualSelection {
-            anchor_line: anchor,
-            cursor_line: cursor,
-        });
-        state
+        TuiState {
+            mode: InputMode::Visual,
+            focused_slot: slot,
+            visual_selection: Some(VisualSelection {
+                anchor_line: anchor,
+                cursor_line: cursor,
+            }),
+            ..Default::default()
+        }
     }
 
     #[test]
