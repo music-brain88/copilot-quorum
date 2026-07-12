@@ -27,6 +27,7 @@ use quorum_domain::quorum::parsing::{
     parse_debate_verdict, parse_decomposition_request, parse_divergence_check,
     parse_moderator_rulings, parse_opponent_rebuttals,
 };
+use quorum_domain::util::truncate_head_tail;
 use quorum_domain::{
     DebateConfig, DebateIntensity, DebatePromptTemplate, HilMode, HumanDecision, Model,
     ModelResponse, Objection, ObjectionLedger, ObjectionStatus, OrchestrationStrategy, PeerReview,
@@ -35,6 +36,14 @@ use quorum_domain::{
 };
 use std::sync::Arc;
 use tracing::{info, warn};
+
+/// Byte budget for the transcript summary handed to
+/// `HumanInterventionPort::request_debate_escalation` — the port docs call
+/// this a "condensed summary", and both the CLI and TUI render it inline
+/// (a single modal line in the TUI), so the full `render_transcript` output
+/// (unbounded, grows every round) would blow past what either surface can
+/// reasonably display.
+const TRANSCRIPT_SUMMARY_MAX_BYTES: usize = 2000;
 
 /// Adversarial discussion: fixed proponent/opponent roles attack and defend a
 /// position across rounds, with an optional third-party interjector, until a
@@ -615,7 +624,10 @@ impl StrategyExecutor for DebateStrategyExecutor {
                     human_intervention.as_ref(),
                     question,
                     &unresolved,
-                    &Self::render_transcript(&transcript),
+                    &truncate_head_tail(
+                        &Self::render_transcript(&transcript),
+                        TRANSCRIPT_SUMMARY_MAX_BYTES,
+                    ),
                     !is_final_round,
                 )
                 .await?;
@@ -761,11 +773,13 @@ mod tests {
 
     /// Mock `HumanInterventionPort` that returns a pre-configured
     /// (`request_debate_escalation`-only) outcome and records each
-    /// invocation's `can_continue` flag (in call order) alongside the count.
+    /// invocation's `can_continue` flag and `transcript_summary` length (in
+    /// call order) alongside the count.
     struct MockEscalationHandler {
         outcome: Result<HumanDecision, HumanInterventionError>,
         calls: Mutex<usize>,
         can_continue_calls: Mutex<Vec<bool>>,
+        transcript_summary_lens: Mutex<Vec<usize>>,
     }
 
     impl MockEscalationHandler {
@@ -774,6 +788,7 @@ mod tests {
                 outcome,
                 calls: Mutex::new(0),
                 can_continue_calls: Mutex::new(Vec::new()),
+                transcript_summary_lens: Mutex::new(Vec::new()),
             }
         }
     }
@@ -793,11 +808,15 @@ mod tests {
             &self,
             _question: &str,
             _unresolved: &[Objection],
-            _transcript_summary: &str,
+            transcript_summary: &str,
             can_continue: bool,
         ) -> Result<HumanDecision, HumanInterventionError> {
             *self.calls.lock().unwrap() += 1;
             self.can_continue_calls.lock().unwrap().push(can_continue);
+            self.transcript_summary_lens
+                .lock()
+                .unwrap()
+                .push(transcript_summary.len());
             self.outcome.clone()
         }
     }
@@ -1450,6 +1469,53 @@ mod tests {
             "unexpected conclusion: {}",
             result.synthesis.conclusion
         );
+    }
+
+    #[tokio::test]
+    async fn debate_escalation_transcript_summary_is_truncated_to_budget() {
+        // Regression: debate_strategy.rs used to pass the full, unbounded
+        // render_transcript() output as `transcript_summary` — a single TUI
+        // modal line, or CLI dump, of the entire debate. It must be
+        // head+tail truncated to TRANSCRIPT_SUMMARY_MAX_BYTES instead.
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let input =
+            base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
+        let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Approve)));
+
+        let gateway = ScriptedGateway::new();
+        gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
+        // A very long EVIDENCE line pushes the rendered transcript well past
+        // the budget by the time escalation fires.
+        let long_evidence = "x".repeat(TRANSCRIPT_SUMMARY_MAX_BYTES * 2);
+        gateway.respond(
+            Model::Gemini31Pro,
+            format!(
+                "CLAIM: write-through never expires\nEVIDENCE: {}\nSEVERITY: CRITICAL",
+                long_evidence
+            ),
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "DIVERGENT: YES\n\nThey disagree on TTL handling.",
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "VERDICT: SETTLED\n\nWrite-through wins.",
+        );
+
+        DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::new(gateway),
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                Some(handler.clone() as Arc<dyn HumanInterventionPort>),
+            )
+            .await
+            .unwrap();
+
+        let lens = handler.transcript_summary_lens.lock().unwrap();
+        assert_eq!(*lens, vec![TRANSCRIPT_SUMMARY_MAX_BYTES]);
     }
 
     #[tokio::test]

@@ -153,7 +153,11 @@ pub trait HumanInterventionPort: Send + Sync {
     ///
     /// * `question` - The original question/topic being debated
     /// * `unresolved` - The objections that remain unresolved
-    /// * `transcript_summary` - A condensed summary of the debate transcript
+    /// * `transcript_summary` - A condensed (head+tail truncated to a fixed
+    ///   byte budget — see `DebateStrategyExecutor`'s
+    ///   `TRANSCRIPT_SUMMARY_MAX_BYTES`) summary of the debate transcript,
+    ///   safe to render inline (e.g. a single TUI modal line) without
+    ///   growing unbounded across rounds
     /// * `can_continue` - `true` if this is a non-final round: rejecting
     ///   declines the premature settle and the debate continues to the next
     ///   round. `false` if this is the final round (`max_rounds` reached):
