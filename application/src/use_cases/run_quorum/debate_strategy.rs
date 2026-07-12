@@ -400,6 +400,13 @@ impl StrategyExecutor for DebateStrategyExecutor {
             for (claim, evidence, severity) in parse_opponent_rebuttals(&attack_text) {
                 ledger.add(round, claim, evidence, severity);
             }
+            // Captured before `attack_text` is moved into `transcript` below —
+            // used by the divergence check further down. Reading it back out
+            // of `transcript` by index would be wrong when round 1's opponent
+            // requested a decomposition: `query_opponent_attack_with_decomposition`
+            // pushes an intermediate "Proponent (round 1 decomposition)" entry,
+            // shifting the opponent's actual attack to a later index.
+            let first_round_attack_text = (round == 1).then(|| attack_text.clone());
             transcript.push((format!("Opponent (round {} attack)", round), attack_text));
 
             // Anti-mode-collapse divergence check (#316): only once, right after
@@ -415,7 +422,8 @@ impl StrategyExecutor for DebateStrategyExecutor {
             // if one exists, otherwise the opponent doubles up).
             if round == 1 && !contrarian_brief_used {
                 let opening_text = transcript[0].1.clone();
-                let first_attack_text = transcript[1].1.clone();
+                let first_attack_text = first_round_attack_text
+                    .expect("first_round_attack_text is always Some when round == 1");
                 let divergence_prompt = DebatePromptTemplate::divergence_check_prompt(
                     question,
                     &opening_text,
@@ -1117,6 +1125,73 @@ mod tests {
         assert_eq!(result.reviews.len(), 1);
         assert!(result.reviews[0].content.starts_with("CLAIM:"));
         assert_eq!(result.synthesis.conclusion, "Split the knobs.");
+    }
+
+    #[tokio::test]
+    async fn debate_divergence_check_compares_opening_against_opponent_attack_after_decomposition()
+     {
+        // Regression: when round 1's opponent attack triggers a decomposition
+        // detour, `query_opponent_attack_with_decomposition` pushes an
+        // intermediate "Proponent (round 1 decomposition)" entry into the
+        // transcript before the opponent's actual (post-decomposition) attack
+        // is pushed. The divergence check must compare the proponent's
+        // opening against that actual attack — not against the proponent's
+        // own decomposition response that now sits at transcript[1].
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let input = base_input(OrchestrationStrategy::Debate(config));
+
+        let gateway = ScriptedGateway::new();
+        gateway.respond(
+            Model::Gpt53Codex,
+            "Opening: caching and retry policy should share one config knob.",
+        );
+        gateway.respond(
+            Model::Gemini31Pro,
+            "DECOMPOSE_REQUEST: caching and retry policy should share one config knob",
+        );
+        gateway.respond(
+            Model::Gpt53Codex,
+            "Sub-claim 1: caching should be a single knob.\nSub-claim 2: retry policy should be a single knob.",
+        );
+        gateway.respond(
+            Model::Gemini31Pro,
+            "CLAIM: retry policy as a single knob\nEVIDENCE: it hides per-endpoint backoff needs\nSEVERITY: MINOR",
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "DIVERGENT: YES\n\nThey disagree on whether one knob suffices.",
+        );
+        gateway.respond(
+            Model::ClaudeSonnet45,
+            "VERDICT: SETTLED\n\nSplit the knobs.",
+        );
+
+        let gateway = Arc::new(gateway);
+        DebateStrategyExecutor::new()
+            .execute(
+                &input,
+                Arc::clone(&gateway) as Arc<dyn LlmGateway>,
+                &NoProgress,
+                Arc::new(NoEventPublisher),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let moderator_prompts = gateway.sent_prompts(Model::ClaudeSonnet45);
+        let divergence_prompt = moderator_prompts
+            .first()
+            .expect("moderator should have been queried for the divergence check first");
+        assert!(
+            divergence_prompt.contains("CLAIM: retry policy as a single knob"),
+            "divergence check must see the opponent's actual (post-decomposition) attack: {}",
+            divergence_prompt
+        );
+        assert!(
+            !divergence_prompt.contains("Sub-claim 1: caching should be a single knob"),
+            "divergence check must not see the proponent's own decomposition response: {}",
+            divergence_prompt
+        );
     }
 
     #[tokio::test]
