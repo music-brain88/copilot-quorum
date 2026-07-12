@@ -1183,7 +1183,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_divergence_check_compares_opening_against_opponent_attack_after_decomposition()
-     {
+    {
         // Regression: when round 1's opponent attack triggers a decomposition
         // detour, `query_opponent_attack_with_decomposition` pushes an
         // intermediate "Proponent (round 1 decomposition)" entry into the
@@ -1612,9 +1612,10 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(*handler.calls.lock().unwrap(), 1);
-        assert_eq!(handler.can_continue_calls.lock().unwrap().as_slice(), &[
-            false
-        ]);
+        assert_eq!(
+            handler.can_continue_calls.lock().unwrap().as_slice(),
+            &[false]
+        );
         assert!(matches!(err, RunQuorumError::DebateEscalationRejected(_)));
     }
 
@@ -1637,9 +1638,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(*handler.calls.lock().unwrap(), 1);
-        assert_eq!(handler.can_continue_calls.lock().unwrap().as_slice(), &[
-            true
-        ]);
+        assert_eq!(
+            handler.can_continue_calls.lock().unwrap().as_slice(),
+            &[true]
+        );
         assert!(
             result
                 .synthesis
@@ -1672,7 +1674,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_interactive_without_handler_falls_back_to_reject_at_non_final_round_continues()
-     {
+    {
         let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);

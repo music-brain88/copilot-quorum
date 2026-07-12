@@ -406,7 +406,12 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
         transcript_summary: &str,
         can_continue: bool,
     ) -> Result<HumanDecision, HumanInterventionError> {
-        self.display_debate_escalation_prompt(question, unresolved, transcript_summary, can_continue);
+        self.display_debate_escalation_prompt(
+            question,
+            unresolved,
+            transcript_summary,
+            can_continue,
+        );
 
         loop {
             let input = self.read_command()?;

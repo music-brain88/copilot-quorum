@@ -872,7 +872,8 @@ SEVERITY: CRITICAL";
         // Regression: a non-ASCII line preceding a label used to panic when
         // slicing `trimmed[..label.len()]` landed mid-character (e.g. inside
         // 'こ') instead of returning "no match" for the byte comparison.
-        let text = "→ この主張は誤りです\nCLAIM: キャッシュは無効\nEVIDENCE: 根拠あり\nSEVERITY: MAJOR";
+        let text =
+            "→ この主張は誤りです\nCLAIM: キャッシュは無効\nEVIDENCE: 根拠あり\nSEVERITY: MAJOR";
         let rebuttals = parse_opponent_rebuttals(text);
         assert_eq!(rebuttals.len(), 1);
         assert_eq!(rebuttals[0].0, "キャッシュは無効");
@@ -884,7 +885,8 @@ SEVERITY: CRITICAL";
     fn test_opponent_rebuttals_emoji_line_before_label_does_not_panic() {
         // Same class of bug, exercised with a 4-byte emoji character instead
         // of a 3-byte CJK one.
-        let text = "🎉 disagree\nCLAIM: 🎉 emoji claim\nEVIDENCE: 🎉 emoji evidence\nSEVERITY: CRITICAL";
+        let text =
+            "🎉 disagree\nCLAIM: 🎉 emoji claim\nEVIDENCE: 🎉 emoji evidence\nSEVERITY: CRITICAL";
         let rebuttals = parse_opponent_rebuttals(text);
         assert_eq!(rebuttals.len(), 1);
         assert_eq!(rebuttals[0].0, "🎉 emoji claim");
