@@ -37,6 +37,8 @@ pub enum QuorumTopic {
     FinalReview,
     /// Headless review of a PR/diff (#300)
     PrReview,
+    /// Final ruling of the debate strategy (RFC #313)
+    Debate,
 }
 
 impl QuorumTopic {
@@ -47,6 +49,7 @@ impl QuorumTopic {
             Self::ActionReview => "action_review",
             Self::FinalReview => "final_review",
             Self::PrReview => "pr_review",
+            Self::Debate => "debate",
         }
     }
 }
@@ -228,6 +231,12 @@ mod tests {
 
         // A bare stdin diff has neither — no target at all, not an empty object
         assert_eq!(QuorumTarget::pr_review(None, None), None);
+    }
+
+    #[test]
+    fn test_debate_topic_as_str() {
+        // Debate has no dedicated QuorumTarget field — it's operated with target: None
+        assert_eq!(QuorumTopic::Debate.as_str(), "debate");
     }
 
     // Regression test: a bare `git diff | copilot-quorum review` (no --pr,

@@ -127,7 +127,20 @@ SEVERITY: CRITICAL (breaks the position entirely) / MAJOR (a real gap that needs
 
 A rebuttal without a concrete counterexample or evidence — e.g. "this could probably be
 made more robust" — is not falsifiable. The moderator will discard it, so don't waste a
-round on it."#,
+round on it.
+
+## Requesting decomposition
+
+Sometimes the proponent's position is compound or ambiguous — it bundles several
+independent claims together, or is phrased so vaguely that no single CLAIM/EVIDENCE/
+SEVERITY rebuttal can attack it directly. In that situation only, instead of a normal
+rebuttal you may respond with exactly one line:
+DECOMPOSE_REQUEST: <the specific claim you want broken into verifiable sub-claims>
+This asks the proponent to split that claim into sub-claims you can attack one at a
+time. Do not include CLAIM/EVIDENCE/SEVERITY when using this — it replaces them for
+that turn. You may use DECOMPOSE_REQUEST at most once per round; if the position is
+still unattackable after decomposition, fall back to your best CLAIM/EVIDENCE/SEVERITY
+rebuttal rather than requesting decomposition again."#,
             depth
         )
     }
@@ -146,6 +159,31 @@ Debate so far:
 Challenge the proponent's latest position above. Find its weakest point and attack it
 directly, using the CLAIM / EVIDENCE / SEVERITY structure from your instructions."#,
             question, transcript
+        )
+    }
+
+    /// Prompt for the proponent responding to an opponent's `DECOMPOSE_REQUEST:`.
+    ///
+    /// The opponent has judged `target` too compound or ambiguous to attack
+    /// directly and asked for it to be split into independently verifiable
+    /// sub-claims. This asks the proponent to do that decomposition rather
+    /// than to defend the claim as-is.
+    pub fn proponent_decomposition_prompt(target: &str, transcript: &str) -> String {
+        format!(
+            r#"Debate so far:
+
+{}
+
+The opponent has judged the following claim of yours too compound or ambiguous to
+attack directly, and requested that you decompose it:
+
+{}
+
+Break this claim into a small number of independently verifiable sub-claims — each
+one specific and narrow enough that the opponent could attack it with a concrete
+counterexample. Do not weaken or abandon the claim; restate it more precisely as a
+list of sub-claims that, together, are equivalent to what you originally meant."#,
+            transcript, target
         )
     }
 
@@ -204,8 +242,9 @@ Your response MUST start with exactly one of these two lines:
 VERDICT: SETTLED
 VERDICT: CONTINUE
 
-Then, for EACH rebuttal raised so far in the debate, list:
-REBUTTAL: <one-line summary of what was attacked>
+Then, for EACH open objection listed in the checkpoint prompt (each given its own
+REBUTTAL_ID), list:
+REBUTTAL_ID: <the ID exactly as given, e.g. R1-1 — do not paraphrase or renumber it>
 RULING: ACCEPTED or REJECTED
 REASON: <why — cite the concrete counterexample/evidence if accepted, or explain why it
 was unfalsifiable or wrong if rejected>
@@ -217,16 +256,24 @@ Finally, exactly one of:
   rebuttal — that the next round should focus on>"#
     }
 
-    /// Per-round checkpoint prompt for the moderator.
+    /// Per-round checkpoint prompt for the moderator, with the still-open
+    /// objections (from an [`ObjectionLedger`](crate::quorum::ObjectionLedger))
+    /// explicitly enumerated by ID and claim.
     ///
-    /// When `is_final_round` is `true`, the moderator is instructed to settle
-    /// regardless of remaining disagreement — `max_rounds` is a hard cap.
-    pub fn moderator_checkpoint_prompt(
+    /// Instead of asking the moderator to re-derive rebuttal identity from
+    /// prose, it hands over the exact `REBUTTAL_ID`s the moderator must rule
+    /// on and echo back, so [`parse_moderator_rulings`](crate::quorum::parsing::parse_moderator_rulings)
+    /// can match rulings to ledger entries by exact ID.
+    ///
+    /// `open_objections` is a list of `(id, claim)` pairs — typically built
+    /// from `ObjectionLedger::open_objections()`.
+    pub fn moderator_checkpoint_prompt_with_objections(
         question: &str,
         transcript: &str,
         round: usize,
         max_rounds: usize,
         is_final_round: bool,
+        open_objections: &[(&str, &str)],
     ) -> String {
         let final_notice = if is_final_round {
             "\nThis is the final allowed round. You MUST respond with VERDICT: SETTLED \
@@ -234,6 +281,15 @@ Finally, exactly one of:
              so far, even if disagreement remains."
         } else {
             ""
+        };
+        let objections_block = if open_objections.is_empty() {
+            "None — no unresolved objections remain in the ledger.".to_string()
+        } else {
+            open_objections
+                .iter()
+                .map(|(id, claim)| format!("REBUTTAL_ID: {}\nCLAIM: {}", id, claim))
+                .collect::<Vec<_>>()
+                .join("\n\n")
         };
         format!(
             r#"Question under debate:
@@ -244,8 +300,111 @@ Debate so far (round {} of {}):
 
 {}
 
-Has the debate settled? Rule on each rebuttal raised so far, per your instructions.{}"#,
-            question, round, max_rounds, transcript, final_notice
+Open objections requiring a ruling (rule on each by its REBUTTAL_ID, exactly as given):
+
+{}
+
+Has the debate settled? Rule on each open objection above, per your instructions.{}"#,
+            question, round, max_rounds, transcript, objections_block, final_notice
+        )
+    }
+
+    /// Additional system instructions for the moderator's divergence check.
+    ///
+    /// Before committing rounds to attacking each other's claims, the
+    /// moderator can be asked whether the proponent's opening and the
+    /// opponent's first attack are actually reaching different conclusions,
+    /// or whether they've quietly converged on the same one while disputing
+    /// unrelated framing. If they agree, the debate should attack the shared
+    /// premise itself rather than continue as if in genuine disagreement —
+    /// see [`contrarian_system`](Self::contrarian_system).
+    pub fn moderator_divergence_system() -> &'static str {
+        r#"You are being asked an additional question as the moderator of an adversarial
+debate, separate from your usual per-round ruling.
+
+Read the proponent's opening position and the opponent's first attack. Ask: are these
+substantively reaching the same conclusion, just phrased differently or arguing past
+each other on surface details? Or do they genuinely disagree on the substance?
+
+If they are substantively the same conclusion, the debate as framed is not adversarial —
+both sides share an unexamined premise, and attacking each other's phrasing wastes
+rounds. In that case the shared premise itself should be attacked instead.
+
+Your response MUST start with exactly one of these two lines:
+DIVERGENT: YES
+DIVERGENT: NO
+
+Then, on the following lines:
+- If DIVERGENT: NO — state the shared premise both sides rest on, precisely enough that
+  it could be attacked directly.
+- If DIVERGENT: YES — briefly note what genuinely differs between the two positions."#
+    }
+
+    /// Prompt for the moderator's divergence check, given the opening and
+    /// first attack.
+    pub fn divergence_check_prompt(question: &str, opening: &str, first_attack: &str) -> String {
+        format!(
+            r#"Question under debate:
+
+{}
+
+Proponent's opening position:
+
+{}
+
+Opponent's first attack:
+
+{}
+
+Are these two positions substantively the same conclusion, or do they genuinely
+diverge? Follow the DIVERGENT: YES/NO format from your instructions."#,
+            question, opening, first_attack
+        )
+    }
+
+    /// System prompt for the contrarian role.
+    ///
+    /// Used when the moderator's divergence check finds the proponent and
+    /// opponent have quietly converged on a shared premise instead of
+    /// genuinely disagreeing. The contrarian is deliberately assigned the
+    /// opposing stance to that shared premise and told to attack it directly,
+    /// rather than restate either side's existing arguments.
+    pub fn contrarian_system() -> &'static str {
+        r#"You are the contrarian in an adversarial debate between AI models.
+The proponent and opponent have converged on a shared premise instead of genuinely
+disagreeing — the debate has not been adversarial in substance, only in surface framing.
+
+Your task is to explicitly take the opposite stance to that shared premise and attack
+it directly. Do not restate or referee the existing arguments between the proponent and
+opponent — assume that premise is wrong and make the strongest case you can for why.
+
+Like the opponent's rebuttals, your case must be falsifiable: give a concrete
+counterexample, scenario, or piece of evidence for why the shared premise doesn't hold —
+not a vague impression or stylistic objection."#
+    }
+
+    /// Brief prompt for the contrarian, given the shared premise and transcript.
+    pub fn contrarian_brief_prompt(
+        question: &str,
+        shared_premise: &str,
+        transcript: &str,
+    ) -> String {
+        format!(
+            r#"Question under debate:
+
+{}
+
+Debate so far:
+
+{}
+
+The moderator has identified this as a premise both sides share instead of genuinely
+contesting:
+
+{}
+
+Take the opposite stance to this premise and attack it directly, per your instructions."#,
+            question, transcript, shared_premise
         )
     }
 }
@@ -267,20 +426,6 @@ mod tests {
             "--- Proponent ---\nUse REST for simplicity.",
         );
         assert!(prompt.contains("Use REST for simplicity."));
-    }
-
-    #[test]
-    fn test_moderator_checkpoint_final_round_forces_settle() {
-        let prompt =
-            DebatePromptTemplate::moderator_checkpoint_prompt("Q", "transcript", 3, 3, true);
-        assert!(prompt.contains("MUST respond with VERDICT: SETTLED"));
-    }
-
-    #[test]
-    fn test_moderator_checkpoint_non_final_round_allows_continue() {
-        let prompt =
-            DebatePromptTemplate::moderator_checkpoint_prompt("Q", "transcript", 1, 3, false);
-        assert!(!prompt.contains("MUST respond with VERDICT: SETTLED"));
     }
 
     #[test]
@@ -316,10 +461,116 @@ mod tests {
     #[test]
     fn test_moderator_system_requires_structured_ruling() {
         let system = DebatePromptTemplate::moderator_system();
-        assert!(system.contains("REBUTTAL:"));
+        assert!(system.contains("REBUTTAL_ID:"));
         assert!(system.contains("RULING:"));
         assert!(system.contains("REASON:"));
         assert!(system.contains("unfalsifiable"));
         assert!(system.contains("sycophantic capitulation"));
+        // The old free-text "REBUTTAL:" summary format must be gone in favor
+        // of ID references the moderator echoes back exactly.
+        assert!(!system.contains("REBUTTAL: <one-line summary"));
+    }
+
+    #[test]
+    fn test_opponent_system_describes_decompose_request() {
+        let prompt = DebatePromptTemplate::opponent_system(DebateIntensity::Mild);
+        assert!(prompt.contains("DECOMPOSE_REQUEST:"));
+        assert!(prompt.contains("at most once per round"));
+    }
+
+    #[test]
+    fn test_proponent_decomposition_prompt_contains_target_and_transcript() {
+        let prompt = DebatePromptTemplate::proponent_decomposition_prompt(
+            "the system is secure",
+            "--- Opponent ---\nDECOMPOSE_REQUEST: the system is secure",
+        );
+        assert!(prompt.contains("the system is secure"));
+        assert!(prompt.contains("DECOMPOSE_REQUEST: the system is secure"));
+        assert!(prompt.contains("sub-claims"));
+    }
+
+    #[test]
+    fn test_moderator_checkpoint_with_objections_lists_ids_and_claims() {
+        let prompt = DebatePromptTemplate::moderator_checkpoint_prompt_with_objections(
+            "Q",
+            "transcript",
+            2,
+            3,
+            false,
+            &[
+                ("R1-1", "the cache never expires"),
+                ("R2-1", "concurrent writes are unguarded"),
+            ],
+        );
+        assert!(prompt.contains("REBUTTAL_ID: R1-1"));
+        assert!(prompt.contains("CLAIM: the cache never expires"));
+        assert!(prompt.contains("REBUTTAL_ID: R2-1"));
+        assert!(prompt.contains("CLAIM: concurrent writes are unguarded"));
+    }
+
+    #[test]
+    fn test_moderator_checkpoint_with_objections_handles_empty_ledger() {
+        let prompt = DebatePromptTemplate::moderator_checkpoint_prompt_with_objections(
+            "Q",
+            "transcript",
+            1,
+            3,
+            false,
+            &[],
+        );
+        assert!(prompt.contains("None"));
+    }
+
+    #[test]
+    fn test_moderator_checkpoint_with_objections_final_round_forces_settle() {
+        let prompt = DebatePromptTemplate::moderator_checkpoint_prompt_with_objections(
+            "Q",
+            "transcript",
+            3,
+            3,
+            true,
+            &[("R3-1", "claim")],
+        );
+        assert!(prompt.contains("MUST respond with VERDICT: SETTLED"));
+    }
+
+    #[test]
+    fn test_divergence_check_prompt_contains_opening_and_first_attack() {
+        let prompt = DebatePromptTemplate::divergence_check_prompt(
+            "Should we use REST or gRPC?",
+            "We should use REST for simplicity.",
+            "REST is fine but the real issue is versioning strategy.",
+        );
+        assert!(prompt.contains("Should we use REST or gRPC?"));
+        assert!(prompt.contains("We should use REST for simplicity."));
+        assert!(prompt.contains("REST is fine but the real issue is versioning strategy."));
+        assert!(prompt.contains("DIVERGENT: YES/NO"));
+    }
+
+    #[test]
+    fn test_moderator_divergence_system_requires_divergent_format() {
+        let system = DebatePromptTemplate::moderator_divergence_system();
+        assert!(system.contains("DIVERGENT: YES"));
+        assert!(system.contains("DIVERGENT: NO"));
+        assert!(system.contains("shared premise"));
+    }
+
+    #[test]
+    fn test_contrarian_system_requires_shared_premise_attack() {
+        let system = DebatePromptTemplate::contrarian_system();
+        assert!(system.contains("shared premise"));
+        assert!(system.contains("falsifiable"));
+        assert!(system.contains("opposite stance"));
+    }
+
+    #[test]
+    fn test_contrarian_brief_prompt_contains_shared_premise_and_transcript() {
+        let prompt = DebatePromptTemplate::contrarian_brief_prompt(
+            "Q",
+            "Both sides assume the API must be synchronous.",
+            "--- Proponent ---\nUse a synchronous API.",
+        );
+        assert!(prompt.contains("Both sides assume the API must be synchronous."));
+        assert!(prompt.contains("Use a synchronous API."));
     }
 }

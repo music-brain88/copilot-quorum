@@ -175,16 +175,34 @@ plan/action/final review では省略される）:
    "key_points":[],"consensus":[],"disagreements":[]}}
 ```
 
+`debate`（`agent.strategy = "debate"`、敵対的パネル v2 #316）は `target` を
+持たず、`pr_review` と同様に `synthesis` を含む。`votes` は反論台帳
+（`ObjectionLedger`）の各エントリ1件につき1票（`reasoning` は
+`[REBUTTAL_ID][refuted|conceded|unresolved] claim: reason` 形式）に加え、
+討議全体の最終裁定を表す closing vote が末尾に1件付く:
+
+```json
+{"type":"quorum_result","timestamp":"2026-07-04T10:30:00.123Z",
+ "api_version":1,"topic":"debate",
+ "approved":true,"rule":"majority",
+ "votes":[
+   {"model":"claude-opus-4.5","verdict":"approve","reasoning":"[R1-1][refuted] cache never expires: TTL config is finite","confidence":null},
+   {"model":"claude-opus-4.5","verdict":"approve","reasoning":"Write-through wins.","confidence":null}
+ ],
+ "synthesis":{"moderator":"claude-opus-4.5","conclusion":"Write-through wins.",
+   "key_points":[],"consensus":[],"disagreements":[]}}
+```
+
 | フィールド | 型 | 説明 |
 |-----------|------|------|
 | `api_version` | int | エンベロープのスキーマバージョン（現在 1） |
-| `topic` | string | `plan_review` / `action_review` / `final_review` / `pr_review` |
-| `target` | object? | topic 依存の対象識別（action_review: `task_id`, `tool`。pr_review: `pr`, `title`）。なければ省略 |
+| `topic` | string | `plan_review` / `action_review` / `final_review` / `pr_review` / `debate` |
+| `target` | object? | topic 依存の対象識別（action_review: `task_id`, `tool`。pr_review: `pr`, `title`。debate では省略）。なければ省略 |
 | `approved` | bool | 投票の集計結果 |
 | `rule` | string | 集計ルール（現在は `majority` 固定） |
 | `votes[].verdict` | string | `approve` / `reject` / `abstain` / `model_error` |
 | `feedback` | string? | 否決時の rejection feedback 集約。承認時は省略 |
-| `synthesis` | object? | moderator による統合レビュー（pr_review のみ。`moderator`, `conclusion`, `key_points`, `consensus`, `disagreements`） |
+| `synthesis` | object? | moderator による統合レビュー（pr_review / debate のみ。`moderator`, `conclusion`, `key_points`, `consensus`, `disagreements`） |
 
 **注**: `pr_review` を JSONL に発行する `RunReviewUseCase` は `target` を持たずに publish する
 （review 対象の PR 番号/タイトルは呼び出し元の CLI 層のみが知っている一時情報のため）。

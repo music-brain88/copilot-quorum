@@ -105,6 +105,9 @@ Vim/Neovim のプラグインエコシステムに倣い、段階的に構築さ
 `QuorumResult` は `EventPublisher` 継ぎ目経由で配信される（progress bridge 経由ではない）。
 `task_id` / `tool` は action_review の相関情報（他 topic では nil）、`feedback` は否決時のみ。
 `votes_json` は `quorum_result` v1 契約の votes 配列（[Logging](logging.md) 参照）。
+`topic` は `plan_review` / `action_review` / `final_review` / `pr_review` に加え、
+Debate 戦略（`agent.strategy = "debate"`、敵対的パネル v2 #316）の最終裁定を表す
+`debate` を取り得る。
 
 ### ToolCallBefore キャンセルフロー
 

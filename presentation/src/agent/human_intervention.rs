@@ -43,6 +43,16 @@
 //! | `/approve` | `approve`, `a` | Execute the current plan |
 //! | `/reject` | `reject`, `r`, `q` | Abort the agent |
 //! | `/edit` | `edit`, `e` | Edit plan (not yet implemented) |
+//!
+//! The same handler also implements `request_debate_escalation` for the
+//! Debate strategy's settle-checkpoint escalation (triggered whenever the
+//! moderator tries to settle with unresolved critical/major objections —
+//! not only at the round limit): it shows the question, the remaining
+//! unresolved objections (claim/evidence/severity), and a transcript
+//! summary, then accepts `/approve` (force a decision) or `/reject`. What
+//! `/reject` does depends on whether a next round exists: it declines the
+//! early settle and continues the debate in a non-final round, or aborts
+//! the debate entirely at the final round.
 
 use async_trait::async_trait;
 use colored::Colorize;
@@ -50,6 +60,7 @@ use quorum_application::ports::human_intervention::{
     HumanInterventionError, HumanInterventionPort,
 };
 use quorum_domain::core::string::truncate;
+use quorum_domain::quorum::{Objection, ObjectionSeverity};
 use quorum_domain::{HumanDecision, Plan, ReviewRound};
 use std::io::{self, Write};
 
@@ -158,6 +169,95 @@ impl InteractiveHumanIntervention {
             "  {}     - Edit plan (feature coming soon)",
             "/edit".yellow()
         );
+        println!();
+    }
+
+    /// Display the debate escalation prompt UI
+    fn display_debate_escalation_prompt(
+        &self,
+        question: &str,
+        unresolved: &[Objection],
+        transcript_summary: &str,
+        can_continue: bool,
+    ) {
+        println!();
+        println!(
+            "{}",
+            "═══════════════════════════════════════════════════════════════"
+                .yellow()
+                .bold()
+        );
+        println!("{}", "  ⚖️  Debate Requires Human Ruling".yellow().bold());
+        println!(
+            "{}",
+            "═══════════════════════════════════════════════════════════════"
+                .yellow()
+                .bold()
+        );
+        println!();
+
+        if can_continue {
+            println!(
+                "The moderator wants to settle early with {} unresolved objection(s) still open.",
+                unresolved.len()
+            );
+        } else {
+            println!(
+                "The debate reached its round limit with {} unresolved objection(s).",
+                unresolved.len()
+            );
+        }
+        println!();
+
+        // Show original question
+        println!("{}", "Question:".cyan().bold());
+        println!("  {}", question.dimmed());
+        println!();
+
+        // Show unresolved objections
+        if !unresolved.is_empty() {
+            println!("{}", "Unresolved Objections:".cyan().bold());
+            for objection in unresolved {
+                let severity = match objection.severity {
+                    ObjectionSeverity::Critical => "CRITICAL".red(),
+                    ObjectionSeverity::Major => "MAJOR".yellow(),
+                    ObjectionSeverity::Minor => "minor".dimmed(),
+                };
+                println!(
+                    "  [{}] {} {}",
+                    objection.id,
+                    severity,
+                    truncate(&objection.claim, 80)
+                );
+                println!(
+                    "    └─ evidence: {}",
+                    truncate(&objection.evidence, 80).dimmed()
+                );
+            }
+            println!();
+        }
+
+        // Show transcript summary
+        if !transcript_summary.is_empty() {
+            println!("{}", "Transcript Summary:".cyan().bold());
+            println!("  {}", transcript_summary.dimmed());
+            println!();
+        }
+
+        // Show commands
+        println!("{}", "Commands:".cyan().bold());
+        println!(
+            "  {}  - Force a decision, proceeding despite unresolved objections",
+            "/approve".green()
+        );
+        if can_continue {
+            println!(
+                "  {}   - Decline the early settle, continue the debate to the next round",
+                "/reject".red()
+            );
+        } else {
+            println!("  {}   - Abort the debate", "/reject".red());
+        }
         println!();
     }
 
@@ -286,6 +386,52 @@ impl HumanInterventionPort for InteractiveHumanIntervention {
                 "/reject" | "reject" | "r" | "n" | "no" | "q" => {
                     println!();
                     println!("{}", "✗ Execution cancelled".yellow());
+                    return Ok(HumanDecision::Reject);
+                }
+                "" => continue,
+                _ => {
+                    println!();
+                    println!("{} Unknown command: {}", "⚠️".yellow(), input.red());
+                    println!("Available commands: /approve, /reject");
+                    println!();
+                }
+            }
+        }
+    }
+
+    async fn request_debate_escalation(
+        &self,
+        question: &str,
+        unresolved: &[quorum_domain::quorum::Objection],
+        transcript_summary: &str,
+        can_continue: bool,
+    ) -> Result<HumanDecision, HumanInterventionError> {
+        self.display_debate_escalation_prompt(
+            question,
+            unresolved,
+            transcript_summary,
+            can_continue,
+        );
+
+        loop {
+            let input = self.read_command()?;
+
+            match input.to_lowercase().as_str() {
+                "/approve" | "approve" | "a" => {
+                    println!();
+                    println!(
+                        "{}",
+                        "✓ Debate forced to a decision by human ruling".green()
+                    );
+                    return Ok(HumanDecision::Approve);
+                }
+                "/reject" | "reject" | "r" | "q" => {
+                    println!();
+                    if can_continue {
+                        println!("{}", "✗ Early settle declined — debate continues".red());
+                    } else {
+                        println!("{}", "✗ Debate aborted by human".red());
+                    }
                     return Ok(HumanDecision::Reject);
                 }
                 "" => continue,

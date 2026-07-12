@@ -48,6 +48,16 @@ Lua からの変更は runtime でエージェントに伝播します。
 3 軸（consensus_level / phase_scope / strategy）の意味と組み合わせ制約は
 [Orchestration Axes](../explanation/orchestration-axes.md) を参照してください。
 
+`agent.hil_mode` は Plan Review の人間介入だけでなく、`agent.strategy = "debate"`
+（Debate 戦略）のエスカレーションにも効きます。moderator が critical/major な
+反論が未解決のまま settle しようとするたびに（最終ラウンドに限らず、途中の
+settle チェックポイントでも）このモードでゲートされます: `auto_reject` は
+最終ラウンドでは討議を中止しますが、途中ラウンドでは settle を却下して
+討議を続行します（討議自体を止めるのではなく、未解決のまま決着させないための
+fail-secure）。`auto_approve` は未解決のまま強制的に settle し、`interactive`
+は `HumanInterventionPort::request_debate_escalation` 経由で都度ユーザーに
+判断を委ねます。
+
 ### `models.*` — ロール別モデル設定
 
 | キー | 型 | 用途 |

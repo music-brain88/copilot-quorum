@@ -15,6 +15,8 @@
 //! [`QuorumStrategyExecutor`](super::quorum_strategy::QuorumStrategyExecutor)).
 
 use super::types::{RunQuorumError, RunQuorumInput};
+use crate::ports::event_publisher::EventPublisher;
+use crate::ports::human_intervention::HumanInterventionPort;
 use crate::ports::llm_gateway::LlmGateway;
 use crate::ports::progress::ProgressNotifier;
 use async_trait::async_trait;
@@ -31,10 +33,20 @@ pub trait StrategyExecutor: Send + Sync {
     fn phases(&self) -> Vec<Phase>;
 
     /// Execute the strategy and produce a [`QuorumResult`].
+    ///
+    /// `event_publisher` and `human_intervention` are threaded through for
+    /// strategies that need to publish typed events (e.g. Debate's objection
+    /// votes) or escalate to a human when automated resolution stalls. As of
+    /// this signature change, [`QuorumStrategyExecutor`](super::quorum_strategy::QuorumStrategyExecutor)
+    /// accepts both but doesn't wire them up yet (out of scope — see #314's
+    /// follow-ups); it's just Debate that will make use of them.
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         input: &RunQuorumInput,
         gateway: Arc<dyn LlmGateway>,
         progress: &dyn ProgressNotifier,
+        event_publisher: Arc<dyn EventPublisher>,
+        human_intervention: Option<Arc<dyn HumanInterventionPort>>,
     ) -> Result<QuorumResult, RunQuorumError>;
 }

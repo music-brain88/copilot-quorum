@@ -3,6 +3,7 @@
 //! Defines the commands sent TO the controller task and the events
 //! coming FROM it (via UiEvent channel and progress bridge).
 
+use quorum_domain::quorum::Objection;
 use quorum_domain::{
     AgentPhase, ConsensusLevel, ContextMode, HumanDecision, InteractionForm, InteractionId, Plan,
     ReviewRound, StreamContext,
@@ -223,6 +224,19 @@ pub enum HilKind {
     ExecutionConfirmation {
         request: String,
         plan: Plan,
+    },
+    /// Debate strategy settle-checkpoint escalation — the moderator tried to
+    /// settle while critical/major objections remain unresolved (see
+    /// `HumanInterventionPort::request_debate_escalation`). Fires at every
+    /// such checkpoint, not only the final round.
+    DebateEscalation {
+        question: String,
+        unresolved: Vec<Objection>,
+        transcript_summary: String,
+        /// `true` when this is a non-final round: rejecting declines the
+        /// early settle and continues the debate. `false` at the final
+        /// round: rejecting aborts the debate entirely.
+        can_continue: bool,
     },
 }
 
