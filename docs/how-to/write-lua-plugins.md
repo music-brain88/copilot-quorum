@@ -13,7 +13,7 @@
 
 -- 設定変更
 quorum.config.set("agent.hil_mode", "auto_approve")
-quorum.config["models.exploration"] = "gpt-5.3-codex"
+quorum.config["models.exploration"] = "gpt-6-luna"
 
 -- キーバインド
 -- "close_tab_or_quit" は :q 相当 — 複数タブ時は現在のタブを閉じ、最後の

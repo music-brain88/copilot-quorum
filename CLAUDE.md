@@ -50,7 +50,7 @@ cargo test -p quorum-domain
 RUST_LOG=debug cargo run -p copilot-quorum -- "Your question"
 
 # Run in interactive mode (TUI)
-cargo run -p copilot-quorum -- -m claude-haiku-4.5
+cargo run -p copilot-quorum -- -m claude-haiku-5.5
 
 # Initialize project context (generates .quorum/context.md)
 cargo run -p copilot-quorum -- /init
@@ -105,12 +105,12 @@ Boot sequence: Rust defaults → Lua (init.lua + plugins) → CLI arg overrides
 -- ~/.config/copilot-quorum/init.lua
 
 -- Role-based model selection
-quorum.config.set("models.exploration", "gpt-5.3-codex")       -- Context gathering + low-risk tools
-quorum.config.set("models.decision", "claude-sonnet-4.5")      -- Planning + high-risk tools
-quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview" })
--- quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.3-codex" })  -- Quorum Discussion
--- quorum.config.set("models.moderator", "claude-opus-4.5")    -- Quorum Synthesis
--- quorum.config.set("models.ask", "claude-sonnet-4.5")        -- Ask (Q&A) interaction
+quorum.config.set("models.exploration", "gpt-6-luna")          -- Context gathering + low-risk tools
+quorum.config.set("models.decision", "claude-sonnet-5.5")      -- Planning + high-risk tools
+quorum.config.set("models.review", { "claude-opus-5.5", "gpt-6.1-sol", "gemini-4-carbon" })
+-- quorum.config.set("models.participants", { "claude-opus-5.5", "gpt-6.1-sol" })  -- Quorum Discussion
+-- quorum.config.set("models.moderator", "claude-opus-5.5")    -- Quorum Synthesis
+-- quorum.config.set("models.ask", "claude-sonnet-5.5")        -- Ask (Q&A) interaction
 
 -- Agent settings
 quorum.config.set("agent.consensus_level", "solo")     -- "solo" or "ensemble"

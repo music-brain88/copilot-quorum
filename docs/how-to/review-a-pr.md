@@ -55,7 +55,7 @@ copilot-quorum review --pr "$PR_NUMBER" --output json > review.json
   "approved": true,
   "rule": "majority",
   "votes": [
-    {"model": "claude-opus-4.5", "verdict": "approve", "reasoning": "...", "confidence": null}
+    {"model": "claude-opus-5.5", "verdict": "approve", "reasoning": "...", "confidence": null}
   ],
   "synthesis": {"moderator": "...", "conclusion": "...", "key_points": [], "consensus": [], "disagreements": []},
   "timestamp": "2026-07-04T..."
@@ -69,8 +69,8 @@ copilot-quorum review --pr "$PR_NUMBER" --output json > review.json
 投票（`models.review`）と統合（`models.moderator`）に使うモデルは、通常の Quorum レビューと共通の設定キーです:
 
 ```lua
-quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview" })
-quorum.config.set("models.moderator", "claude-opus-4.5")
+quorum.config.set("models.review", { "claude-opus-5.5", "gpt-6.1-sol", "gemini-4-carbon" })
+quorum.config.set("models.moderator", "claude-opus-5.5")
 ```
 
 全設定キーは [Configuration Reference](../reference/configuration.md) を参照してください。

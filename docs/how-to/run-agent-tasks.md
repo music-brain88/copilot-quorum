@@ -58,11 +58,11 @@ Tasks:
 
 Review History:
   Rev 1: REJECTED [○●○]
-    └─ gpt-5.3-codex: Missing error handling
+    └─ gpt-6.1-sol: Missing error handling
   Rev 2: REJECTED [●○○]
-    └─ gemini-3.1-pro-preview: Unclear objective
+    └─ gemini-4-carbon: Unclear objective
   Rev 3: REJECTED [○○●]
-    └─ claude-sonnet-4.5: Inconsistent approach
+    └─ claude-sonnet-5.5: Inconsistent approach
 
 Commands:
   /approve  - Execute this plan as-is

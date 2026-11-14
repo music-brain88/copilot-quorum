@@ -30,13 +30,13 @@ init.lua を開いて、役割ごとにモデルを割り当てます:
 
 ```lua
 -- 情報収集は速くて安いモデル、計画とレビューは高性能モデル
-quorum.config.set("models.exploration", "claude-haiku-4.5")
-quorum.config.set("models.decision", "claude-sonnet-4.5")
-quorum.config.set("models.review", { "claude-opus-4.5", "gpt-5.3-codex" })
+quorum.config.set("models.exploration", "claude-haiku-5.5")
+quorum.config.set("models.decision", "claude-sonnet-5.5")
+quorum.config.set("models.review", { "claude-opus-5.5", "gpt-6.1-sol" })
 
 -- Discussion / Ensemble の参加モデルとモデレーター
-quorum.config.set("models.participants", { "claude-opus-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview" })
-quorum.config.set("models.moderator", "claude-opus-4.5")
+quorum.config.set("models.participants", { "claude-opus-5.5", "gpt-6.1-sol", "gemini-4-carbon" })
+quorum.config.set("models.moderator", "claude-opus-5.5")
 ```
 
 対話モードの `/config` で反映を確認できます。

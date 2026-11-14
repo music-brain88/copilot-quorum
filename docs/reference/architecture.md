@@ -741,7 +741,7 @@ Session C ← channel_c ←┘        │
 ```
 Content-Length: 123\r\n
 \r\n
-{"jsonrpc":"2.0","method":"session.create","params":{"model":"claude-sonnet-4.5"},"id":1}
+{"jsonrpc":"2.0","method":"session.create","params":{"model":"claude-sonnet-5.5"},"id":1}
 ```
 
 ---
