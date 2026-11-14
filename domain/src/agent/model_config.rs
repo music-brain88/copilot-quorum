@@ -54,12 +54,12 @@ pub struct ModelConfig {
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            exploration: Model::ClaudeHaiku45,
-            decision: Model::ClaudeSonnet45,
-            review: vec![Model::ClaudeSonnet45, Model::Gpt53Codex],
-            participants: vec![Model::ClaudeSonnet45, Model::Gpt53Codex],
-            moderator: Model::ClaudeSonnet45,
-            ask: Model::ClaudeSonnet45,
+            exploration: Model::ClaudeHaiku55,
+            decision: Model::ClaudeSonnet55,
+            review: vec![Model::ClaudeSonnet55, Model::Gpt61Sol],
+            participants: vec![Model::ClaudeSonnet55, Model::Gpt61Sol],
+            moderator: Model::ClaudeSonnet55,
+            ask: Model::ClaudeSonnet55,
         }
     }
 }
@@ -105,13 +105,16 @@ mod tests {
     #[test]
     fn test_default() {
         let config = ModelConfig::default();
-        assert_eq!(config.exploration, Model::ClaudeHaiku45);
-        assert_eq!(config.decision, Model::ClaudeSonnet45);
-        assert_eq!(config.review.len(), 2);
+        assert_eq!(config.exploration, Model::ClaudeHaiku55);
+        assert_eq!(config.decision, Model::ClaudeSonnet55);
+        assert_eq!(config.review, vec![Model::ClaudeSonnet55, Model::Gpt61Sol]);
         // Interaction roles
-        assert_eq!(config.participants.len(), 2);
-        assert_eq!(config.moderator, Model::ClaudeSonnet45);
-        assert_eq!(config.ask, Model::ClaudeSonnet45);
+        assert_eq!(
+            config.participants,
+            vec![Model::ClaudeSonnet55, Model::Gpt61Sol]
+        );
+        assert_eq!(config.moderator, Model::ClaudeSonnet55);
+        assert_eq!(config.ask, Model::ClaudeSonnet55);
     }
 
     #[test]

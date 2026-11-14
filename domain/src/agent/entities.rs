@@ -1191,13 +1191,13 @@ mod tests {
         let config = ModelConfig::default();
 
         // Exploration uses cheap model (context gathering + low-risk tools)
-        assert_eq!(config.exploration, Model::ClaudeHaiku45);
+        assert_eq!(config.exploration, Model::ClaudeHaiku55);
         // Decision uses high-performance model (planning + high-risk decisions)
-        assert_eq!(config.decision, Model::ClaudeSonnet45);
+        assert_eq!(config.decision, Model::ClaudeSonnet55);
         // Reviews use multiple high-performance models
         assert_eq!(config.review.len(), 2);
-        assert!(config.review.contains(&Model::ClaudeSonnet45));
-        assert!(config.review.contains(&Model::Gpt53Codex));
+        assert!(config.review.contains(&Model::ClaudeSonnet55));
+        assert!(config.review.contains(&Model::Gpt61Sol));
     }
 
     #[test]
@@ -1224,7 +1224,7 @@ mod tests {
 
         // with_decision() sets the decision model, others keep defaults
         assert_eq!(config.decision, Model::ClaudeOpus45);
-        assert_eq!(config.exploration, Model::ClaudeHaiku45);
+        assert_eq!(config.exploration, Model::ClaudeHaiku55);
     }
 
     // ==================== SessionMode Tests ====================
