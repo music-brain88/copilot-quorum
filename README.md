@@ -101,7 +101,7 @@ copilot-quorum "What's the best way to handle errors in Rust?"
 ### With Model Selection / モデルを指定
 
 ```bash
-copilot-quorum -m claude-sonnet-4.5 -m gpt-5.3-codex "Compare async/await patterns"
+copilot-quorum -m claude-sonnet-5.5 -m gpt-6.1-sol "Compare async/await patterns"
 ```
 
 ### Full Output / 全フェーズの出力
@@ -130,14 +130,17 @@ copilot-quorum -o full "Explain the actor model"
 
 | Provider | Models |
 |----------|--------|
-| **Claude** | `claude-sonnet-4.5`, `claude-opus-4.5`, `claude-haiku-4.5`, `claude-sonnet-4` |
-| **GPT** | `gpt-5.4`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-5.1-codex-mini`, `gpt-5-mini`, `gpt-4.1` |
-| **Gemini** | `gemini-3.1-pro-preview`, `gemini-3-pro-preview` |
+| **Claude** | `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-opus-5.5`, `claude-opus-5`, `claude-opus-4.8`, `claude-haiku-5.5`, `claude-haiku-4.5` |
+| **GPT** | `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.3-codex` |
+| **Gemini** | `gemini-4-carbon`, `gemini-4-hydrogen` |
+| **Grok** | `grok-4.7`, `grok-4.6` |
+| **Microsoft AI** | `mai-code-1.1-flash` |
 
-**Default models / デフォルトモデル:** `gpt-5.3-codex`, `claude-sonnet-4.5`, `gemini-3.1-pro-preview`
+**Default models / デフォルトモデル:** `gpt-6.1-sol`, `claude-sonnet-5.5`, `gemini-4-carbon`
 
 > **Note**: 利用可能なモデルは Copilot CLI のバージョン・プランに依存します。
-> Copilot CLI 1.0.65 時点で `gpt-5.2-codex` と `gemini-3-pro-preview` は利用できません。
+> 上の表は Copilot CLI 1.0.91 の `models.list` が返すモデルです。
+> `claude-sonnet-4.5` や `gemini-3.1-pro-preview` など、それ以前のモデルは Copilot CLI 1.0.91 では利用できません。
 
 ---
 

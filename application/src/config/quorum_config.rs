@@ -839,7 +839,7 @@ mod tests {
         let config = QuorumConfig::default();
         assert_eq!(config.mode().consensus_level, ConsensusLevel::Solo);
         assert_eq!(config.mode().phase_scope, PhaseScope::Full);
-        assert_eq!(config.models().decision, Model::ClaudeSonnet45);
+        assert_eq!(config.models().decision, Model::ClaudeSonnet55);
         assert!(!config.policy().require_final_review);
         assert_eq!(config.execution().max_iterations, 50);
         // New fields

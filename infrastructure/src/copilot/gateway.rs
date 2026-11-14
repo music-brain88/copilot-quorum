@@ -43,33 +43,42 @@ fn map_session_error(err: CopilotError) -> GatewayError {
 
 /// Models known to be available on GitHub Copilot CLI.
 ///
-/// Copilot CLI has no model-listing endpoint, so this list is maintained by
-/// hand and verified against the CLI version we target. Verified against
-/// Copilot CLI 1.0.65 (#262/#263): `gpt-5.2-codex` and `gemini-3-pro-preview`
-/// were removed upstream (`session.create` fails with "Model not available"),
-/// and `gpt-5.4` / `gpt-5.3-codex` were added.
+/// This list is maintained by hand and verified against the CLI version we
+/// target. Verified against Copilot CLI 1.0.91: it is every model returned by
+/// the CLI's `models.list` JSON-RPC method (except the `auto` pseudo-model),
+/// and `session.create` succeeded for each of them. The Claude 4.x (other than
+/// Haiku 4.5), GPT-5.4 and earlier, and Gemini 3.x models that earlier CLI
+/// versions offered now fail `session.create` with "Model not available".
 ///
-/// Must remain a superset of [`Model::default_models`] so the default
-/// configuration never references a dropped model (enforced by a unit test).
+/// The list is still static: this gateway does not call `models.list` at
+/// runtime, so it goes stale whenever Copilot CLI rotates its lineup (#262 was
+/// the same failure against 1.0.65).
+///
+/// Must remain a superset of [`Model::default_models`] and of every role in
+/// `ModelConfig::default()` so the default configuration never references a
+/// dropped model (enforced by unit tests).
 fn known_available_models() -> Vec<Model> {
     vec![
-        Model::ClaudeSonnet46,
-        Model::ClaudeOpus46,
-        Model::ClaudeSonnet45,
+        Model::ClaudeSonnet55,
+        Model::ClaudeSonnet5,
+        Model::ClaudeOpus55,
+        Model::ClaudeOpus5,
+        Model::ClaudeOpus48,
+        Model::ClaudeHaiku55,
         Model::ClaudeHaiku45,
-        Model::ClaudeOpus45,
-        Model::ClaudeSonnet4,
-        Model::Gpt54,
+        Model::Gpt61Sol,
+        Model::Gpt61Terra,
+        Model::Gpt6Sol,
+        Model::Gpt6Luna,
+        Model::Gpt56Sol,
+        Model::Gpt56Terra,
+        Model::Gpt56Luna,
         Model::Gpt53Codex,
-        Model::Gpt51CodexMax,
-        Model::Gpt51Codex,
-        Model::Gpt52,
-        Model::Gpt51,
-        Model::Gpt5,
-        Model::Gpt51CodexMini,
-        Model::Gpt5Mini,
-        Model::Gpt41,
-        Model::Gemini31Pro,
+        Model::Gemini4Carbon,
+        Model::Gemini4Hydrogen,
+        Model::Grok47,
+        Model::Grok46,
+        Model::MaiCode11Flash,
     ]
 }
 
@@ -239,10 +248,39 @@ mod tests {
     }
 
     #[test]
+    fn available_models_superset_of_default_model_config() {
+        // Same guard for the role-based defaults: `:ask` broke on Copilot CLI
+        // 1.0.91 because `ModelConfig::default().ask` was claude-sonnet-4.5,
+        // which the CLI had stopped offering.
+        let available = known_available_models();
+        let defaults = quorum_domain::ModelConfig::default();
+        let roles = [
+            &defaults.exploration,
+            &defaults.decision,
+            &defaults.moderator,
+            &defaults.ask,
+        ]
+        .into_iter()
+        .chain(defaults.review.iter())
+        .chain(defaults.participants.iter());
+        for model in roles {
+            assert!(
+                available.contains(model),
+                "default role model {model} is missing from known_available_models()"
+            );
+        }
+    }
+
+    #[test]
     fn available_models_exclude_dropped_models() {
         // gpt-5.2-codex / gemini-3-pro-preview were removed in Copilot CLI 1.0.65.
+        // The Claude 4.x models other than Haiku 4.5 were gone by 1.0.91; they
+        // stay in the `Model` enum only for the Bedrock provider.
         let available = known_available_models();
         assert!(!available.contains(&Model::Gpt52Codex));
         assert!(!available.contains(&Model::Gemini3Pro));
+        assert!(!available.contains(&Model::Gemini31Pro));
+        assert!(!available.contains(&Model::ClaudeSonnet45));
+        assert!(!available.contains(&Model::ClaudeSonnet46));
     }
 }

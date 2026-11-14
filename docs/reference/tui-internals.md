@@ -84,7 +84,7 @@ TUI は以下のウィジェットで構成されます:
 
 ```
 ┌─────────────────── Header ──────────────────┐
-│ Model: claude-sonnet-4.5 | Solo | Full      │
+│ Model: claude-sonnet-5.5 | Solo | Full      │
 ├──── Tab Bar (2+ タブ時のみ表示) ────────────┤
 │ [Fix the auth bug] [What is DDD?]           │
 ├─────────────── Conversation ────────────────┤
