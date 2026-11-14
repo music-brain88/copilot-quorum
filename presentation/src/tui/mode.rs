@@ -230,46 +230,60 @@ fn builtin_action_by_name(name: &str) -> KeyAction {
 
 /// Parse a human-readable key descriptor string into (KeyCode, KeyModifiers).
 ///
-/// Supports:
-/// - Simple keys: `"j"`, `"Esc"`, `"Enter"`, `"Space"`, `"Tab"`
-/// - Modified keys: `"Ctrl+s"`, `"Shift+Enter"`, `"Ctrl+Shift+p"`
-/// - Special keys: `"Backspace"`, `"Delete"`, `"Up"`, `"Down"`, `"F1"`–`"F12"`
+/// This is the single entry point shared by Lua `quorum.keymap.set` and the
+/// RPC `keys.feed` method, so a key without a descriptor can be neither bound
+/// nor fed. Which `KeyCode` variants are reachable (and which are deliberately
+/// not) is pinned by `key_code_coverage` in this module's tests.
+///
+/// Supports (names are case-sensitive):
+/// - Characters: any single character — `"j"`, `"G"`, `":"`, `"あ"`. Two
+///   characters have names instead: the space bar is `"Space"`, and `+` is
+///   `"Plus"` because `+` itself is the modifier separator
+/// - Editing keys: `"Esc"`, `"Enter"`, `"Tab"`, `"BackTab"`, `"Backspace"`,
+///   `"Delete"`, `"Insert"`
+/// - Navigation keys: `"Up"`, `"Down"`, `"Left"`, `"Right"`, `"Home"`, `"End"`,
+///   `"PageUp"`, `"PageDown"`
+/// - Function keys: `"F1"`–`"F12"`
+/// - Modifiers: `"Ctrl+"`, `"Shift+"`, `"Alt+"` prefixes in any order —
+///   `"Ctrl+s"`, `"Shift+Enter"`, `"Ctrl+Shift+p"`, `"Ctrl+Plus"`
 pub fn parse_key_descriptor(desc: &str) -> Option<(KeyCode, KeyModifiers)> {
-    if desc.is_empty() {
-        return None;
-    }
-
-    let parts: Vec<&str> = desc.split('+').collect();
-    let (key_str, mod_parts) = parts.split_last()?;
-
-    if key_str.is_empty() {
-        return None;
-    }
+    // Everything before the last `+` is the modifier prefix. A literal `+`
+    // key therefore cannot appear as a character; it is spelled `"Plus"`.
+    let (mod_prefix, key_str) = match desc.rsplit_once('+') {
+        Some((mods, key)) => (Some(mods), key),
+        None => (None, desc),
+    };
 
     let mut modifiers = KeyModifiers::NONE;
-    for part in mod_parts {
-        match *part {
-            "Ctrl" => modifiers |= KeyModifiers::CONTROL,
-            "Shift" => modifiers |= KeyModifiers::SHIFT,
-            "Alt" => modifiers |= KeyModifiers::ALT,
-            _ => return None,
+    if let Some(mod_prefix) = mod_prefix {
+        for part in mod_prefix.split('+') {
+            match part {
+                "Ctrl" => modifiers |= KeyModifiers::CONTROL,
+                "Shift" => modifiers |= KeyModifiers::SHIFT,
+                "Alt" => modifiers |= KeyModifiers::ALT,
+                _ => return None,
+            }
         }
     }
 
-    let key_code = match *key_str {
+    let key_code = match key_str {
         "Esc" => KeyCode::Esc,
         "Enter" => KeyCode::Enter,
         "Tab" => KeyCode::Tab,
         "BackTab" => KeyCode::BackTab,
         "Backspace" => KeyCode::Backspace,
         "Delete" => KeyCode::Delete,
+        "Insert" => KeyCode::Insert,
         "Space" => KeyCode::Char(' '),
+        "Plus" => KeyCode::Char('+'),
         "Up" => KeyCode::Up,
         "Down" => KeyCode::Down,
         "Left" => KeyCode::Left,
         "Right" => KeyCode::Right,
         "Home" => KeyCode::Home,
         "End" => KeyCode::End,
+        "PageUp" => KeyCode::PageUp,
+        "PageDown" => KeyCode::PageDown,
         s if s.starts_with('F') && s.len() >= 2 => {
             let num = s[1..].parse::<u8>().ok()?;
             if (1..=12).contains(&num) {
@@ -278,8 +292,14 @@ pub fn parse_key_descriptor(desc: &str) -> Option<(KeyCode, KeyModifiers)> {
                 return None;
             }
         }
-        s if s.len() == 1 => KeyCode::Char(s.chars().next().unwrap()),
-        _ => return None,
+        // Exactly one character (not one byte): `"é"` and `"あ"` are keys too.
+        s => {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => KeyCode::Char(c),
+                _ => return None,
+            }
+        }
     };
 
     Some((key_code, modifiers))
@@ -812,6 +832,225 @@ mod tests {
         assert_eq!(parse_key_descriptor(""), None);
         assert_eq!(parse_key_descriptor("Ctrl+"), None);
         assert_eq!(parse_key_descriptor("gibberish"), None);
+    }
+
+    // -- Key descriptor <-> crossterm KeyCode coverage (#329) --
+
+    /// What `parse_key_descriptor` is expected to do for one `KeyCode`.
+    #[derive(Debug)]
+    enum Coverage {
+        /// Reachable through this descriptor (without modifiers).
+        Descriptor(String),
+        /// Deliberately has no descriptor. The string records why.
+        Unsupported(&'static str),
+    }
+
+    /// Number of variants of crossterm's `KeyCode` (0.28).
+    const KEY_CODE_VARIANTS: usize = 27;
+
+    /// The decision table: for every `KeyCode`, either the descriptor that
+    /// reaches it or the reason it is intentionally unreachable.
+    ///
+    /// The `match` has no wildcard arm on purpose. When a crossterm upgrade
+    /// adds a `KeyCode` variant this stops compiling, which forces an explicit
+    /// supported / unsupported decision instead of a silent gap — the way
+    /// `BackTab` was missing until PR #328 stumbled on it. When you add an arm,
+    /// also add a value to `key_code_samples` and bump `KEY_CODE_VARIANTS`.
+    fn key_code_coverage(code: KeyCode) -> Coverage {
+        use Coverage::Unsupported;
+        let named = |name: &str| Coverage::Descriptor(name.to_string());
+
+        match code {
+            KeyCode::Backspace => named("Backspace"),
+            KeyCode::Enter => named("Enter"),
+            KeyCode::Left => named("Left"),
+            KeyCode::Right => named("Right"),
+            KeyCode::Up => named("Up"),
+            KeyCode::Down => named("Down"),
+            KeyCode::Home => named("Home"),
+            KeyCode::End => named("End"),
+            KeyCode::PageUp => named("PageUp"),
+            KeyCode::PageDown => named("PageDown"),
+            KeyCode::Tab => named("Tab"),
+            KeyCode::BackTab => named("BackTab"),
+            KeyCode::Delete => named("Delete"),
+            KeyCode::Insert => named("Insert"),
+            KeyCode::F(n @ 1..=12) => Coverage::Descriptor(format!("F{n}")),
+            KeyCode::F(_) => Unsupported("only F1-F12 exist on common keyboards"),
+            KeyCode::Char(' ') => named("Space"),
+            KeyCode::Char('+') => named("Plus"),
+            KeyCode::Char(c) => Coverage::Descriptor(c.to_string()),
+            KeyCode::Esc => named("Esc"),
+            KeyCode::Null => Unsupported("crossterm never emits it for a key press"),
+            KeyCode::CapsLock | KeyCode::ScrollLock | KeyCode::NumLock => {
+                Unsupported("lock keys toggle terminal-side state; not bindable actions")
+            }
+            KeyCode::PrintScreen | KeyCode::Pause | KeyCode::Menu | KeyCode::KeypadBegin => {
+                Unsupported("only delivered by kitty-protocol terminals; no use case yet")
+            }
+            KeyCode::Media(_) => Unsupported("media keys belong to the OS, not the TUI"),
+            KeyCode::Modifier(_) => {
+                Unsupported("needs REPORT_ALL_KEYS_AS_ESCAPE_CODES, which the TUI does not enable")
+            }
+        }
+    }
+
+    /// At least one value of every `KeyCode` variant, plus the boundary values
+    /// of the parameterized ones.
+    fn key_code_samples() -> Vec<KeyCode> {
+        use crossterm::event::{MediaKeyCode, ModifierKeyCode};
+
+        let mut samples = vec![
+            KeyCode::Backspace,
+            KeyCode::Enter,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::Null,
+            KeyCode::Esc,
+            KeyCode::CapsLock,
+            KeyCode::ScrollLock,
+            KeyCode::NumLock,
+            KeyCode::PrintScreen,
+            KeyCode::Pause,
+            KeyCode::Menu,
+            KeyCode::KeypadBegin,
+            KeyCode::Media(MediaKeyCode::Play),
+            KeyCode::Modifier(ModifierKeyCode::LeftShift),
+        ];
+        // F0 and F13 sit just outside the supported F1-F12 range.
+        samples.extend((0..=13).map(KeyCode::F));
+        samples.push(KeyCode::F(u8::MAX));
+        // ASCII letters/digits/punctuation, a lone `F` (the function-key
+        // prefix), the two named characters (`+` and the space bar), and
+        // multi-byte characters.
+        samples.extend("jGF09:/-+ éあ".chars().map(KeyCode::Char));
+        samples
+    }
+
+    /// The names someone would most plausibly try for an unsupported key.
+    fn plausible_descriptors(code: KeyCode) -> Vec<String> {
+        match code {
+            KeyCode::F(n) => vec![format!("F{n}")],
+            KeyCode::Media(media) => vec![format!("{media:?}"), format!("{code:?}")],
+            KeyCode::Modifier(modifier) => vec![format!("{modifier:?}"), format!("{code:?}")],
+            _ => vec![format!("{code:?}")],
+        }
+    }
+
+    #[test]
+    fn test_key_code_samples_cover_every_variant() {
+        let variants: std::collections::HashSet<_> = key_code_samples()
+            .iter()
+            .map(std::mem::discriminant)
+            .collect();
+        assert_eq!(
+            variants.len(),
+            KEY_CODE_VARIANTS,
+            "key_code_samples() must hold a value of every KeyCode variant"
+        );
+    }
+
+    #[test]
+    fn test_parse_key_descriptor_matches_key_code_coverage() {
+        for code in key_code_samples() {
+            match key_code_coverage(code) {
+                Coverage::Descriptor(desc) => assert_eq!(
+                    parse_key_descriptor(&desc),
+                    Some((code, KeyModifiers::NONE)),
+                    "{code:?} is listed as supported via {desc:?}, \
+                     but parse_key_descriptor() does not produce it"
+                ),
+                Coverage::Unsupported(reason) => {
+                    for desc in plausible_descriptors(code) {
+                        assert_eq!(
+                            parse_key_descriptor(&desc),
+                            None,
+                            "{code:?} is listed as unsupported ({reason}), \
+                             but parse_key_descriptor() accepts {desc:?} — \
+                             move it to Coverage::Descriptor"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_modifier_prefixes() {
+        const CTRL: KeyModifiers = KeyModifiers::CONTROL;
+        const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
+        const ALT: KeyModifiers = KeyModifiers::ALT;
+
+        let cases = [
+            // Each modifier on its own, on a character and on a named key.
+            ("Ctrl+s", KeyCode::Char('s'), CTRL),
+            ("Shift+Tab", KeyCode::Tab, SHIFT),
+            ("Alt+x", KeyCode::Char('x'), ALT),
+            ("Ctrl+PageDown", KeyCode::PageDown, CTRL),
+            ("Alt+F4", KeyCode::F(4), ALT),
+            ("Ctrl+Space", KeyCode::Char(' '), CTRL),
+            // Combinations, in any order.
+            ("Ctrl+Alt+Delete", KeyCode::Delete, CTRL | ALT),
+            ("Ctrl+Shift+p", KeyCode::Char('p'), CTRL | SHIFT),
+            ("Shift+Ctrl+p", KeyCode::Char('p'), CTRL | SHIFT),
+            ("Ctrl+Shift+Alt+F12", KeyCode::F(12), CTRL | SHIFT | ALT),
+            // `+` is the separator, so the `+` key is spelled `Plus`.
+            ("Plus", KeyCode::Char('+'), KeyModifiers::NONE),
+            ("Ctrl+Plus", KeyCode::Char('+'), CTRL),
+            ("Ctrl+Shift+Plus", KeyCode::Char('+'), CTRL | SHIFT),
+        ];
+        for (desc, code, modifiers) in cases {
+            assert_eq!(
+                parse_key_descriptor(desc),
+                Some((code, modifiers)),
+                "descriptor {desc:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_malformed_modifier_prefixes_return_none() {
+        let cases = [
+            // Modifier and key names are case-sensitive.
+            "ctrl+s",
+            "CTRL+s",
+            "Ctrl+enter",
+            // Unknown modifiers.
+            "Meta+x",
+            "Super+x",
+            "Cmd+x",
+            // A modifier is not a key.
+            "Ctrl",
+            "Ctrl+Shift",
+            // Dangling or doubled separators. A literal `+` is never a key;
+            // it is spelled `Plus`.
+            "Ctrl+",
+            "+",
+            "+s",
+            "++",
+            "Ctrl++",
+            "Ctrl++s",
+            // Key names are case-sensitive, `Plus` included.
+            "plus",
+            "PLUS",
+            "Ctrl+ +s",
+            // More than one key.
+            "Ctrl+ab",
+            "ab",
+        ];
+        for desc in cases {
+            assert_eq!(parse_key_descriptor(desc), None, "descriptor {desc:?}");
+        }
     }
 
     #[test]

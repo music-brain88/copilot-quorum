@@ -96,7 +96,7 @@ copilot-quorum rpc --socket /tmp/quorum.sock command.exec '{"command": "q!"}'
 | `layout.get` | `{width?, height?}` | Surface ごとの Rect、preset、splits、route table、overlay 位置 |
 | `layout.set` | `{preset}` | レイアウトプリセットをライブ切替(default/minimal/wide/stacked/カスタム) |
 | `route.set` | `{content, surface}` | content slot → surface のルーティングをライブ変更 |
-| `keys.feed` | `{keys: [...]}` | 生キー注入(`"j"`, `"Esc"`, `"Ctrl+w"` — Lua keymap と同じ記法) |
+| `keys.feed` | `{keys: [...]}` | 生キー注入(`"j"`, `"Esc"`, `"Ctrl+w"` — Lua keymap と同じ記法。一覧は [キー記述子](configuration.md#キー記述子)) |
 | `rpc.discover` | — | 全メソッドの一覧(params スキーマ + 説明 + `api_version`) |
 | `commands.list` | — | `:` コマンド一覧(builtin + Lua `quorum.command.register` 登録分) |
 | `config.keys` | — | 全設定キー(description/mutable/valid_values) |

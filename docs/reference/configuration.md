@@ -231,6 +231,24 @@ end)
 | `"insert"` | Insert モード（テキスト入力） |
 | `"command"` | Command モード（`:` コマンド） |
 
+#### キー記述子
+
+第 2 引数のキー記述子は、Remote Control API の `keys.feed` と同じ記法を使う（どちらも `parse_key_descriptor()` を通る）。キー名と修飾名は大文字小文字を区別する。
+
+| 種類 | 記述子 |
+|------|--------|
+| 文字 | 1 文字をそのまま書く（`"j"`, `"G"`, `":"`, `"あ"`）。スペースキーは `"Space"`、`+` キーは `"Plus"`（`+` は修飾の区切り文字のため） |
+| 編集 | `"Esc"` `"Enter"` `"Tab"` `"BackTab"` `"Backspace"` `"Delete"` `"Insert"` |
+| 移動 | `"Up"` `"Down"` `"Left"` `"Right"` `"Home"` `"End"` `"PageUp"` `"PageDown"` |
+| ファンクション | `"F1"`〜`"F12"` |
+| 修飾 | `Ctrl+` `Shift+` `Alt+` を前に付ける。複数を任意の順で重ねられる（`"Ctrl+s"`, `"Ctrl+Shift+p"`, `"Ctrl+Plus"`） |
+
+- Shift+Tab は端末から `BackTab` として届くので、`"Shift+Tab"` ではなく `"BackTab"` と書く。
+- 次のキーには記述子がない: `F13` 以降、`CapsLock` / `ScrollLock` / `NumLock`、`PrintScreen` / `Pause` / `Menu`、テンキーの Begin、メディアキー、修飾キー単体。
+- `quorum.keymap.set` は不正な記述子をエラーにせず、そのバインドだけを無視する。`keys.feed` は不正な記述子が 1 つでもあるとバッチ全体を拒否する。
+
+対応するキーと対応しないキーの区別は、`presentation/src/tui/mode.rs` のテストにある `key_code_coverage` が crossterm の `KeyCode` 全 variant について固定している。
+
 終了系のビルトインアクションは 2 種類ある:
 
 | アクション | 相当コマンド | 挙動 |
