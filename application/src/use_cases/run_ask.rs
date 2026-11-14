@@ -303,7 +303,7 @@ mod tests {
     impl MockSession {
         fn new(responses: Vec<LlmResponse>) -> Self {
             Self {
-                model: Model::Gpt5Mini,
+                model: Model::Gpt6Luna,
                 responses: Mutex::new(VecDeque::from(responses)),
             }
         }

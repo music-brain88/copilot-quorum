@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// let config = ModelConfig::default()
 ///     .with_decision(Model::ClaudeOpus45)
-///     .with_participants(vec![Model::ClaudeOpus45, Model::Gpt52Codex]);
+///     .with_participants(vec![Model::ClaudeOpus45, Model::Gpt56Sol]);
 ///
 /// assert_eq!(config.decision, Model::ClaudeOpus45);
 /// ```
@@ -132,15 +132,15 @@ mod tests {
     #[test]
     fn test_interaction_role_builders() {
         let config = ModelConfig::default()
-            .with_participants(vec![Model::ClaudeOpus45, Model::Gemini3Pro])
+            .with_participants(vec![Model::ClaudeOpus45, Model::Gemini4Hydrogen])
             .with_moderator(Model::ClaudeOpus45)
-            .with_ask(Model::Gpt52Codex);
+            .with_ask(Model::Gpt56Sol);
 
         assert_eq!(
             config.participants,
-            vec![Model::ClaudeOpus45, Model::Gemini3Pro]
+            vec![Model::ClaudeOpus45, Model::Gemini4Hydrogen]
         );
         assert_eq!(config.moderator, Model::ClaudeOpus45);
-        assert_eq!(config.ask, Model::Gpt52Codex);
+        assert_eq!(config.ask, Model::Gpt56Sol);
     }
 }

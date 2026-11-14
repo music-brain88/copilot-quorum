@@ -1814,11 +1814,11 @@ mod tests {
             tx,
         };
 
-        bridge.on_model_failed(&Model::Gpt52Codex, "Model not available");
+        bridge.on_model_failed(&Model::Gpt56Sol, "Model not available");
 
         match rx.try_recv() {
             Ok(UiEvent::ContextInitProgress { message }) => {
-                assert!(message.contains("gpt-5.2-codex"), "message: {message}");
+                assert!(message.contains("gpt-5.6-sol"), "message: {message}");
                 assert!(
                     message.contains("Model not available"),
                     "message: {message}"

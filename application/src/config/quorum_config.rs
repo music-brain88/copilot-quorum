@@ -1007,7 +1007,7 @@ mod tests {
                 "debate.models",
                 ConfigValue::StringList(vec![
                     "claude-opus-4.5".to_string(),
-                    "gpt-5.2-codex".to_string(),
+                    "gpt-5.6-sol".to_string(),
                 ]),
             )
             .unwrap();
@@ -1026,7 +1026,7 @@ mod tests {
 
         assert_eq!(
             config.debate_config().models,
-            vec![Model::ClaudeOpus45, Model::Gpt52Codex]
+            vec![Model::ClaudeOpus45, Model::Gpt56Sol]
         );
         assert_eq!(config.debate_config().max_rounds, 5);
         assert_eq!(
@@ -1039,7 +1039,7 @@ mod tests {
             config.config_get("debate.models").unwrap(),
             ConfigValue::StringList(vec![
                 "claude-opus-4.5".to_string(),
-                "gpt-5.2-codex".to_string(),
+                "gpt-5.6-sol".to_string(),
             ])
         );
         assert_eq!(
@@ -1166,13 +1166,13 @@ mod tests {
                 "models.participants",
                 ConfigValue::StringList(vec![
                     "claude-opus-4.5".to_string(),
-                    "gpt-5.2-codex".to_string(),
+                    "gpt-5.6-sol".to_string(),
                 ]),
             )
             .unwrap();
         assert_eq!(
             config.models().participants,
-            vec![Model::ClaudeOpus45, Model::Gpt52Codex]
+            vec![Model::ClaudeOpus45, Model::Gpt56Sol]
         );
     }
 
@@ -1192,12 +1192,9 @@ mod tests {
     fn test_config_set_model_ask() {
         let mut config = QuorumConfig::default();
         config
-            .config_set(
-                "models.ask",
-                ConfigValue::String("gpt-5.2-codex".to_string()),
-            )
+            .config_set("models.ask", ConfigValue::String("gpt-5.6-sol".to_string()))
             .unwrap();
-        assert_eq!(config.models().ask, Model::Gpt52Codex);
+        assert_eq!(config.models().ask, Model::Gpt56Sol);
     }
 
     #[test]
