@@ -132,12 +132,12 @@ mod tests {
 
     #[test]
     fn test_unsupported_gpt_model() {
-        assert!(to_bedrock_model_id(&Model::Gpt52Codex, false, "us-east-1").is_none());
+        assert!(to_bedrock_model_id(&Model::Gpt56Sol, false, "us-east-1").is_none());
     }
 
     #[test]
     fn test_unsupported_gemini_model() {
-        assert!(to_bedrock_model_id(&Model::Gemini3Pro, false, "us-east-1").is_none());
+        assert!(to_bedrock_model_id(&Model::Gemini4Hydrogen, false, "us-east-1").is_none());
     }
 
     #[test]
@@ -149,7 +149,7 @@ mod tests {
         assert!(is_bedrock_supported(&Model::ClaudeOpus45));
         assert!(is_bedrock_supported(&Model::ClaudeSonnet4));
         assert!(is_bedrock_supported(&Model::Custom("anything".to_string())));
-        assert!(!is_bedrock_supported(&Model::Gpt52Codex));
-        assert!(!is_bedrock_supported(&Model::Gemini3Pro));
+        assert!(!is_bedrock_supported(&Model::Gpt56Sol));
+        assert!(!is_bedrock_supported(&Model::Gemini4Hydrogen));
     }
 }

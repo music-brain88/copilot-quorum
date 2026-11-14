@@ -251,7 +251,7 @@ mod tests {
         ];
         let gw = RoutingGateway::new(providers, &default_config());
 
-        let provider = gw.resolve_provider(&Model::Gpt52Codex).unwrap();
+        let provider = gw.resolve_provider(&Model::Gpt56Sol).unwrap();
         assert_eq!(provider.kind(), ProviderKind::OpenAi);
     }
 
@@ -265,7 +265,7 @@ mod tests {
         ];
         let gw = RoutingGateway::new(providers, &config_with_default("anthropic"));
 
-        let provider = gw.resolve_provider(&Model::Gemini3Pro).unwrap();
+        let provider = gw.resolve_provider(&Model::Gemini4Hydrogen).unwrap();
         assert_eq!(provider.kind(), ProviderKind::Anthropic);
     }
 
@@ -275,7 +275,7 @@ mod tests {
         let providers = vec![MockProvider::new(ProviderKind::Copilot)];
         let gw = RoutingGateway::new(providers, &config_with_default("anthropic"));
 
-        let provider = gw.resolve_provider(&Model::Gemini3Pro).unwrap();
+        let provider = gw.resolve_provider(&Model::Gemini4Hydrogen).unwrap();
         assert_eq!(provider.kind(), ProviderKind::Copilot);
     }
 
@@ -320,15 +320,18 @@ mod tests {
     #[tokio::test]
     async fn available_models_aggregates_from_all_providers() {
         let providers = vec![
-            MockProvider::with_models(ProviderKind::Copilot, vec![Model::Gpt52Codex, Model::Gpt41]),
+            MockProvider::with_models(
+                ProviderKind::Copilot,
+                vec![Model::Gpt56Sol, Model::Gpt56Luna],
+            ),
             MockProvider::with_models(ProviderKind::Anthropic, vec![Model::ClaudeSonnet45]),
         ];
         let gw = RoutingGateway::new(providers, &default_config());
 
         let models = gw.available_models().await.unwrap();
         assert_eq!(models.len(), 3);
-        assert!(models.contains(&Model::Gpt52Codex));
-        assert!(models.contains(&Model::Gpt41));
+        assert!(models.contains(&Model::Gpt56Sol));
+        assert!(models.contains(&Model::Gpt56Luna));
         assert!(models.contains(&Model::ClaudeSonnet45));
     }
 }

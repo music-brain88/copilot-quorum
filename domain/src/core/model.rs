@@ -31,22 +31,10 @@ pub enum Model {
     Gpt56Sol,
     Gpt56Terra,
     Gpt56Luna,
-    Gpt54,
     Gpt53Codex,
-    Gpt52Codex,
-    Gpt51CodexMax,
-    Gpt51Codex,
-    Gpt52,
-    Gpt51,
-    Gpt5,
-    Gpt51CodexMini,
-    Gpt5Mini,
-    Gpt41,
     // Gemini models
     Gemini4Carbon,
     Gemini4Hydrogen,
-    Gemini3Pro,
-    Gemini31Pro,
     // Grok models
     Grok47,
     Grok46,
@@ -79,21 +67,9 @@ impl Model {
             Model::Gpt56Sol => "gpt-5.6-sol",
             Model::Gpt56Terra => "gpt-5.6-terra",
             Model::Gpt56Luna => "gpt-5.6-luna",
-            Model::Gpt54 => "gpt-5.4",
             Model::Gpt53Codex => "gpt-5.3-codex",
-            Model::Gpt52Codex => "gpt-5.2-codex",
-            Model::Gpt51CodexMax => "gpt-5.1-codex-max",
-            Model::Gpt51Codex => "gpt-5.1-codex",
-            Model::Gpt52 => "gpt-5.2",
-            Model::Gpt51 => "gpt-5.1",
-            Model::Gpt5 => "gpt-5",
-            Model::Gpt51CodexMini => "gpt-5.1-codex-mini",
-            Model::Gpt5Mini => "gpt-5-mini",
-            Model::Gpt41 => "gpt-4.1",
             Model::Gemini4Carbon => "gemini-4-carbon",
             Model::Gemini4Hydrogen => "gemini-4-hydrogen",
-            Model::Gemini3Pro => "gemini-3-pro-preview",
-            Model::Gemini31Pro => "gemini-3.1-pro-preview",
             Model::Grok47 => "grok-4.7",
             Model::Grok46 => "grok-4.6",
             Model::MaiCode11Flash => "mai-code-1.1-flash",
@@ -143,26 +119,13 @@ impl Model {
                 | Model::Gpt56Sol
                 | Model::Gpt56Terra
                 | Model::Gpt56Luna
-                | Model::Gpt54
                 | Model::Gpt53Codex
-                | Model::Gpt52Codex
-                | Model::Gpt51CodexMax
-                | Model::Gpt51Codex
-                | Model::Gpt52
-                | Model::Gpt51
-                | Model::Gpt5
-                | Model::Gpt51CodexMini
-                | Model::Gpt5Mini
-                | Model::Gpt41
         )
     }
 
     /// Check if this is a Gemini model
     pub fn is_gemini(&self) -> bool {
-        matches!(
-            self,
-            Model::Gemini4Carbon | Model::Gemini4Hydrogen | Model::Gemini3Pro | Model::Gemini31Pro
-        )
+        matches!(self, Model::Gemini4Carbon | Model::Gemini4Hydrogen)
     }
 }
 
@@ -203,21 +166,9 @@ impl std::str::FromStr for Model {
             "gpt-5.6-sol" => Model::Gpt56Sol,
             "gpt-5.6-terra" => Model::Gpt56Terra,
             "gpt-5.6-luna" => Model::Gpt56Luna,
-            "gpt-5.4" => Model::Gpt54,
             "gpt-5.3-codex" => Model::Gpt53Codex,
-            "gpt-5.2-codex" => Model::Gpt52Codex,
-            "gpt-5.1-codex-max" => Model::Gpt51CodexMax,
-            "gpt-5.1-codex" => Model::Gpt51Codex,
-            "gpt-5.2" => Model::Gpt52,
-            "gpt-5.1" => Model::Gpt51,
-            "gpt-5" => Model::Gpt5,
-            "gpt-5.1-codex-mini" => Model::Gpt51CodexMini,
-            "gpt-5-mini" => Model::Gpt5Mini,
-            "gpt-4.1" => Model::Gpt41,
             "gemini-4-carbon" => Model::Gemini4Carbon,
             "gemini-4-hydrogen" => Model::Gemini4Hydrogen,
-            "gemini-3-pro-preview" => Model::Gemini3Pro,
-            "gemini-3.1-pro-preview" => Model::Gemini31Pro,
             "grok-4.7" => Model::Grok47,
             "grok-4.6" => Model::Grok46,
             "mai-code-1.1-flash" => Model::MaiCode11Flash,
@@ -269,8 +220,8 @@ mod tests {
     #[test]
     fn test_model_family_detection() {
         assert!(Model::ClaudeSonnet45.is_claude());
-        assert!(Model::Gpt52.is_gpt());
-        assert!(Model::Gemini3Pro.is_gemini());
+        assert!(Model::Gpt61Sol.is_gpt());
+        assert!(Model::Gemini4Carbon.is_gemini());
         assert!(!Model::ClaudeSonnet45.is_gpt());
     }
 

@@ -663,7 +663,7 @@ impl PlanCandidate {
 /// candidate1.add_vote("GPT", 8.0);
 ///
 /// let mut candidate2 = PlanCandidate::new(
-///     Model::Gpt52Codex,
+///     Model::Gpt56Sol,
 ///     Plan::new("Plan B", "Reasoning B")
 /// );
 /// candidate2.add_vote("Claude", 6.0);
@@ -1207,13 +1207,13 @@ mod tests {
         let config = ModelConfig::default()
             .with_exploration(Model::ClaudeSonnet45)
             .with_decision(Model::ClaudeOpus45)
-            .with_review(vec![Model::ClaudeOpus45, Model::Gemini3Pro]);
+            .with_review(vec![Model::ClaudeOpus45, Model::Gemini4Hydrogen]);
 
         assert_eq!(config.exploration, Model::ClaudeSonnet45);
         assert_eq!(config.decision, Model::ClaudeOpus45);
         assert_eq!(config.review.len(), 2);
         assert!(config.review.contains(&Model::ClaudeOpus45));
-        assert!(config.review.contains(&Model::Gemini3Pro));
+        assert!(config.review.contains(&Model::Gemini4Hydrogen));
     }
 
     #[test]
@@ -1307,7 +1307,7 @@ mod tests {
         let mut candidate1 = PlanCandidate::new(Model::ClaudeSonnet45, plan1);
         candidate1.add_vote("GPT", 6.0);
 
-        let mut candidate2 = PlanCandidate::new(Model::Gpt52Codex, plan2);
+        let mut candidate2 = PlanCandidate::new(Model::Gpt56Sol, plan2);
         candidate2.add_vote("Claude", 8.0);
 
         let result = EnsemblePlanResult::select_best(vec![candidate1, candidate2]);
@@ -1315,7 +1315,7 @@ mod tests {
         // candidate2 has higher score (8.0 vs 6.0)
         assert_eq!(result.selected_index, 1);
         assert!(result.selected().is_some());
-        assert_eq!(result.selected().unwrap().model, Model::Gpt52Codex);
+        assert_eq!(result.selected().unwrap().model, Model::Gpt56Sol);
     }
 
     #[test]
@@ -1389,7 +1389,7 @@ mod tests {
         c1.add_vote("GPT", 8.0);
         c1.add_vote("Gemini", 8.0);
 
-        let mut c2 = PlanCandidate::new(Model::Gpt52Codex, Plan::new("B", "R"));
+        let mut c2 = PlanCandidate::new(Model::Gpt56Sol, Plan::new("B", "R"));
         c2.add_vote("Claude", 8.0);
         // c2 has only 1 vote vs c1's 2 votes
 
@@ -1402,7 +1402,7 @@ mod tests {
         let mut c1 = PlanCandidate::new(Model::ClaudeSonnet45, Plan::new("A", "R"));
         c1.add_vote("GPT", 8.0);
 
-        let mut c2 = PlanCandidate::new(Model::Gpt52Codex, Plan::new("B", "R"));
+        let mut c2 = PlanCandidate::new(Model::Gpt56Sol, Plan::new("B", "R"));
         c2.add_vote("Claude", 8.0);
 
         let result = EnsemblePlanResult::select_best(vec![c1, c2]);

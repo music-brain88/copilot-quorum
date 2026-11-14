@@ -273,14 +273,25 @@ mod tests {
 
     #[test]
     fn available_models_exclude_dropped_models() {
-        // gpt-5.2-codex / gemini-3-pro-preview were removed in Copilot CLI 1.0.65.
-        // The Claude 4.x models other than Haiku 4.5 were gone by 1.0.91; they
-        // stay in the `Model` enum only for the Bedrock provider.
+        // The Claude 4.x models other than Haiku 4.5 were gone by Copilot CLI
+        // 1.0.91. They stay in the `Model` enum only for the Bedrock provider,
+        // so they must not be advertised as available on Copilot.
         let available = known_available_models();
-        assert!(!available.contains(&Model::Gpt52Codex));
-        assert!(!available.contains(&Model::Gemini3Pro));
-        assert!(!available.contains(&Model::Gemini31Pro));
-        assert!(!available.contains(&Model::ClaudeSonnet45));
-        assert!(!available.contains(&Model::ClaudeSonnet46));
+        for dropped in [
+            Model::ClaudeSonnet46,
+            Model::ClaudeOpus46,
+            Model::ClaudeSonnet45,
+            Model::ClaudeOpus45,
+            Model::ClaudeSonnet4,
+        ] {
+            assert!(
+                !available.contains(&dropped),
+                "{dropped} is no longer offered by Copilot CLI"
+            );
+        }
+        // Identifiers of models dropped from the enum parse as `Custom`, which
+        // is never in the list either.
+        assert!(!available.contains(&"gpt-5.2-codex".parse::<Model>().unwrap()));
+        assert!(!available.contains(&"gemini-3.1-pro-preview".parse::<Model>().unwrap()));
     }
 }

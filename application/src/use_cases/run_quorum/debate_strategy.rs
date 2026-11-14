@@ -883,12 +883,15 @@ mod tests {
 
     #[tokio::test]
     async fn debate_settles_early_when_moderator_agrees() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 5);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 5);
         let input = base_input(OrchestrationStrategy::Debate(config));
 
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Write-through keeps consistency simple.");
-        gateway.respond(Model::Gemini31Pro, "Write-behind has better write latency.");
+        gateway.respond(
+            Model::Gemini4Carbon,
+            "Write-behind has better write latency.",
+        );
         // Round 1's divergence check (asked before the usual checkpoint) —
         // genuine disagreement, so no contrarian brief fires.
         gateway.respond(
@@ -950,12 +953,15 @@ mod tests {
 
     #[tokio::test]
     async fn debate_forces_settlement_at_max_rounds() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 2);
         let input = base_input(OrchestrationStrategy::Debate(config));
 
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
-        gateway.respond(Model::Gemini31Pro, "Attack round 1: latency matters more.");
+        gateway.respond(
+            Model::Gemini4Carbon,
+            "Attack round 1: latency matters more.",
+        );
         // Round 1's divergence check — genuine disagreement, no contrarian brief.
         gateway.respond(
             Model::ClaudeSonnet45,
@@ -972,7 +978,7 @@ mod tests {
             Model::Gpt53Codex,
             "Defense round 2: consistency still wins.",
         );
-        gateway.respond(Model::Gemini31Pro, "Attack round 2: but writes pile up.");
+        gateway.respond(Model::Gemini4Carbon, "Attack round 2: but writes pile up.");
         gateway.respond(
             Model::ClaudeSonnet45,
             verdict_response(false, &[], "No real resolution, but rounds are up."),
@@ -1001,7 +1007,7 @@ mod tests {
     #[tokio::test]
     async fn debate_contrarian_brief_fires_when_divergence_check_finds_no_divergence() {
         // No interjectors — the opponent doubles up as the contrarian.
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         let input = base_input(OrchestrationStrategy::Debate(config));
 
         let gateway = ScriptedGateway::new();
@@ -1010,7 +1016,7 @@ mod tests {
             "Opening: AI will match human performance.",
         );
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "Attack round 1: AI will match human performance, just later than claimed.",
         );
         // The moderator's divergence check finds no genuine disagreement —
@@ -1023,7 +1029,7 @@ mod tests {
         // The contrarian brief (opponent, since no interjector exists) attacks
         // that shared premise directly.
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "CLAIM: AI will not match human performance\nEVIDENCE: benchmark X has plateaued for 3 years\nSEVERITY: MINOR",
         );
         gateway.respond(
@@ -1064,7 +1070,11 @@ mod tests {
         let config = DebateConfig {
             allow_interjection: true,
             ..debate_config(
-                vec![Model::Gpt53Codex, Model::Gemini31Pro, Model::ClaudeHaiku45],
+                vec![
+                    Model::Gpt53Codex,
+                    Model::Gemini4Carbon,
+                    Model::ClaudeHaiku45,
+                ],
                 1,
             )
         };
@@ -1076,7 +1086,7 @@ mod tests {
             "Opening: AI will match human performance.",
         );
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "Attack round 1: AI will match human performance, just later than claimed.",
         );
         gateway.respond(
@@ -1130,7 +1140,7 @@ mod tests {
         // decomposition; the proponent splits the claim; the opponent then
         // re-attacks the split claim with a normal structured rebuttal, all
         // still counted as round 1 (max_rounds stays 1).
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         let input = base_input(OrchestrationStrategy::Debate(config));
 
         let gateway = ScriptedGateway::new();
@@ -1139,7 +1149,7 @@ mod tests {
             "Opening: caching and retry policy should share one config knob.",
         );
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "DECOMPOSE_REQUEST: caching and retry policy should share one config knob",
         );
         gateway.respond(
@@ -1147,7 +1157,7 @@ mod tests {
             "Sub-claim 1: caching should be a single knob.\nSub-claim 2: retry policy should be a single knob.",
         );
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "CLAIM: retry policy as a single knob\nEVIDENCE: it hides per-endpoint backoff needs\nSEVERITY: MINOR",
         );
         // Round 1's divergence check — genuine disagreement, no contrarian brief.
@@ -1191,7 +1201,7 @@ mod tests {
         // is pushed. The divergence check must compare the proponent's
         // opening against that actual attack — not against the proponent's
         // own decomposition response that now sits at transcript[1].
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         let input = base_input(OrchestrationStrategy::Debate(config));
 
         let gateway = ScriptedGateway::new();
@@ -1200,7 +1210,7 @@ mod tests {
             "Opening: caching and retry policy should share one config knob.",
         );
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "DECOMPOSE_REQUEST: caching and retry policy should share one config knob",
         );
         gateway.respond(
@@ -1208,7 +1218,7 @@ mod tests {
             "Sub-claim 1: caching should be a single knob.\nSub-claim 2: retry policy should be a single knob.",
         );
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "CLAIM: retry policy as a single knob\nEVIDENCE: it hides per-endpoint backoff needs\nSEVERITY: MINOR",
         );
         gateway.respond(
@@ -1255,13 +1265,13 @@ mod tests {
         // ignored — no second proponent detour — and the raw (still
         // DECOMPOSE_REQUEST-prefixed) text is parsed as a normal rebuttal,
         // which yields no CLAIM/EVIDENCE/SEVERITY (i.e. no ledger entry).
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         let input = base_input(OrchestrationStrategy::Debate(config));
 
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Opening: one knob for everything.");
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "DECOMPOSE_REQUEST: one knob for everything",
         );
         gateway.respond(
@@ -1270,7 +1280,7 @@ mod tests {
         );
         // Second decomposition request in the same round — must be ignored.
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "DECOMPOSE_REQUEST: caching knob still too broad",
         );
         gateway.respond(
@@ -1306,7 +1316,11 @@ mod tests {
         let config = DebateConfig {
             allow_interjection: true,
             ..debate_config(
-                vec![Model::Gpt53Codex, Model::Gemini31Pro, Model::ClaudeHaiku45],
+                vec![
+                    Model::Gpt53Codex,
+                    Model::Gemini4Carbon,
+                    Model::ClaudeHaiku45,
+                ],
                 1,
             )
         };
@@ -1314,7 +1328,7 @@ mod tests {
 
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
-        gateway.respond(Model::Gemini31Pro, "Attack: latency matters more.");
+        gateway.respond(Model::Gemini4Carbon, "Attack: latency matters more.");
         // Round 1's divergence check — genuine disagreement, no contrarian
         // brief, so the interjector's queue below is used only for its
         // normal interjection turn.
@@ -1385,7 +1399,7 @@ mod tests {
             max_rounds: 1,
         };
         let models = ModelConfig {
-            participants: vec![Model::Gpt53Codex, Model::Gemini31Pro],
+            participants: vec![Model::Gpt53Codex, Model::Gemini4Carbon],
             ..ModelConfig::default()
         };
         let input =
@@ -1394,7 +1408,10 @@ mod tests {
 
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
-        gateway.respond(Model::Gemini31Pro, "Attack round 1: latency matters more.");
+        gateway.respond(
+            Model::Gemini4Carbon,
+            "Attack round 1: latency matters more.",
+        );
         gateway.respond(
             Model::ClaudeSonnet45,
             divergence_response(true, "They disagree on consistency vs. latency tradeoffs."),
@@ -1419,7 +1436,7 @@ mod tests {
             result.models,
             vec![
                 Model::Gpt53Codex.to_string(),
-                Model::Gemini31Pro.to_string()
+                Model::Gemini4Carbon.to_string()
             ]
         );
         assert_eq!(result.responses[0].model, Model::Gpt53Codex.to_string());
@@ -1435,7 +1452,7 @@ mod tests {
         let gateway = ScriptedGateway::new();
         gateway.respond(Model::Gpt53Codex, "Opening: write-through.");
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             "CLAIM: write-through never expires\nEVIDENCE: TTL config defaults to infinite\nSEVERITY: CRITICAL",
         );
         // Round 1's divergence check — genuine disagreement, no contrarian brief.
@@ -1462,7 +1479,7 @@ mod tests {
             Model::Gpt53Codex,
             "Defense round 2: adds a cache warmer to mitigate the TTL gap.",
         );
-        gateway.respond(Model::Gemini31Pro, "No further rebuttal.");
+        gateway.respond(Model::Gemini4Carbon, "No further rebuttal.");
         gateway.respond(
             Model::ClaudeSonnet45,
             verdict_response(
@@ -1480,7 +1497,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_early_settle_reject_at_final_round_aborts() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         // RunQuorumInput::new() defaults to HilMode::AutoReject.
         let input = base_input(OrchestrationStrategy::Debate(config));
 
@@ -1500,7 +1517,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_early_settle_reject_at_non_final_round_continues_debate() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 2);
         // RunQuorumInput::new() defaults to HilMode::AutoReject — but at a
         // non-final round that now means "decline the early settle and keep
         // debating", not "abort".
@@ -1533,7 +1550,7 @@ mod tests {
         // render_transcript() output as `transcript_summary` — a single TUI
         // modal line, or CLI dump, of the entire debate. It must be
         // head+tail truncated to TRANSCRIPT_SUMMARY_MAX_BYTES instead.
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
         let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Approve)));
@@ -1544,7 +1561,7 @@ mod tests {
         // the budget by the time escalation fires.
         let long_evidence = "x".repeat(TRANSCRIPT_SUMMARY_MAX_BYTES * 2);
         gateway.respond(
-            Model::Gemini31Pro,
+            Model::Gemini4Carbon,
             format!(
                 "CLAIM: write-through never expires\nEVIDENCE: {}\nSEVERITY: CRITICAL",
                 long_evidence
@@ -1576,7 +1593,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_early_settle_with_unresolved_objection_forced_on_auto_approve() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 3);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::AutoApprove);
 
@@ -1625,7 +1642,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_interactive_escalation_approve_forces_settlement_with_note() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 3);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
         let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Approve)));
@@ -1647,7 +1664,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_interactive_escalation_reject_at_final_round_aborts_execute() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
         let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Reject)));
@@ -1673,7 +1690,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_interactive_escalation_reject_at_non_final_round_continues_debate() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 2);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
         let handler = Arc::new(MockEscalationHandler::new(Ok(HumanDecision::Reject)));
@@ -1706,7 +1723,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_interactive_without_handler_falls_back_to_reject_at_final_round() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 1);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 1);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
 
@@ -1727,7 +1744,7 @@ mod tests {
     #[tokio::test]
     async fn debate_interactive_without_handler_falls_back_to_reject_at_non_final_round_continues()
     {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 2);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 2);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
 
@@ -1754,7 +1771,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_interactive_escalation_cancelled_maps_to_cancelled_error() {
-        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini31Pro], 3);
+        let config = debate_config(vec![Model::Gpt53Codex, Model::Gemini4Carbon], 3);
         let input =
             base_input(OrchestrationStrategy::Debate(config)).with_hil_mode(HilMode::Interactive);
         let handler = Arc::new(MockEscalationHandler::new(Err(
